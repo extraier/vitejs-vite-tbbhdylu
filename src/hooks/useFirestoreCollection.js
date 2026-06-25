@@ -5,6 +5,11 @@
 // Returns `{ data, loading, error }`. `loading` is true until the first
 // snapshot fires (so callers can show spinners during initial fetch).
 //
+// IMPORTANT: We import `onSnapshot` from `firebase/firestore` here even
+// though we call it as a method on `collectionRef`. Importing the standalone
+// function has the side effect of patching
+// `CollectionReference.prototype.onSnapshot`, which is what we need.
+//
 // Usage:
 //   const { data: events } = useFirestoreCollection(
 //     user ? collection(db, 'artifacts', appId, 'users', user.uid, 'events') : null,
@@ -12,6 +17,9 @@
 //   );
 
 import { useEffect, useState } from 'react';
+import { onSnapshot as _ensureOnSnapshotPatched } from 'firebase/firestore';
+// Side-effect import: forces Rollup to keep the prototype-patch in the bundle.
+void _ensureOnSnapshotPatched;
 
 export function useFirestoreCollection(collectionRef, deps = []) {
   const [data, setData] = useState([]);
@@ -19,7 +27,6 @@ export function useFirestoreCollection(collectionRef, deps = []) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    console.log('[useFirestoreCollection] effect fired. collectionRef:', collectionRef, 'type:', typeof collectionRef, 'hasOnSnapshot:', typeof collectionRef?.onSnapshot, 'constructor:', collectionRef?.constructor?.name);
     if (!collectionRef) {
       setData([]);
       setLoading(false);
@@ -28,12 +35,11 @@ export function useFirestoreCollection(collectionRef, deps = []) {
     setLoading(true);
     const unsub = collectionRef.onSnapshot(
       (snapshot) => {
-        console.log('[useFirestoreCollection] snapshot received, docs:', snapshot.docs.length);
         setData(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
         setLoading(false);
       },
       (err) => {
-        console.error('[useFirestoreCollection] error:', err);
+        console.error('useFirestoreCollection error:', err);
         setError(err);
         setLoading(false);
       },
