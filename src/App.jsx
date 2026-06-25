@@ -17,6 +17,7 @@ import {
   TASK_CATEGORIES,
 } from './lib/config';
 import { parseGuestParams } from './lib/guestMode';
+import { uploadPhotoToNas } from './lib/uploadToNas';
 import { useAuth } from './hooks/useAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { useToast } from './hooks/useToast';
@@ -324,9 +325,49 @@ export default function App() {
     showToast('👑 已成功升級至 Premium！無限容量已開啟。');
   };
 
-  // Photo upload — placeholder; replaced by NAS upload hook in the next step.
-  const handleRealUpload = async () => {
-    showToast('⚠️ 相片上載功能準備遷移至 NAS，暫停服務');
+  // Photo upload — uploads to NAS via Tailscale Funnel (replaces Firebase
+  // Storage to avoid Firebase egress/storage charges). After the upload
+  // succeeds, we record the photo URL in Firestore so the owner's PhotoDrop
+  // gallery picks it up via onSnapshot.
+  const handleRealUpload = async (e) => {
+    const file = e?.target?.files?.[0];
+    if (!file || !user || !currentEvent || !activeGuestPortal) return;
+    if (isStorageFull) {
+      setShowUpgradeModal(true);
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadProgress(0);
+
+    const targetUid = guest.isGuestMode ? guest.qOwner : user.uid;
+    try {
+      const { url } = await uploadPhotoToNas({
+        file,
+        eventId: currentEvent.id,
+        guestId: activeGuestPortal.guestId,
+        uploaderName: activeGuestPortal.name,
+        onProgress: setUploadProgress,
+      });
+      // Persist the public URL in Firestore so the owner's PhotoDrop screen
+      // can render it (uses onSnapshot for live updates).
+      await addDoc(collection(db, 'artifacts', appId, 'users', targetUid, 'photos'), {
+        eventId: currentEvent.id,
+        url,
+        uploaderId: activeGuestPortal.guestId,
+        uploaderName: activeGuestPortal.name,
+        createdAt: Date.now(),
+      });
+      showToast('📸 相片已成功上載至大螢幕！');
+    } catch (err) {
+      console.error('Upload failed:', err);
+      showToast(`❌ ${err.message || '上載失敗，請重試！'}`);
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+      // Reset the input so selecting the same file twice still triggers onChange
+      if (e?.target) e.target.value = '';
+    }
   };
 
   const handleJobSubmit = (e) => {
