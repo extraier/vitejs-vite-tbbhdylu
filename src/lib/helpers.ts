@@ -10,6 +10,7 @@
 
 import { doc, getDoc, collectionGroup, query, where, getDocs } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getAuth } from 'firebase/auth';
 import { db, appId } from './firebase';
 
 // All possible helper permissions. Kept in sync with functions/src/index.ts
@@ -87,7 +88,7 @@ export type HelperDoc = {
  * Used after the helper signs in so they know which weddings they can access.
  */
 export async function listMyHelperAssignments(): Promise<HelperDoc[]> {
-  const auth = (await import('firebase/auth')).getAuth();
+  const auth = getAuth();
   const user = auth.currentUser;
   if (!user || !user.email) return [];
   const myEmail = user.email.toLowerCase();
