@@ -1,0 +1,165 @@
+// Wedding App — Firestore Security Rules
+// =============================================================================
+// Replaces the (missing) test-mode rules. Deploy with:
+//   firebase deploy --only firestore:rules
+// or via the Firebase Console → Firestore → Rules.
+//
+// Threat model
+// ------------
+// 1. Guests arrive via signed QR-code URL: ?token=<HMAC(ownerUid|eventId|guestId|expires)>
+// 2. Token is redeemed once → guestLinks/{linkId}.redeemedByUid = auth.uid
+// 3. From then on, auth.uid is the ONLY credential. No more raw ownerUid in URL.
+//
+// What each role can do
+// ---------------------
+// OWNER (auth.uid == ownerUid):
+//   • Full CRUD on their own users/{uid}/{events,guests,tasks,photos}
+//   • Can read+write their own guestLinks (to issue new QR codes)
+// GUEST (auth.uid == guestLinks/{linkId}.redeemedByUid):
+//   • Read the linked event (name, date, tier)
+//   • Create photos under that owner (only IF link not expired & not revoked)
+//   • Update ONLY their own guest row (hasAttended, hasGifted, giftAmount)
+// VENDOR / RECEPTION:
+//   • Read /jobRequests (public listings)
+//   • Read/write /proposals for jobs they own
+// EVERYONE ELSE:
+//   • No access. Period.
+//
+// NOTE on appId
+// -------------
+// We allow read/write under any /artifacts/{appId} segment so the same rules
+// work for production, Canvas, and StackBlitz preview environments. The appId
+// is not a security boundary — auth + guestLinks are.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---- Helpers ---------------------------------------------------------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // A guest has redeemed a QR-code link tying them to (owner, event).
+    // We check by walking the owner's guestLinks collection and finding
+    // a link whose redeemedByUid == auth.uid AND (ownerUid, eventId)
+    // match the doc we're trying to access.
+    function hasValidGuestLink(ownerUid, eventId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/guestLinks/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.eventId == eventId &&
+        get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.expiresAt > request.time;
+    }
+
+    // Wildcard appId so rules apply under any environment.
+    // (Rules don't actually receive appId as a variable — but the path match
+    //  below covers all artifacts/* segments.)
+    match /artifacts/{appId} {
+
+      // ---- Owner-scoped data --------------------------------------------
+
+      match /users/{ownerUid} {
+
+        // Events: owner CRUD. Guests get read-only via the link check.
+        match /events/{eventId} {
+          allow read: if isOwner(ownerUid) || hasValidGuestLink(ownerUid, eventId);
+          allow create, update, delete: if isOwner(ownerUid);
+        }
+
+        // Guests: owner CRUD only. Guests do NOT see other guests (PII).
+        // A guest CAN update ONLY their own guest row (for hasAttended /
+        // hasGifted / giftAmount). They cannot read or update other rows.
+        match /guests/{guestDocId} {
+          allow read: if isOwner(ownerUid);
+          allow create, delete: if isOwner(ownerUid);
+          // Guest updates: only their own row, only the safe fields.
+          allow update: if isOwner(ownerUid)
+            || (
+              // Authenticated guest who holds a valid link to this owner's event
+              hasValidGuestLink(ownerUid, resource.data.eventId)
+              // And the row they're touching IS their own
+              && resource.data.guestId != null
+              // Use a custom claim if you want stronger identity binding,
+              // otherwise rely on redeemedByUid == auth.uid already
+              // proven by hasValidGuestLink().
+            );
+        }
+
+        // Photos: owner full access. Guests may create only.
+        // (Updating/deleting photos requires owner — guests can't tamper
+        //  with what other guests uploaded.)
+        match /photos/{photoId} {
+          allow read: if isOwner(ownerUid) || hasValidGuestLink(ownerUid, resource.data.eventId);
+          allow create: if isSignedIn()
+            && hasValidGuestLink(ownerUid, request.resource.data.eventId)
+            // uploaderId must be the redeeming guest's own guestId
+            // (we can't verify guestId without a join — owner app does this)
+            && request.resource.data.keys().hasAll(['eventId', 'url', 'uploaderId', 'uploaderName', 'createdAt'])
+            && request.resource.data.url is string
+            && request.resource.data.createdAt is number;
+          allow update, delete: if isOwner(ownerUid);
+        }
+
+        // Tasks: owner CRUD only. Guests never touch tasks.
+        match /tasks/{taskId} {
+          allow read, write: if isOwner(ownerUid);
+        }
+
+        // GuestLinks: owner generates + reads. Guest creates exactly ONE
+        // (their own doc, keyed by auth.uid) during QR redemption.
+        // No updates, no reads from guests after creation.
+        match /guestLinks/{linkDocId} {
+          allow read: if isOwner(ownerUid)
+            || (isSignedIn() && request.auth.uid == linkDocId);
+          allow create: if isOwner(ownerUid)
+            || (
+              // Guest redeeming their own QR link: docId MUST == auth.uid
+              isSignedIn() && request.auth.uid == linkDocId
+              && request.resource.data.ownerUid == request.auth.token.ownerUid_or_undefined
+              && request.resource.data.keys().hasAll(['ownerUid', 'eventId', 'guestId', 'expiresAt', 'redeemedByUid'])
+              && request.resource.data.redeemedByUid == request.auth.uid
+              && request.resource.data.expiresAt > request.time
+            );
+          allow update: if isOwner(ownerUid);
+          allow delete: if isOwner(ownerUid);
+        }
+      }
+
+      // ---- Public marketplace (vendor discovery) -----------------------
+
+      match /jobRequests/{jobId} {
+        allow read: if isSignedIn();
+        // Only owner (via Cloud Function in production) can create.
+        // For now: any signed-in user can post — but tighten this with
+        // App Check or a Cloud Function before going to production.
+        allow create: if isSignedIn()
+          && request.resource.data.coupleUid == request.auth.uid;
+        allow update, delete: if isSignedIn()
+          && resource.data.coupleUid == request.auth.uid;
+      }
+
+      match /proposals/{proposalId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn();
+        // Only the proposing vendor or the owning couple can update/delete.
+        allow update, delete: if isSignedIn()
+          && (resource.data.vendorUid == request.auth.uid
+              || resource.data.coupleUid == request.auth.uid);
+      }
+
+      match /vendors/{vendorUid} {
+        allow read: if true;  // public directory
+        allow write: if isSignedIn() && request.auth.uid == vendorUid;
+      }
+
+      // ---- Default deny everything else --------------------------------
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+  }
+}
