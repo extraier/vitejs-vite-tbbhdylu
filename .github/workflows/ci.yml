@@ -1,0 +1,154 @@
+# CI — Wedding App
+# =================
+# Runs on every push and PR. Gates merges on:
+#   1. Lint (oxlint — fast Rust-based linter, what the repo uses)
+#   2. Unit tests (Vitest)
+#   3. Production build (Vite)
+#   4. Firestore rules tests (security gate — catches privacy regressions)
+#
+# Caching: npm + Firebase emulator binaries cached by hash for speed.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs on the same branch when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Job 1: Lint + Test + Build (Node-only, fast — runs on every PR)
+  # -----------------------------------------------------------------------
+  app:
+    name: App (lint + test + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint (oxlint)
+        run: npm run lint 2>/dev/null || npx oxlint src/
+
+      - name: Unit tests (Vitest)
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7
+
+  # -----------------------------------------------------------------------
+  # Job 2: Firestore rules tests (the security gate)
+  # -----------------------------------------------------------------------
+  rules:
+    name: Firestore Rules (security gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Java 17 (Firebase emulator prerequisite)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Firebase emulator binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('package-lock.json', 'functions/package-lock.json') }}
+          restore-keys: |
+            firebase-emulators-${{ runner.os }}-
+
+      - name: Install dependencies (root + functions)
+        run: |
+          npm ci --legacy-peer-deps
+          cd functions && npm ci && cd ..
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools@latest
+
+      - name: Run rules unit tests
+        run: firebase emulators:exec --only firestore "node scripts/test-firestore-rules.js"
+        env:
+          CI: 'true'
+
+      - name: Run functions type-check
+        run: cd functions && npm run build
+
+  # -----------------------------------------------------------------------
+  # Job 3: Cloud Functions deploy (only on main, only after rules pass)
+  # Skipped automatically if FIREBASE_TOKEN secret isn't configured.
+  # -----------------------------------------------------------------------
+  deploy-functions:
+    name: Deploy Cloud Functions
+    needs: [app, rules]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci --legacy-peer-deps
+          cd functions && npm ci && cd ..
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools@latest
+
+      - name: Build functions
+        run: cd functions && npm run build && cd ..
+
+      - name: Deploy rules + functions
+        if: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          firebase login:ci --token "$FIREBASE_TOKEN"
+          firebase deploy --only firestore:rules,functions --non-interactive --project savetheday-2377a
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
+      - name: Deploy hosting (optional)
+        if: ${{ secrets.FIREBASE_TOKEN }}
+        continue-on-error: true
+        run: firebase deploy --only hosting --non-interactive --project savetheday-2377a
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
+      - name: Skip notice (no FIREBASE_TOKEN configured)
+        if: ${{ !secrets.FIREBASE_TOKEN }}
+        run: |
+          echo "::warning::FIREBASE_TOKEN secret not configured — skipping deploy. See .github/SETUP.md."
