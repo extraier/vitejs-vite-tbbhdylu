@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Heart, LogOut } from 'lucide-react';
+import { Heart, LogOut, Users } from 'lucide-react';
 import {
   addDoc,
   collection,
@@ -20,6 +20,7 @@ import {
 import { parseGuestParams } from './lib/guestMode';
 import { uploadPhotoToNas } from './lib/uploadToNas';
 import { useAuth } from './hooks/useAuth';
+import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { useToast } from './hooks/useToast';
 
@@ -44,12 +45,20 @@ import { QrCodeModal } from './components/modals/QrCodeModal';
 import { VendorModal } from './components/modals/VendorModal';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { InviteModal } from './components/modals/InviteModal';
+import { HelperManager } from './components/modals/HelperManager';
+import { HelperWaitingScreen } from './screens/HelperWaitingScreen';
 import { ScanResultModal } from './components/modals/ScanResultModal';
 import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
 
 export default function App() {
   // Auth
   const { user, authChecked, loginWithGoogle, logout } = useAuth();
+
+  // Helper context (兄弟姊妹). Only meaningful when the user is signed in
+  // (not anonymous) and NOT in guest-mode URL. The hook itself is safe to
+  // call unconditionally — it no-ops if no user.
+  const helperCtx = useHelperAuth();
+  const [helperAccepting, setHelperAccepting] = useState(false);
 
   // Guest-mode URL params
   const guest = parseGuestParams(
@@ -105,6 +114,7 @@ export default function App() {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showHelperManager, setShowHelperManager] = useState(false);
   const [viewingVendorProfile, setViewingVendorProfile] = useState(null);
   const [viewingQrCode, setViewingQrCode] = useState(null);
   const [viewingProposals, setViewingProposals] = useState(null);
@@ -452,6 +462,43 @@ export default function App() {
     );
   }
 
+  // ---- Helper waiting screen ----
+  // If the user is signed in (non-anonymous), NOT in guest-mode, and is NOT
+  // an active helper anywhere — show the waiting screen. Owner sees the
+  // normal app because they always have at least one event of their own.
+  //
+  // Skip for anonymous users: they'd loop forever waiting for invites that
+  // can't exist (no email on file).
+  if (
+    !guest.isGuestMode &&
+    user &&
+    !user.isAnonymous &&
+    user.email &&
+    !helperCtx.loading &&
+    !helperCtx.isHelper &&
+    userRole !== 'owner'
+  ) {
+    return (
+      <HelperWaitingScreen
+        assignments={helperCtx.assignments}
+        loading={helperCtx.loading}
+        accepting={helperAccepting}
+        onAccept={async () => {
+          setHelperAccepting(true);
+          try {
+            await helperCtx.acceptInvite();
+            showToast('✓ 已接受邀請');
+          } catch (err) {
+            showToast(`✗ 接受失敗: ${err.message}`);
+          } finally {
+            setHelperAccepting(false);
+          }
+        }}
+        onLogout={logout}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-10">
       {toast && (
@@ -509,6 +556,15 @@ export default function App() {
                     <div className="text-sm font-bold text-slate-800 bg-rose-50 px-3 py-1 rounded-lg border border-rose-100">
                       {currentEvent.name}
                     </div>
+                    {userRole === 'owner' && (
+                      <button
+                        onClick={() => setShowHelperManager(true)}
+                        className="flex items-center gap-1 text-sm font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200 transition-colors"
+                        title="管理兄弟姊妹 (邀請、權限、撤銷)"
+                      >
+                        <Users className="w-4 h-4" /> 兄弟姊妹
+                      </button>
+                    )}
                     <button
                       onClick={handleLogout}
                       className="text-slate-400 hover:text-slate-600"
@@ -669,6 +725,12 @@ export default function App() {
         onClose={() => setShowInviteModal(false)}
         onInvite={handleInvite}
       />
+      {showHelperManager && user?.uid && (
+        <HelperManager
+          ownerUid={user.uid}
+          onClose={() => setShowHelperManager(false)}
+        />
+      )}
 
       <style
         dangerouslySetInnerHTML={{

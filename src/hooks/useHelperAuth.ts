@@ -17,7 +17,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { getAuth } from 'firebase/auth';
 import {
   listMyHelperAssignments,
-  acceptHelperInvite,
   helpersApi,
   type HelperDoc,
   type HelperPerms,
@@ -53,7 +52,7 @@ export function useHelperAuth() {
   const acceptInvite = useCallback(async () => {
     setLoading(true);
     try {
-      await acceptHelperInvite();
+      await helpersApi.accept();
       await refresh();
     } finally {
       setLoading(false);
