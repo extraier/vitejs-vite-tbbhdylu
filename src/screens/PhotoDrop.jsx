@@ -87,21 +87,30 @@ export function PhotoDrop({ photos, storageUsedMB, isPremium, onPlaySlideshow, o
           <div className="text-center py-10 text-slate-400">暫時未有賓客上載相片</div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-            {photos.map((p) => (
-              <div
-                key={p.id}
-                className="aspect-square rounded-xl overflow-hidden relative group cursor-pointer shadow-sm"
-              >
-                <img
-                  src={p.url}
-                  alt="upload"
-                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
-                  <span className="text-white text-xs font-bold truncate">{p.uploaderName}</span>
+            {photos.map((p) => {
+              // Use thumbnailUrl when available (256px, ~500 bytes) for the
+              // gallery grid; full url only loads when user opens full-screen.
+              // Fall back to url for legacy photos uploaded before thumbnail
+              // support shipped (Hermes 2026-06-25).
+              const displayUrl = p.thumbnailUrl || p.url;
+              return (
+                <div
+                  key={p.id}
+                  className="aspect-square rounded-xl overflow-hidden relative group cursor-pointer shadow-sm"
+                >
+                  <img
+                    src={displayUrl}
+                    data-full-url={p.url}
+                    alt="upload"
+                    loading="lazy"
+                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
+                    <span className="text-white text-xs font-bold truncate">{p.uploaderName}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

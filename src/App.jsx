@@ -342,18 +342,21 @@ export default function App() {
 
     const targetUid = guest.isGuestMode ? guest.qOwner : user.uid;
     try {
-      const { url } = await uploadPhotoToNas({
+      const { url, thumbnailUrl } = await uploadPhotoToNas({
         file,
         eventId: currentEvent.id,
         guestId: activeGuestPortal.guestId,
         uploaderName: activeGuestPortal.name,
         onProgress: setUploadProgress,
       });
-      // Persist the public URL in Firestore so the owner's PhotoDrop screen
-      // can render it (uses onSnapshot for live updates).
+      // Persist the public URL + thumbnail URL in Firestore so the owner's
+      // PhotoDrop screen can render it (uses onSnapshot for live updates).
+      // thumbnailUrl is the smaller 256px version — the gallery uses it so
+      // guests on slow wifi don't have to download full 4-8 MB phone photos.
       await addDoc(collection(db, 'artifacts', appId, 'users', targetUid, 'photos'), {
         eventId: currentEvent.id,
         url,
+        thumbnailUrl: thumbnailUrl || url,  // fall back to full URL for legacy photos
         uploaderId: activeGuestPortal.guestId,
         uploaderName: activeGuestPortal.name,
         createdAt: Date.now(),

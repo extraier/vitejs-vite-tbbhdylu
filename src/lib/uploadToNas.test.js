@@ -156,10 +156,11 @@ describe('uploadToNas', () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
     const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
     const xhr = await waitForXhr();
-    xhr._respond(200, { url: 'http://example.com/photos/x.jpg', bytes: 99 });
+    xhr._respond(200, { url: 'http://example.com/photos/x.jpg', thumbnailUrl: 'http://example.com/photos/thumb_x.jpg', bytes: 99 });
     const result = await p;
     expect(result).toEqual({
       url: 'http://example.com/photos/x.jpg',
+      thumbnailUrl: 'http://example.com/photos/thumb_x.jpg',
       bytes: 99,
     });
   });

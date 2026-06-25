@@ -26,7 +26,7 @@ type UploadArgs = {
   onProgress?: (pct: number) => void;
 };
 
-type UploadResult = { url: string; bytes: number };
+type UploadResult = { url: string; thumbnailUrl: string; bytes: number };
 
 /**
  * Mint an HMAC token for an upload. Mirrors the algorithm in
@@ -114,7 +114,11 @@ export function uploadPhotoToNas({
                 reject(new Error('NAS server 回應缺少 url'));
                 return;
               }
-              resolve({ url: body.url, bytes: body.bytes || 0 });
+              resolve({
+                url: body.url,
+                thumbnailUrl: body.thumbnailUrl || '',
+                bytes: body.bytes || 0,
+              });
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               reject(new Error(`NAS server 回應解析失敗: ${msg}`));
