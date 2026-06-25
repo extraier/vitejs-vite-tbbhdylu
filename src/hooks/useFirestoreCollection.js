@@ -19,6 +19,7 @@ export function useFirestoreCollection(collectionRef, deps = []) {
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    console.log('[useFirestoreCollection] effect fired. collectionRef:', collectionRef, 'type:', typeof collectionRef, 'hasOnSnapshot:', typeof collectionRef?.onSnapshot, 'constructor:', collectionRef?.constructor?.name);
     if (!collectionRef) {
       setData([]);
       setLoading(false);
@@ -27,11 +28,12 @@ export function useFirestoreCollection(collectionRef, deps = []) {
     setLoading(true);
     const unsub = collectionRef.onSnapshot(
       (snapshot) => {
+        console.log('[useFirestoreCollection] snapshot received, docs:', snapshot.docs.length);
         setData(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
         setLoading(false);
       },
       (err) => {
-        console.error('useFirestoreCollection error:', err);
+        console.error('[useFirestoreCollection] error:', err);
         setError(err);
         setLoading(false);
       },
