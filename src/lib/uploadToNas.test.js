@@ -2,7 +2,7 @@
 //
 // Hermes 2026-06-25: tests run in jsdom (no real network). XHR is mocked so we
 // can verify the headers the client sends without actually hitting the NAS.
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, test, expect, beforeEach } from 'vitest';
 
 // ---- XHR mock ----
 // jsdom doesn't ship XMLHttpRequest that calls into a network, but we need

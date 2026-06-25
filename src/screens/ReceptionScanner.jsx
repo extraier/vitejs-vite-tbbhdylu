@@ -1,6 +1,6 @@
-import { ScanLine } from 'lucide-react';
+import { ScanLine, Clock } from 'lucide-react';
 
-export function ReceptionScanner({ onSimulateScan }) {
+export function ReceptionScanner({ onSimulateScan, recentScans = [] }) {
   return (
     <div className="max-w-md mx-auto mt-10 animate-in fade-in duration-300">
       <div className="bg-slate-900 rounded-3xl p-6 text-center text-white shadow-2xl relative overflow-hidden">
@@ -21,6 +21,24 @@ export function ReceptionScanner({ onSimulateScan }) {
           </button>
         </div>
       </div>
+
+      {recentScans.length > 0 && (
+        <div className="mt-6 bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <h3 className="text-sm font-black text-slate-800 flex items-center gap-2 mb-3">
+            <Clock className="w-4 h-4 text-slate-400" /> 最近掃描
+          </h3>
+          <ul className="space-y-2 text-sm">
+            {recentScans.slice(0, 5).map((scan) => (
+              <li key={scan.id} className="flex justify-between text-slate-700 border-b border-slate-100 pb-2 last:border-0">
+                <span className="font-bold">{scan.guestName || scan.guestId}</span>
+                <span className="text-slate-400 text-xs">
+                  {scan.scannedAt ? new Date(scan.scannedAt).toLocaleTimeString() : ''}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

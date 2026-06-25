@@ -1,53 +1,30 @@
 import { Camera, Crown } from 'lucide-react';
+import { tabsForRole } from '../lib/tabs';
 
-export function TabNav({ userRole, currentView, isPremium, onNavigate }) {
+export function TabNav({ userRole, currentView, isPremium, helperPerms, onNavigate }) {
+  const tabs = tabsForRole(userRole, helperPerms);
   return (
     <div className="flex space-x-1 overflow-x-auto custom-scrollbar">
-      {userRole === 'owner' && (
-        <>
-          <NavTab current={currentView} view="couple-checklist" onClick={onNavigate} color="rose">
-            📋 籌備清單
+      {tabs.map(([view, label]) => {
+        // Owner uses rose palette, reception/helper uses indigo, vendor uses emerald
+        const color = userRole === 'owner' ? 'rose' : userRole === 'vendor' ? 'emerald' : 'indigo';
+        const isPhotoTab = view === 'photo-drop';
+        const icon = isPhotoTab ? <Camera className="w-4 h-4" /> : null;
+        // Strip the leading emoji (first char if non-ASCII) so we can render
+        // the icon separately for photo-drop. Other tabs just show the label.
+        const displayLabel = icon ? label.replace(/^.{2}/, '').trim() : label;
+        return (
+          <NavTab key={view} current={currentView} view={view} onClick={onNavigate} color={color}>
+            <span className="flex items-center gap-1">
+              {icon}
+              {displayLabel}
+              {view === 'photo-drop' && isPremium && userRole === 'owner' && (
+                <Crown className="w-3 h-3 text-amber-500" />
+              )}
+            </span>
           </NavTab>
-          <NavTab current={currentView} view="couple-budget" onClick={onNavigate} color="rose">
-            💰 預算管理
-          </NavTab>
-          <NavTab current={currentView} view="discover-vendors" onClick={onNavigate} color="rose">
-            🔍 商戶指南
-          </NavTab>
-          <div className="w-px h-5 bg-slate-300 my-auto mx-2 hidden sm:block"></div>
-          <NavTab current={currentView} view="couple-jobboard" onClick={onNavigate} color="rose">
-            🆘 出Post求救{' '}
-            <span className="bg-rose-100 text-rose-600 text-[10px] px-1.5 py-0.5 rounded-full">搵Vendor</span>
-          </NavTab>
-          <NavTab current={currentView} view="couple-guests" onClick={onNavigate} color="indigo">
-            🎟️ 嘉賓與座位
-          </NavTab>
-          <NavTab current={currentView} view="photo-drop" onClick={onNavigate} color="rose">
-            <Camera className="w-4 h-4" /> 互動相片牆{' '}
-            {isPremium && <Crown className="w-3 h-3 text-amber-500" />}
-          </NavTab>
-        </>
-      )}
-      {userRole === 'reception' && (
-        <>
-          <NavTab current={currentView} view="reception-scanner" onClick={onNavigate} color="indigo">
-            📷 掃描 QR Code
-          </NavTab>
-          <NavTab current={currentView} view="couple-guests" onClick={onNavigate} color="indigo">
-            📋 查閱名單
-          </NavTab>
-        </>
-      )}
-      {userRole === 'vendor' && (
-        <>
-          <NavTab current={currentView} view="vendor-dashboard" onClick={onNavigate} color="emerald">
-            💼 接單大堂
-          </NavTab>
-          <NavTab current={currentView} view="vendor-profile" onClick={onNavigate} color="emerald">
-            👤 管理專頁
-          </NavTab>
-        </>
-      )}
+        );
+      })}
     </div>
   );
 }

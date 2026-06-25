@@ -5,9 +5,11 @@
 import { useEffect, useState } from 'react';
 import {
   GoogleAuthProvider,
+  createUserWithEmailAndPassword,
   onAuthStateChanged,
   signInAnonymously,
   signInWithCustomToken,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
 } from 'firebase/auth';
@@ -58,9 +60,21 @@ export function useAuth() {
     }
   };
 
+  // Helper registration: create a Firebase Auth account using email/password.
+  // Used by the HelperManager flow when the helper hasn't signed up yet.
+  const registerWithEmail = async (email, password) => {
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    return cred.user;
+  };
+
+  const loginWithEmail = async (email, password) => {
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    return cred.user;
+  };
+
   const logout = async () => {
     await signOut(auth);
   };
 
-  return { user, authChecked, loginWithGoogle, logout };
+  return { user, authChecked, loginWithGoogle, loginWithEmail, registerWithEmail, logout };
 }

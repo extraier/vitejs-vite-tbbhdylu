@@ -6,9 +6,10 @@ import {
   deleteDoc,
   doc,
   updateDoc,
+  writeBatch,
 } from 'firebase/firestore';
 
-import { auth, db, appId } from './lib/firebase';
+import { db, appId } from './lib/firebase';
 import {
   DEFAULT_VENDORS,
   FREE_TIER_LIMIT_MB,
@@ -304,8 +305,30 @@ export default function App() {
 
   const handleSimulateReceptionScan = async (guestRow) => {
     if (!user) return;
-    const guestRef = doc(db, 'artifacts', appId, 'users', user.uid, 'guests', guestRow.id);
-    await updateDoc(guestRef, { hasAttended: true });
+    const ownerUid = guest.isGuestMode ? guest.qOwner : user.uid;
+    const guestRef = doc(db, 'artifacts', appId, 'users', ownerUid, 'guests', guestRow.id);
+    const now = Date.now();
+
+    // Two writes: (1) flip hasAttended + stamp audit fields on guest row,
+    // (2) append an immutable entry to scanLog. We do them in a batch so
+    // either both land or neither does.
+    const batch = writeBatch(db);
+    batch.update(guestRef, {
+      hasAttended: true,
+      lastScannedBy: user.uid,
+      lastScannedAt: now,
+    });
+    const logRef = doc(collection(db, 'artifacts', appId, 'users', ownerUid, 'scanLog'));
+    batch.set(logRef, {
+      guestId: guestRow.guestId || guestRow.id,
+      guestName: guestRow.name || '',
+      helperUid: user.uid,
+      helperName: user.displayName || user.email || 'Anonymous',
+      eventId: currentEvent?.id || '',
+      scannedAt: now,
+    });
+    await batch.commit();
+
     setScanResult(guestRow);
     setTimeout(() => setScanResult(null), 3000);
   };

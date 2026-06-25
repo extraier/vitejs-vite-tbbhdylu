@@ -1,6 +1,11 @@
-# React + TypeScript + Vite
+# Wedding App (囍程)
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+[![CI](https://github.com/extraier/vitejs-vite-tbbhdylu/actions/workflows/ci.yml/badge.svg)](https://github.com/extraier/vitejs-vite-tbbhdylu/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/extraier/vitejs-vite-tbbhdylu/actions/workflows/codeql.yml/badge.svg)](https://github.com/extraier/vitejs-vite-tbbhdylu/actions/workflows/codeql.yml)
+
+A wedding planning web app — guest list, photo drops, vendor directory, QR-code check-in.
+
+## React + TypeScript + Vite
 
 Currently, two official plugins are available:
 

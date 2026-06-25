@@ -10,16 +10,28 @@
 // 2. Token is redeemed once → guestLinks/{linkId}.redeemedByUid = auth.uid
 // 3. From then on, auth.uid is the ONLY credential. No more raw ownerUid in URL.
 //
+// 4. Helpers register their own Firebase Auth account (email/password or Google)
+// 5. Owner invites helpers via email → Cloud Function creates helpers/{uid} doc
+// 6. Helper signs in → reads their own helpers/{auth.uid} doc to learn perms
+// 7. Helper accesses owner's data ONLY through perms-checked rules
+//
 // What each role can do
 // ---------------------
 // OWNER (auth.uid == ownerUid):
 //   • Full CRUD on their own users/{uid}/{events,guests,tasks,photos}
-//   • Can read+write their own guestLinks (to issue new QR codes)
+//   • Can read+write their own guestLinks + helpers (to issue invites)
 // GUEST (auth.uid == guestLinks/{linkId}.redeemedByUid):
 //   • Read the linked event (name, date, tier)
 //   • Create photos under that owner (only IF link not expired & not revoked)
 //   • Update ONLY their own guest row (hasAttended, hasGifted, giftAmount)
-// VENDOR / RECEPTION:
+// HELPER (helpers/{auth.uid}.status == 'active' && perms[X] == true):
+//   • Per-tab access based on perms flags:
+//       canScan / canViewGuestList / canViewBudget / canViewChecklist
+//       canViewPhotos / canUploadPhotos / canEditGuests
+//       canViewGiftAmount (default false — opt-in per helper)
+//   • Cannot see other helpers
+//   • Cannot modify the helper doc itself
+// VENDOR:
 //   • Read /jobRequests (public listings)
 //   • Read/write /proposals for jobs they own
 // EVERYONE ELSE:
@@ -29,7 +41,7 @@
 // -------------
 // We allow read/write under any /artifacts/{appId} segment so the same rules
 // work for production, Canvas, and StackBlitz preview environments. The appId
-// is not a security boundary — auth + guestLinks are.
+// is not a security boundary — auth + guestLinks + helpers are.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -45,9 +57,6 @@ service cloud.firestore {
     }
 
     // A guest has redeemed a QR-code link tying them to (owner, event).
-    // We check by walking the owner's guestLinks collection and finding
-    // a link whose redeemedByUid == auth.uid AND (ownerUid, eventId)
-    // match the doc we're trying to access.
     function hasValidGuestLink(ownerUid, eventId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/guestLinks/$(request.auth.uid)) &&
@@ -55,77 +64,137 @@ service cloud.firestore {
         get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.expiresAt > request.time;
     }
 
-    // Wildcard appId so rules apply under any environment.
-    // (Rules don't actually receive appId as a variable — but the path match
-    //  below covers all artifacts/* segments.)
+    // A helper has been invited to help with (ownerUid, eventId). Returns the
+    // helper doc data if active, otherwise null. Use hasHelperPerm() below
+    // for boolean checks.
+    function helperDoc(ownerUid) {
+      return get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/helpers/$(request.auth.uid));
+    }
+
+    function isActiveHelper(ownerUid) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/helpers/$(request.auth.uid)) &&
+        helperDoc(ownerUid).data.status == 'active';
+    }
+
+    // Returns true if the current user is an active helper AND the named
+    // permission flag is true on their helpers doc.
+    function hasHelperPerm(ownerUid, perm) {
+      return isActiveHelper(ownerUid) &&
+        helperDoc(ownerUid).data.perms[perm] == true;
+    }
+
+    // A helper is "useful" if they have any view perm. Without at least one,
+    // they have no business reading the event doc.
+    function hasAnyHelperViewPerm(ownerUid) {
+      return isActiveHelper(ownerUid) && (
+        helperDoc(ownerUid).data.perms.canScan == true ||
+        helperDoc(ownerUid).data.perms.canViewGuestList == true ||
+        helperDoc(ownerUid).data.perms.canViewBudget == true ||
+        helperDoc(ownerUid).data.perms.canViewChecklist == true ||
+        helperDoc(ownerUid).data.perms.canViewPhotos == true ||
+        helperDoc(ownerUid).data.perms.canUploadPhotos == true ||
+        helperDoc(ownerUid).data.perms.canEditGuests == true
+      );
+    }
+
     match /artifacts/{appId} {
 
       // ---- Owner-scoped data --------------------------------------------
 
       match /users/{ownerUid} {
 
-        // Events: owner CRUD. Guests get read-only via the link check.
+        // Events: owner CRUD. Guests + helpers (with at least one view perm) read-only.
         match /events/{eventId} {
-          allow read: if isOwner(ownerUid) || hasValidGuestLink(ownerUid, eventId);
+          allow read: if isOwner(ownerUid)
+            || hasValidGuestLink(ownerUid, eventId)
+            || hasAnyHelperViewPerm(ownerUid);
           allow create, update, delete: if isOwner(ownerUid);
         }
 
-        // Guests: owner CRUD only. Guests do NOT see other guests (PII).
-        // A guest CAN update ONLY their own guest row (for hasAttended /
-        // hasGifted / giftAmount). They cannot read or update other rows.
+        // Guests: owner full CRUD. Helpers may read IF canViewGuestList.
+        // Helpers may update IF canScan (only the attendance fields) OR
+        // canEditGuests (any field). Guests update only their own row.
         match /guests/{guestDocId} {
-          allow read: if isOwner(ownerUid);
+          allow read: if isOwner(ownerUid)
+            || hasHelperPerm(ownerUid, 'canViewGuestList');
           allow create, delete: if isOwner(ownerUid);
+          // canScan: only allow toggling attendance + audit fields.
+          allow update: if isOwner(ownerUid)
+            || (hasHelperPerm(ownerUid, 'canScan')
+                && request.resource.data.diff(resource.data).affectedKeys()
+                     .hasOnly(['hasAttended', 'lastScannedBy', 'lastScannedAt']))
+            // canEditGuests: any update allowed (table numbers, names, etc).
+            || hasHelperPerm(ownerUid, 'canEditGuests');
           // Guest updates: only their own row, only the safe fields.
           allow update: if isOwner(ownerUid)
             || (
-              // Authenticated guest who holds a valid link to this owner's event
               hasValidGuestLink(ownerUid, resource.data.eventId)
-              // And the row they're touching IS their own
               && resource.data.guestId != null
-              // Use a custom claim if you want stronger identity binding,
-              // otherwise rely on redeemedByUid == auth.uid already
-              // proven by hasValidGuestLink().
             );
         }
 
-        // Photos: owner full access. Guests may create only.
-        // (Updating/deleting photos requires owner — guests can't tamper
-        //  with what other guests uploaded.)
+        // Photos: owner full access. Guests can create (read-only after).
+        // Helpers may read IF canViewPhotos, create IF canUploadPhotos.
         match /photos/{photoId} {
-          allow read: if isOwner(ownerUid) || hasValidGuestLink(ownerUid, resource.data.eventId);
+          allow read: if isOwner(ownerUid)
+            || hasValidGuestLink(ownerUid, resource.data.eventId)
+            || hasHelperPerm(ownerUid, 'canViewPhotos');
           allow create: if isSignedIn()
-            && hasValidGuestLink(ownerUid, request.resource.data.eventId)
-            // uploaderId must be the redeeming guest's own guestId
-            // (we can't verify guestId without a join — owner app does this)
-            && request.resource.data.keys().hasAll(['eventId', 'url', 'uploaderId', 'uploaderName', 'createdAt'])
-            && request.resource.data.url is string
-            && request.resource.data.createdAt is number;
+            && (
+              (hasValidGuestLink(ownerUid, request.resource.data.eventId)
+                && request.resource.data.keys().hasAll(['eventId', 'url', 'uploaderId', 'uploaderName', 'createdAt'])
+                && request.resource.data.url is string
+                && request.resource.data.createdAt is number)
+              || (hasHelperPerm(ownerUid, 'canUploadPhotos')
+                  && request.resource.data.keys().hasAll(['eventId', 'url', 'uploaderId', 'uploaderName', 'createdAt'])
+                  && request.resource.data.url is string
+                  && request.resource.data.createdAt is number)
+            );
           allow update, delete: if isOwner(ownerUid);
         }
 
-        // Tasks: owner CRUD only. Guests never touch tasks.
+        // Tasks: owner CRUD. Helpers may read IF canViewChecklist (no write).
         match /tasks/{taskId} {
-          allow read, write: if isOwner(ownerUid);
+          allow read: if isOwner(ownerUid)
+            || hasHelperPerm(ownerUid, 'canViewChecklist');
+          allow write: if isOwner(ownerUid);
         }
 
         // GuestLinks: owner generates + reads. Guest creates exactly ONE
         // (their own doc, keyed by auth.uid) during QR redemption.
-        // No updates, no reads from guests after creation.
         match /guestLinks/{linkDocId} {
           allow read: if isOwner(ownerUid)
             || (isSignedIn() && request.auth.uid == linkDocId);
           allow create: if isOwner(ownerUid)
             || (
-              // Guest redeeming their own QR link: docId MUST == auth.uid
               isSignedIn() && request.auth.uid == linkDocId
-              && request.resource.data.ownerUid == request.auth.token.ownerUid_or_undefined
               && request.resource.data.keys().hasAll(['ownerUid', 'eventId', 'guestId', 'expiresAt', 'redeemedByUid'])
               && request.resource.data.redeemedByUid == request.auth.uid
               && request.resource.data.expiresAt > request.time
             );
-          allow update: if isOwner(ownerUid);
-          allow delete: if isOwner(ownerUid);
+          allow update, delete: if isOwner(ownerUid);
+        }
+
+        // Helpers: owner full CRUD on their own helpers collection.
+        // Helpers may read ONLY their own doc (to learn their perms).
+        // Helpers CANNOT see other helpers (privacy between helpers).
+        // Helpers CANNOT write their own doc (only owner can grant/revoke).
+        match /helpers/{helperUid} {
+          allow read: if isOwner(ownerUid)
+            || (isSignedIn() && request.auth.uid == helperUid);
+          allow create, update, delete: if isOwner(ownerUid);
+        }
+
+        // ScanLog: append-only audit trail of every QR-code scan.
+        // Anyone signed-in can write (the helper doing the scan).
+        // Only the owner can read the log.
+        match /scanLog/{scanId} {
+          allow read: if isOwner(ownerUid);
+          allow create: if isSignedIn()
+            && request.resource.data.keys().hasAll(['guestId', 'helperUid', 'eventId', 'scannedAt'])
+            && request.resource.data.helperUid == request.auth.uid;
+          allow update, delete: if false;  // immutable
         }
       }
 
@@ -133,9 +202,6 @@ service cloud.firestore {
 
       match /jobRequests/{jobId} {
         allow read: if isSignedIn();
-        // Only owner (via Cloud Function in production) can create.
-        // For now: any signed-in user can post — but tighten this with
-        // App Check or a Cloud Function before going to production.
         allow create: if isSignedIn()
           && request.resource.data.coupleUid == request.auth.uid;
         allow update, delete: if isSignedIn()
@@ -145,14 +211,13 @@ service cloud.firestore {
       match /proposals/{proposalId} {
         allow read: if isSignedIn();
         allow create: if isSignedIn();
-        // Only the proposing vendor or the owning couple can update/delete.
         allow update, delete: if isSignedIn()
           && (resource.data.vendorUid == request.auth.uid
               || resource.data.coupleUid == request.auth.uid);
       }
 
       match /vendors/{vendorUid} {
-        allow read: if true;  // public directory
+        allow read: if true;
         allow write: if isSignedIn() && request.auth.uid == vendorUid;
       }
 

@@ -22,7 +22,6 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import * as crypto from 'crypto';
-import type { Request } from 'firebase-functions/v2/https';
 
 initializeApp();
 const db = getFirestore();
@@ -120,8 +119,8 @@ export const redeemGuestLink = onCall(
     }
 
     const authUid = req.auth.uid;
-    const linkSnap = await db.collectionGroup('guestLinks').doc(linkId).get();
-    if (!linkSnap.exists) throw new HttpsError('not-found', 'Invalid link.');
+    const linkSnap = await findGuestLink(linkId);
+    if (!linkSnap) throw new HttpsError('not-found', 'Invalid link.');
 
     const link = linkSnap.data()!;
     if (link.revoked) throw new HttpsError('permission-denied', 'Link revoked.');
@@ -177,12 +176,257 @@ export const revokeGuestLink = onCall(async (req) => {
   const { linkId } = req.data as { linkId: string };
   if (!linkId) throw new HttpsError('invalid-argument', 'linkId required.');
 
-  const linkSnap = await db.collectionGroup('guestLinks').doc(linkId).get();
-  if (!linkSnap.exists) throw new HttpsError('not-found', 'Invalid link.');
+  const linkSnap = await findGuestLink(linkId);
+  if (!linkSnap) throw new HttpsError('not-found', 'Invalid link.');
   if (linkSnap.data()!.ownerUid !== req.auth.uid) {
     throw new HttpsError('permission-denied', 'Not your link.');
   }
 
   await linkSnap.ref.update({ revoked: true });
+  return { ok: true };
+});
+
+// =============================================================================
+// Helpers — 兄弟姊妹 permission system
+// =============================================================================
+//
+// Unlike guests (who use single-use QR tokens), helpers register their own
+// Firebase Auth account and sign in directly. The owner invites them by email,
+// which creates a `helpers/{helperUid}` doc with their permissions. The rules
+// engine then enforces per-tab access based on the perms flags.
+
+import { getAuth } from 'firebase-admin/auth';
+
+/**
+ * findGuestLink — collectionGroup lookup by document ID.
+ * Firestore's collectionGroup().doc() doesn't exist in the Admin SDK type
+ * definitions (it's a known gap). We work around it by listing the group and
+ * filtering by ID. Links are small (< 100 per wedding) so this is fine.
+ */
+async function findGuestLink(linkId: string) {
+  const group = await db.collectionGroup('guestLinks').get();
+  const match = group.docs.find((d) => d.id === linkId);
+  return match ?? null;
+}
+
+// All possible helper permissions. Kept in sync with the client UI.
+export const HELPER_PERMS = [
+  'canScan',
+  'canViewGuestList',
+  'canViewBudget',
+  'canViewChecklist',
+  'canViewPhotos',
+  'canUploadPhotos',
+  'canEditGuests',
+  'canViewGiftAmount',
+] as const;
+
+export type HelperPerm = (typeof HELPER_PERMS)[number];
+
+export type HelperPerms = Record<HelperPerm, boolean>;
+
+function defaultHelperPerms(): HelperPerms {
+  return {
+    canScan: false,
+    canViewGuestList: false,
+    canViewBudget: false,
+    canViewChecklist: false,
+    canViewPhotos: false,
+    canUploadPhotos: false,
+    canEditGuests: false,
+    canViewGiftAmount: false,
+  };
+}
+
+/**
+ * inviteHelper — owner-only.
+ * Looks up the Firebase Auth user by email, creates a helpers/{uid} doc.
+ * The helper sees this doc when they next open the app (status='invited').
+ * They can then call acceptHelperInvite to flip status to 'active'.
+ *
+ * If the email isn't registered yet, we still write a placeholder doc keyed
+ * by email (not uid) — when the user later signs up with that email, the
+ * client detects the placeholder and migrates it to a uid-keyed doc.
+ */
+export const inviteHelper = onCall(async (req) => {
+  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+
+  const { email, displayName, perms, phone } = req.data as {
+    email: string;
+    displayName: string;
+    phone?: string;
+    perms: Partial<HelperPerms>;
+  };
+
+  if (!email || !displayName) {
+    throw new HttpsError('invalid-argument', 'email and displayName required.');
+  }
+
+  // Merge incoming perms with defaults (so missing flags are explicitly false).
+  const mergedPerms = { ...defaultHelperPerms(), ...perms };
+
+  const ownerUid = req.auth.uid;
+
+  // Try to find an existing Firebase Auth user with this email.
+  let helperUid: string | null = null;
+  try {
+    const userRecord = await getAuth().getUserByEmail(email);
+    helperUid = userRecord.uid;
+  } catch (err: unknown) {
+    // User doesn't exist yet — that's OK, we'll write a placeholder.
+    const code = (err as { code?: string }).code;
+    if (code !== 'auth/user-not-found') {
+      throw err;
+    }
+  }
+
+  const helperDoc = {
+    ownerUid,
+    email,
+    displayName,
+    phone: phone ?? null,
+    status: 'invited',
+    perms: mergedPerms,
+    invitedAt: FieldValue.serverTimestamp(),
+    acceptedAt: null,
+    revokedAt: null,
+    invitedByUid: ownerUid,
+    helperUid,  // null if user hasn't signed up yet
+  };
+
+  if (helperUid) {
+    // User exists — write to helpers/{uid}.
+    await db
+      .collection('artifacts').doc()
+      .collection('users').doc(ownerUid)
+      .collection('helpers').doc(helperUid)
+      .set(helperDoc);
+  } else {
+    // User not registered yet — write to a pendingInvites collection.
+    // When they later sign up with this email, a client-side trigger
+    // (or a Cloud Function onAuthCreate) migrates it.
+    await db
+      .collection('artifacts').doc()
+      .collection('users').doc(ownerUid)
+      .collection('pendingInvites').doc(email.toLowerCase())
+      .set(helperDoc);
+  }
+
+  return { ok: true, helperUid, pendingEmailRegistration: !helperUid };
+});
+
+/**
+ * acceptHelperInvite — called by the helper after signing in.
+ * If the helper signed up using an email that has a pendingInvite, this
+ * migrates it to helpers/{uid} and sets status='active'.
+ */
+export const acceptHelperInvite = onCall(async (req) => {
+  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+
+  const authUid = req.auth.uid;
+  const authEmail = req.auth.token.email?.toLowerCase();
+  if (!authEmail) {
+    throw new HttpsError('invalid-argument', 'Auth user has no email.');
+  }
+
+  // Find any owner who invited this email.
+  const pending = await db
+    .collectionGroup('pendingInvites')
+    .where('email', '==', authEmail)
+    .get();
+
+  if (pending.empty) {
+    throw new HttpsError('not-found', 'No invite found for this email.');
+  }
+
+  // Accept all matching invites (a helper could be invited by multiple couples).
+  const batch = db.batch();
+  const accepted: { ownerUid: string; perms: HelperPerms }[] = [];
+
+  for (const doc of pending.docs) {
+    const data = doc.data();
+    const ownerUid = data.ownerUid;
+    const newRef = db
+      .collection('artifacts').doc()
+      .collection('users').doc(ownerUid)
+      .collection('helpers').doc(authUid);
+
+    batch.set(newRef, {
+      ...data,
+      helperUid: authUid,
+      status: 'active',
+      acceptedAt: FieldValue.serverTimestamp(),
+    });
+    batch.delete(doc.ref);
+
+    accepted.push({ ownerUid, perms: data.perms as HelperPerms });
+  }
+
+  await batch.commit();
+  return { ok: true, accepted };
+});
+
+/**
+ * revokeHelper — owner-only. Marks a helper's status as 'revoked'.
+ * The helper can no longer access the owner's data (rules check status == 'active').
+ */
+export const revokeHelper = onCall(async (req) => {
+  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+
+  const { helperUid } = req.data as { helperUid: string };
+  if (!helperUid) throw new HttpsError('invalid-argument', 'helperUid required.');
+
+  const helperRef = db
+    .collection('artifacts').doc()
+    .collection('users').doc(req.auth.uid)
+    .collection('helpers').doc(helperUid);
+
+  const snap = await helperRef.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Helper not found.');
+
+  await helperRef.update({
+    status: 'revoked',
+    revokedAt: FieldValue.serverTimestamp(),
+  });
+  return { ok: true };
+});
+
+/**
+ * updateHelperPerms — owner-only. Updates the perms on a helper's doc.
+ * The helper sees the new perms on their next page refresh.
+ */
+export const updateHelperPerms = onCall(async (req) => {
+  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+
+  const { helperUid, perms } = req.data as {
+    helperUid: string;
+    perms: Partial<HelperPerms>;
+  };
+
+  if (!helperUid || !perms) {
+    throw new HttpsError('invalid-argument', 'helperUid and perms required.');
+  }
+
+  // Validate all keys are valid perm names.
+  for (const key of Object.keys(perms)) {
+    if (!(HELPER_PERMS as readonly string[]).includes(key)) {
+      throw new HttpsError('invalid-argument', `Unknown perm: ${key}`);
+    }
+  }
+
+  const helperRef = db
+    .collection('artifacts').doc()
+    .collection('users').doc(req.auth.uid)
+    .collection('helpers').doc(helperUid);
+
+  const snap = await helperRef.get();
+  if (!snap.exists) throw new HttpsError('not-found', 'Helper not found.');
+
+  // Merge into existing perms (don't unset flags the owner didn't touch).
+  const currentPerms = snap.data()!.perms as HelperPerms;
+  await helperRef.update({
+    perms: { ...currentPerms, ...perms },
+  });
+
   return { ok: true };
 });

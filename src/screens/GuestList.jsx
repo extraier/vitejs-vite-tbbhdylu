@@ -11,6 +11,7 @@ import {
 export function GuestList({
   guests,
   userRole,
+  helperPerms,
   searchQuery,
   onSearchChange,
   newGuestForm,
@@ -20,6 +21,9 @@ export function GuestList({
   onShowQr,
   onCheckIn,
 }) {
+  // Helpers can see gift presence but not amounts unless canViewGiftAmount.
+  // We don't strip here (server returns full data anyway) — instead GuestRow
+  // checks helperPerms.canViewGiftAmount before rendering the amount.
   const filtered = guests.filter((g) => g.name.includes(searchQuery));
 
   return (
@@ -63,6 +67,7 @@ export function GuestList({
                   key={guest.id}
                   guest={guest}
                   userRole={userRole}
+                  helperPerms={helperPerms}
                   onPreviewAsGuest={onPreviewAsGuest}
                   onShowQr={onShowQr}
                   onCheckIn={onCheckIn}
@@ -139,7 +144,12 @@ export function GuestList({
   );
 }
 
-function GuestRow({ guest, userRole, onPreviewAsGuest, onShowQr, onCheckIn }) {
+function GuestRow({ guest, userRole, helperPerms, onPreviewAsGuest, onShowQr, onCheckIn }) {
+  // canViewGiftAmount gates the actual dollar amount, but helpers always see
+  // whether the gift was given (the hasGifted flag). This matches the owner's
+  // intent: helpers should know "did this guest pay?" without seeing how much.
+  const canSeeGiftAmount = !helperPerms || helperPerms.canViewGiftAmount;
+  const showGift = guest.hasGifted && (canSeeGiftAmount || !helperPerms);
   return (
     <tr className="hover:bg-slate-50/50">
       <td className="p-4">
@@ -161,7 +171,13 @@ function GuestRow({ guest, userRole, onPreviewAsGuest, onShowQr, onCheckIn }) {
           ) : (
             <span className="text-slate-400 text-[10px]">未到</span>
           )}
-          {guest.hasGifted && (
+          {/* Helper without canViewGiftAmount: see "已付款" pill, no amount. */}
+          {guest.hasGifted && helperPerms && !canSeeGiftAmount && (
+            <span className="text-rose-600 font-bold text-[10px] bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+              🧧 已付款
+            </span>
+          )}
+          {showGift && (
             <span className="text-rose-600 font-bold text-[10px] bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
               🧧 ${guest.giftAmount}
             </span>

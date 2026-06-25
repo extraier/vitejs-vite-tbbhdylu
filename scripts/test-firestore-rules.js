@@ -236,6 +236,231 @@ async function runTests() {
   );
   log('Anonymous CANNOT read jobRequests', true);
 
+  console.log('\n=== Helper permission system (兄弟姊妹) ===');
+
+  // Seed a helper with canScan only
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(
+      doc(ctx.firestore(), 'artifacts/demo/users/alice-uid/helpers/scan-helper'),
+      {
+        ownerUid: 'alice-uid',
+        email: 'scan@example.com',
+        displayName: 'Scanner Helper',
+        status: 'active',
+        perms: {
+          canScan: true,
+          canViewGuestList: false,
+          canViewBudget: false,
+          canViewChecklist: false,
+          canViewPhotos: false,
+          canUploadPhotos: false,
+          canEditGuests: false,
+          canViewGiftAmount: false,
+        },
+      },
+    );
+  });
+  const scanCtx = env.authenticatedContext('scan-helper');
+
+  // canScan helper can read their own helper doc
+  await assertSucceeds(
+    getDoc(doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/helpers/scan-helper')),
+  );
+  log('Helper CAN read own helper doc', true);
+
+  // Helper CANNOT read other helpers (privacy)
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(
+      doc(ctx.firestore(), 'artifacts/demo/users/alice-uid/helpers/other-helper'),
+      { ownerUid: 'alice-uid', status: 'active', perms: { canScan: true } },
+    );
+  });
+  await assertFails(
+    getDoc(doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/helpers/other-helper')),
+  );
+  log('Helper CANNOT read other helpers', true);
+
+  // canScan helper CAN read guests (because canScan implies canViewGuestList
+  // for the scan flow) -- actually, rules require canViewGuestList explicit.
+  // Test the negative case first: canScan alone cannot read guests.
+  await assertFails(
+    getDoc(doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/guests/ALICE_GUEST')),
+  );
+  log('canScan helper (no canViewGuestList) CANNOT read guests', true);
+
+  // canScan helper CAN update hasAttended on a guest (audit fields only)
+  await assertSucceeds(
+    setDoc(
+      doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/guests/ALICE_GUEST'),
+      { hasAttended: true, lastScannedBy: 'scan-helper', lastScannedAt: Date.now() },
+      { merge: true },
+    ).catch(async () => {
+      // setDoc with merge might not be in the test util — try updateDoc instead.
+      const { updateDoc, update } = await import('firebase/firestore');
+      return updateDoc(
+        doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/guests/ALICE_GUEST'),
+        { hasAttended: true, lastScannedBy: 'scan-helper', lastScannedAt: Date.now() },
+      );
+    }),
+  );
+  log('canScan helper CAN mark hasAttended + audit fields', true);
+
+  // canScan helper CANNOT edit other fields on guest (e.g., tableNumber)
+  let scanError = null;
+  try {
+    const { updateDoc } = await import('firebase/firestore');
+    await updateDoc(
+      doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/guests/ALICE_GUEST'),
+      { tableNumber: 'Table 99' },
+    );
+  } catch (e) {
+    scanError = e;
+  }
+  log('canScan helper CANNOT edit tableNumber (security gate)', scanError !== null, scanError?.code || '');
+
+  // canScan helper CANNOT read tasks (no canViewChecklist)
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(
+      doc(ctx.firestore(), 'artifacts/demo/users/alice-uid/tasks/task-1'),
+      { title: 'Decorations', eventId: ALICE_EVENT },
+    );
+  });
+  await assertFails(
+    getDoc(doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/tasks/task-1')),
+  );
+  log('canScan helper CANNOT read tasks', true);
+
+  // canScan helper CAN read events (hasAnyHelperViewPerm includes canScan)
+  await assertSucceeds(
+    getDoc(doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/events/ALICE_EVENT')),
+  );
+  log('canScan helper CAN read events (needs to know event context)', true);
+
+  // Helper with NO perms at all CANNOT read events
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(
+      doc(ctx.firestore(), 'artifacts/demo/users/alice-uid/helpers/useless-helper'),
+      {
+        ownerUid: 'alice-uid',
+        status: 'active',
+        perms: {
+          canScan: false,
+          canViewGuestList: false,
+          canViewBudget: false,
+          canViewChecklist: false,
+          canViewPhotos: false,
+          canUploadPhotos: false,
+          canEditGuests: false,
+          canViewGiftAmount: false,
+        },
+      },
+    );
+  });
+  const uselessCtx = env.authenticatedContext('useless-helper');
+  await assertFails(
+    getDoc(doc(uselessCtx.firestore(), 'artifacts/demo/users/alice-uid/events/ALICE_EVENT')),
+  );
+  log('Helper with zero perms CANNOT read events', true);
+
+  // Revoked helper CANNOT do anything
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(
+      doc(ctx.firestore(), 'artifacts/demo/users/alice-uid/helpers/revoked-helper'),
+      {
+        ownerUid: 'alice-uid',
+        status: 'revoked',
+        perms: { canScan: true },
+      },
+    );
+  });
+  const revokedCtx = env.authenticatedContext('revoked-helper');
+  await assertFails(
+    getDoc(doc(revokedCtx.firestore(), 'artifacts/demo/users/alice-uid/guests/ALICE_GUEST')),
+  );
+  log('Revoked helper CANNOT read guests', true);
+
+  // Helper CANNOT write their own doc (owner-only)
+  await assertFails(
+    setDoc(
+      doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/helpers/scan-helper'),
+      { status: 'active', perms: { canScan: true, canEditGuests: true } },
+      { merge: true },
+    ),
+  );
+  log('Helper CANNOT escalate their own perms', true);
+
+  // Owner CAN grant any perm
+  await assertSucceeds(
+    setDoc(
+      doc(alice().firestore(), 'artifacts/demo/users/alice-uid/helpers/scan-helper'),
+      { perms: { canEditGuests: true } },
+      { merge: true },
+    ),
+  );
+  log('Owner CAN grant perms', true);
+
+  // After canEditGuests, helper CAN edit any field on guest
+  const { updateDoc } = await import('firebase/firestore');
+  await assertSucceeds(
+    updateDoc(
+      doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/guests/ALICE_GUEST'),
+      { tableNumber: 'Table 5' },
+    ),
+  );
+  log('canEditGuests helper CAN edit tableNumber', true);
+
+  console.log('\n=== ScanLog audit trail ===');
+
+  // Helper CAN write scanLog entries
+  await assertSucceeds(
+    setDoc(
+      doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/scanLog/scan-1'),
+      {
+        guestId: 'ALICE_GUEST',
+        helperUid: 'scan-helper',
+        eventId: ALICE_EVENT,
+        scannedAt: Date.now(),
+      },
+    ),
+  );
+  log('Helper CAN write scanLog', true);
+
+  // Helper CANNOT forge another helper's UID in scanLog
+  await assertFails(
+    setDoc(
+      doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/scanLog/forged'),
+      {
+        guestId: 'ALICE_GUEST',
+        helperUid: 'some-other-helper',
+        eventId: ALICE_EVENT,
+        scannedAt: Date.now(),
+      },
+    ),
+  );
+  log('Helper CANNOT forge scanLog helperUid', true);
+
+  // Helper CANNOT read scanLog (owner-only)
+  await assertFails(
+    getDoc(doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/scanLog/scan-1')),
+  );
+  log('Helper CANNOT read scanLog (owner-only)', true);
+
+  // Owner CAN read scanLog
+  await assertSucceeds(
+    getDoc(doc(alice().firestore(), 'artifacts/demo/users/alice-uid/scanLog/scan-1')),
+  );
+  log('Owner CAN read scanLog', true);
+
+  // Helper CANNOT update or delete scanLog (immutable)
+  await assertFails(
+    setDoc(
+      doc(scanCtx.firestore(), 'artifacts/demo/users/alice-uid/scanLog/scan-1'),
+      { scannedAt: 0 },
+      { merge: true },
+    ),
+  );
+  log('Helper CANNOT mutate scanLog (immutable)', true);
+
   console.log(`\n=== Result ===\n  ${passed} passed, ${failed} failed\n`);
 
   await teardown();
