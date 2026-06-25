@@ -2,7 +2,7 @@
 //
 // These tests don't hit Firebase — they verify the pure crypto helpers
 // and the public API surface. The full Firestore rules tests live in
-// scripts/test-firestore-rules.js (uses @firebase/rules-unit-testing
+// scripts/test-firestore-rules.cjs (uses @firebase/rules-unit-testing
 // against the local emulator).
 
 import { describe, it, expect } from 'vitest';
