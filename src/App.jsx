@@ -52,7 +52,7 @@ import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
 
 export default function App() {
   // Auth
-  const { user, authChecked, loginWithGoogle, logout } = useAuth();
+  const { user, authChecked, loginWithGoogle, loginWithEmail, registerWithEmail, logout } = useAuth();
 
   // Helper context (兄弟姊妹). Only meaningful when the user is signed in
   // (not anonymous) and NOT in guest-mode URL. The hook itself is safe to
@@ -452,7 +452,13 @@ export default function App() {
 
   // ---- Render ----
   if (authChecked && !user && !guest.isGuestMode) {
-    return <LoginScreen onLogin={loginWithGoogle} />;
+    return (
+      <LoginScreen
+        onGoogleLogin={loginWithGoogle}
+        onEmailLogin={loginWithEmail}
+        onEmailRegister={registerWithEmail}
+      />
+    );
   }
   if (!authChecked) {
     return (
