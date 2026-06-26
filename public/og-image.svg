@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff1f2"/>
+      <stop offset="1" stop-color="#ffe4e6"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fb7185"/>
+      <stop offset="1" stop-color="#ec4899"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="14" fill="url(#bar)"/>
+  <!-- Heart -->
+  <path d="M600 230 C600 170, 540 130, 480 170 C420 130, 360 170, 360 230 C360 290, 600 410, 600 410 C600 410, 840 290, 840 230 C840 170, 780 130, 720 170 C660 130, 600 170, 600 230 Z" fill="#f43f5e"/>
+  <!-- Title -->
+  <text x="600" y="490" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="120" fill="#1e293b" letter-spacing="8">囍程</text>
+  <text x="600" y="565" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="700" font-size="46" fill="#475569">Save The Day · Hong Kong Wedding SaaS</text>
+</svg>
