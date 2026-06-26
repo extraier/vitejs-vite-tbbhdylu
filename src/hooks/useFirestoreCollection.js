@@ -5,10 +5,16 @@
 // Returns `{ data, loading, error }`. `loading` is true until the first
 // snapshot fires (so callers can show spinners during initial fetch).
 //
-// IMPORTANT: We import `onSnapshot` from `firebase/firestore` here even
-// though we call it as a method on `collectionRef`. Importing the standalone
-// function has the side effect of patching
-// `CollectionReference.prototype.onSnapshot`, which is what we need.
+// CRITICAL (verified 2026-06-26 on vitejs-vite-tbbhdylu):
+// We call `onSnapshot(collectionRef, cb, errCb)` — the STANDALONE function
+// imported from `firebase/firestore` — NOT `collectionRef.onSnapshot(cb)`
+// (the method form).
+//
+// Why not the method form: the modular SDK v10.x does NOT install
+// `CollectionReference.prototype.onSnapshot` (only the compat SDK does).
+// Calling it as a method throws `TypeError: t.onSnapshot is not a function`
+// in production. The standalone function works because it accepts a Query
+// / CollectionReference as its first argument directly.
 //
 // Usage:
 //   const { data: events } = useFirestoreCollection(
@@ -17,13 +23,7 @@
 //   );
 
 import { useEffect, useState } from 'react';
-
-// Note: `CollectionReference.prototype.onSnapshot` is the prototype method
-// used inside this hook. The patch that installs that prototype method runs
-// as a side effect of importing `onSnapshot` from `firebase/firestore`.
-// That import happens in App.jsx (kept reachable via globalThis assignment).
-// Do NOT import `onSnapshot` here — Rollup will tree-shake any local-only
-// use (e.g. `void X`), and re-importing here would only fragment the bundle.
+import { onSnapshot } from 'firebase/firestore';
 
 export function useFirestoreCollection(collectionRef, deps = []) {
   const [data, setData] = useState([]);
@@ -37,7 +37,10 @@ export function useFirestoreCollection(collectionRef, deps = []) {
       return undefined;
     }
     setLoading(true);
-    const unsub = collectionRef.onSnapshot(
+    // Standalone-function form (works in modular SDK v10.x). NOT the method
+    // form (`collectionRef.onSnapshot(...)`) which throws in production.
+    const unsub = onSnapshot(
+      collectionRef,
       (snapshot) => {
         setData(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
         setLoading(false);

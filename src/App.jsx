@@ -12,39 +12,19 @@ import {
 
 import { db, appId } from './lib/firebase';
 
-// ─── onSnapshot prototype-patch trigger (runs at module init) ──────────
-// Background: importing the named `onSnapshot` from `firebase/firestore`
-// patches `CollectionReference.prototype.onSnapshot` as a side effect.
-// `useFirestoreCollection` calls `collectionRef.onSnapshot(cb)` — the
-// prototype method — and breaks in production with
-// `TypeError: t.onSnapshot is not a function` if Rollup tree-shakes the
-// standalone `onSnapshot` import.
+// ─── onSnapshot import retention (defensive, no longer load-bearing) ────
+// Historical context: importing `onSnapshot` from `firebase/firestore` used
+// to be required as a side effect of prototype-patching
+// `CollectionReference.prototype.onSnapshot`. That prototype patch never
+// existed in modular SDK v10.x (only the compat SDK) — the real bug was
+// `useFirestoreCollection` calling `collectionRef.onSnapshot(...)` instead
+// of `onSnapshot(collectionRef, ...)`. Now fixed in the hook itself.
 //
-// Lessons from 2026-06-26 on vitejs-vite-tbbhdylu:
-//  - `void _p` (option from skill): Rollup tree-shakes it as dead code.
-//  - `globalThis.__X = onSnapshot` (option 3): retains the import
-//    (verified in deployed bundle) BUT the prototype patch may still not
-//    fire — `CollectionReference.prototype.onSnapshot` ends up missing.
-//  - Real call (`onSnapshot(q, cb)`) — option 1, the only verified fix.
-//
-// We do a real call at module-init time on a sentinel collection path
-// (`__bootstrap_heartbeat`). The returned unsubscribe is stored on
-// `globalThis` for cleanup, but the primary goal is to force the
-// prototype patch to run synchronously during module init — BEFORE any
-// user logs in and any `useFirestoreCollection` subscriber is set up.
+// We keep the `globalThis` retention here so other code paths can verify
+// `typeof globalThis.__firestore_onSnapshot === 'function'` if needed,
+// but it is no longer required for the runtime to work.
 if (typeof globalThis !== 'undefined') {
   globalThis.__firestore_onSnapshot = onSnapshot;
-  try {
-    const heartbeatRef = collection(db, 'artifacts', appId, '__bootstrap_heartbeat');
-    const unsub = onSnapshot(heartbeatRef, () => {}, () => {});
-    if (typeof unsub === 'function') {
-      globalThis.__firestore_heartbeat_unsub = unsub;
-    }
-  } catch (err) {
-    // Bootstrap should never crash the app. Log and move on.
-    // eslint-disable-next-line no-console
-    console.warn('[firebase bootstrap] onSnapshot prototype-patch call failed:', err);
-  }
 }
 import {
   DEFAULT_VENDORS,
