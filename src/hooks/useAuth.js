@@ -27,14 +27,25 @@ import { auth } from '../lib/firebase';
 export function useAuth() {
   const [user, setUser] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  // Session-only flag: when true, anonymous Firebase users are accepted
+  // as the active user. Defaults false so restored anonymous sessions
+  // from prior visits don't bypass the login screen.
+  const [allowAnonymous, setAllowAnonymous] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+      // Anonymous users (guest mode) never auto-restore on next visit —
+      // they must explicitly click "Continue as guest" again. This keeps
+      // the login screen as the front page for every fresh visit.
+      if (currentUser && currentUser.isAnonymous && !allowAnonymous) {
+        setUser(null);
+      } else {
+        setUser(currentUser);
+      }
       setAuthChecked(true);
     });
     return unsub;
-  }, []);
+  }, [allowAnonymous]);
 
   const loginWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
@@ -52,10 +63,12 @@ export function useAuth() {
   };
 
   const continueAsGuest = async () => {
+    setAllowAnonymous(true);
     await signInAnonymously(auth);
   };
 
   const logout = async () => {
+    setAllowAnonymous(false);
     await signOut(auth);
   };
 
