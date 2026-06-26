@@ -15,7 +15,7 @@ import { Heart, Mail, Lock, Loader2 } from 'lucide-react';
 //   - Minimum password length 8 (Firebase Auth requirement)
 //   - "OR" divider between Google and email
 //
-export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister }) {
+export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest }) {
   const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -74,6 +74,19 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister }) {
   const switchMode = (newMode) => {
     setMode(newMode);
     setError(null);
+  };
+
+  const handleGuest = async () => {
+    if (!onContinueAsGuest) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await onContinueAsGuest();
+    } catch (err) {
+      setError(err?.message || '訪客登入失敗');
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -192,6 +205,26 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister }) {
         </div>
 
         <p className="text-xs text-slate-400 mt-6">新人及婚禮統籌專用</p>
+
+        {/* Guest mode — skip auth, explore the app without an account */}
+        {onContinueAsGuest && (
+          <>
+            <div className="flex items-center gap-3 my-4">
+              <div className="flex-1 h-px bg-slate-200" />
+              <span className="text-xs font-bold text-slate-400 tracking-widest">或</span>
+              <div className="flex-1 h-px bg-slate-200" />
+            </div>
+            <button
+              type="button"
+              onClick={handleGuest}
+              disabled={busy}
+              data-testid="continue-as-guest"
+              className="w-full bg-slate-100 hover:bg-slate-200 disabled:bg-slate-50 text-slate-600 font-bold py-3 rounded-xl transition-colors text-sm"
+            >
+              訪客模式繼續 →
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

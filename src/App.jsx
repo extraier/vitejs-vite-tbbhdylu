@@ -68,7 +68,7 @@ import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
 
 export default function App() {
   // Auth
-  const { user, authChecked, loginWithGoogle, loginWithEmail, registerWithEmail, logout } = useAuth();
+  const { user, authChecked, loginWithGoogle, loginWithEmail, registerWithEmail, continueAsGuest, logout } = useAuth();
 
   // Helper context (兄弟姊妹). Only meaningful when the user is signed in
   // (not anonymous) and NOT in guest-mode URL. The hook itself is safe to
@@ -473,6 +473,7 @@ export default function App() {
         onGoogleLogin={loginWithGoogle}
         onEmailLogin={loginWithEmail}
         onEmailRegister={registerWithEmail}
+        onContinueAsGuest={continueAsGuest}
       />
     );
   }
