@@ -23,7 +23,7 @@ export function EventsDashboard({ events, newEventName, onNewEventNameChange, on
             <input
               type="text"
               required
-              placeholder="例如: Chantal & Fiance"
+              placeholder="例如: 志明 & 春嬌"
               className="w-full max-w-[200px] p-2 text-center border border-rose-200 rounded-lg outline-none focus:ring-2 focus:ring-rose-400 mb-3 bg-white"
               value={newEventName}
               onChange={(e) => onNewEventNameChange(e.target.value)}
