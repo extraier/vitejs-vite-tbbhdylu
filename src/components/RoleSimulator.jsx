@@ -1,6 +1,7 @@
 import { Users } from 'lucide-react';
 
-export function RoleSimulator({ userRole, activeGuestPortal, onSwitch }) {
+export function RoleSimulator({ userRole, activeGuestPortal, onSwitch, show = true }) {
+  if (!show) return null;
   return (
     <div className="bg-slate-900 text-white text-sm py-2 px-4 flex flex-wrap justify-center items-center gap-4 z-50">
       <span className="font-bold flex items-center gap-1">

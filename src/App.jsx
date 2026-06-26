@@ -249,15 +249,6 @@ export default function App() {
       collection(db, 'artifacts', appId, 'users', user.uid, 'events'),
       newEvent,
     );
-    const sampleTasks = [
-      { eventId: docRef.id, title: '證婚場地', category: 'ceremony_venue', isCompleted: true, actualCost: 6800, venue: '伯大尼小教堂', dueDate: '2026-05-15', taskType: 'vendor' },
-      { eventId: docRef.id, title: '場地佈置', category: 'deco', isCompleted: false, venue: '伯大尼小教堂', estimatedCost: 8000, dueDate: '2026-10-01', taskType: 'vendor' },
-      { eventId: docRef.id, title: '出門及晚宴場地', category: 'banquet_venue', isCompleted: true, actualCost: 180000, venue: 'Ritz Carlton', dueDate: '2026-05-15', taskType: 'vendor' },
-      { eventId: docRef.id, title: '婚禮攝影及錄影', category: 'photography', isCompleted: false, estimatedCost: 18000, dueDate: '2026-07-30', taskType: 'vendor' },
-    ];
-    for (const task of sampleTasks) {
-      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), task);
-    }
     setNewEventName('');
     showToast('🎉 婚禮專案建立成功！');
     setCurrentEvent({ id: docRef.id, ...newEvent });
@@ -533,6 +524,14 @@ export default function App() {
       <RoleSimulator
         userRole={userRole}
         activeGuestPortal={activeGuestPortal}
+        // Simulator is a dev tool — only show to event owners (signed-in
+        // users who aren't helpers on someone else's wedding). Helpers
+        // have a single fixed role on the platform.
+        show={
+          Boolean(user) &&
+          !user.isAnonymous &&
+          !helperCtx.isHelper
+        }
         onSwitch={(role) => {
           if (role === 'owner') {
             setUserRole('owner');
