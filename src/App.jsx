@@ -5,9 +5,23 @@ import {
   collection,
   deleteDoc,
   doc,
+  onSnapshot,
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
+
+// Force Rollup to retain the `onSnapshot` import. Importing it as a named
+// symbol patches `CollectionReference.prototype.onSnapshot` (the prototype
+// method used by `useFirestoreCollection`). Without a reachable side-effect,
+// Rollup tree-shakes the import — breaking `collectionRef.onSnapshot(...)`
+// calls with `TypeError: t.onSnapshot is not a function` at runtime.
+//
+// We attach `onSnapshot` to `globalThis` so the import is referenced from
+// module-init code that Rollup cannot dead-code-eliminate. This survives
+// production minification.
+if (typeof globalThis !== 'undefined') {
+  globalThis.__firestore_onSnapshot = onSnapshot;
+}
 
 import { db, appId } from './lib/firebase';
 import {

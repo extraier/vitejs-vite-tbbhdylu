@@ -17,9 +17,13 @@
 //   );
 
 import { useEffect, useState } from 'react';
-import { onSnapshot as _ensureOnSnapshotPatched } from 'firebase/firestore';
-// Side-effect import: forces Rollup to keep the prototype-patch in the bundle.
-void _ensureOnSnapshotPatched;
+
+// Note: `CollectionReference.prototype.onSnapshot` is the prototype method
+// used inside this hook. The patch that installs that prototype method runs
+// as a side effect of importing `onSnapshot` from `firebase/firestore`.
+// That import happens in App.jsx (kept reachable via globalThis assignment).
+// Do NOT import `onSnapshot` here — Rollup will tree-shake any local-only
+// use (e.g. `void X`), and re-importing here would only fragment the bundle.
 
 export function useFirestoreCollection(collectionRef, deps = []) {
   const [data, setData] = useState([]);
