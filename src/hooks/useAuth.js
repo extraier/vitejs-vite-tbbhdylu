@@ -2,10 +2,9 @@
 // Does NOT auto-sign-in: callers (e.g. App.jsx) decide whether to show a
 // login screen, a "continue as guest" button, or sign in immediately.
 //
-// Props: none.
-//
 // Returns:
 //   user / authChecked            — current Firebase user, ready flag
+//   isAdmin                       — true if user has the `admin` custom claim
 //   loginWithGoogle               — popup-based Google sign-in
 //   loginWithEmail / registerWithEmail — email/password sign-in / sign-up
 //   continueAsGuest               — anonymous sign-in (used by the "Continue
@@ -26,6 +25,7 @@ import { auth } from '../lib/firebase';
 
 export function useAuth() {
   const [user, setUser] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   // Session-only flag: when true, anonymous Firebase users are accepted
   // as the active user. Defaults false so restored anonymous sessions
@@ -33,14 +33,28 @@ export function useAuth() {
   const [allowAnonymous, setAllowAnonymous] = useState(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (currentUser) => {
+    const unsub = onAuthStateChanged(auth, async (currentUser) => {
       // Anonymous users (guest mode) never auto-restore on next visit —
       // they must explicitly click "Continue as guest" again. This keeps
       // the login screen as the front page for every fresh visit.
       if (currentUser && currentUser.isAnonymous && !allowAnonymous) {
         setUser(null);
+        setIsAdmin(false);
       } else {
         setUser(currentUser);
+        // Refresh the ID token to read fresh custom claims. Custom claims
+        // are set server-side (Firebase Admin SDK) and only refresh on
+        // sign-in or explicit token refresh.
+        setIsAdmin(false);
+        if (currentUser && !currentUser.isAnonymous) {
+          try {
+            const tokenResult = await currentUser.getIdTokenResult(true);
+            setIsAdmin(Boolean(tokenResult.claims.admin));
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn('[useAuth] token refresh failed:', err?.message || err);
+          }
+        }
       }
       setAuthChecked(true);
     });
@@ -75,6 +89,7 @@ export function useAuth() {
   return {
     user,
     authChecked,
+    isAdmin,
     loginWithGoogle,
     loginWithEmail,
     registerWithEmail,

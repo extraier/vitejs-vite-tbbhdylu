@@ -1,8 +1,8 @@
 import { Camera, Crown } from 'lucide-react';
 import { tabsForRole } from '../lib/tabs';
 
-export function TabNav({ userRole, currentView, isPremium, helperPerms, onNavigate }) {
-  const tabs = tabsForRole(userRole, helperPerms);
+export function TabNav({ userRole, currentView, isPremium, helperPerms, isAdmin = false, onNavigate }) {
+  const tabs = tabsForRole(userRole, helperPerms, isAdmin);
   return (
     <div className="flex space-x-1 overflow-x-auto custom-scrollbar">
       {tabs.map(([view, label]) => {

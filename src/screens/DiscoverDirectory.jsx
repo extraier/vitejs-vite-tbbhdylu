@@ -1,11 +1,28 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { ArrowRight } from 'lucide-react';
+import { trackVendorView, trackVendorClick } from '../lib/vendorAnalytics';
 
-export function DiscoverDirectory({ vendors, filter, onFilterChange, onViewProfile }) {
+export function DiscoverDirectory({ vendors, filter, onFilterChange, onViewProfile, user }) {
   const filtered = useMemo(() => {
     if (filter === 'all') return vendors;
     return vendors.filter((v) => v.category === filter);
   }, [filter, vendors]);
+
+  // Track one view per (vendor, render). Dedupe by vendorId in a ref so
+  // re-renders within the same session don't fire repeatedly.
+  const viewedRef = useRef(new Set());
+  useEffect(() => {
+    const newlyViewed = filtered.filter((v) => !viewedRef.current.has(v.id));
+    newlyViewed.forEach((v) => {
+      viewedRef.current.add(v.id);
+      trackVendorView(v, user);
+    });
+  }, [filtered, user]);
+
+  const handleClick = (vendor) => {
+    trackVendorClick(vendor, user);
+    onViewProfile(vendor);
+  };
 
   return (
     <div className="max-w-7xl mx-auto mt-8 animate-in slide-in-from-bottom-4 duration-500">
@@ -28,7 +45,7 @@ export function DiscoverDirectory({ vendors, filter, onFilterChange, onViewProfi
           <div
             key={vendor.id}
             className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg cursor-pointer group"
-            onClick={() => onViewProfile(vendor)}
+            onClick={() => handleClick(vendor)}
           >
             <div className="h-48 w-full overflow-hidden bg-slate-100 relative">
               {vendor.portfolio?.[0] && (

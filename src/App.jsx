@@ -48,6 +48,7 @@ import { CoupleJobBoard } from './screens/CoupleJobBoard';
 import { GuestList } from './screens/GuestList';
 import { PhotoDrop } from './screens/PhotoDrop';
 import { DiscoverDirectory } from './screens/DiscoverDirectory';
+import { VendorAnalytics } from './screens/VendorAnalytics';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
 import { ReceptionScanner } from './screens/ReceptionScanner';
@@ -68,7 +69,7 @@ import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
 
 export default function App() {
   // Auth
-  const { user, authChecked, loginWithGoogle, loginWithEmail, registerWithEmail, continueAsGuest, logout } = useAuth();
+  const { user, authChecked, isAdmin, loginWithGoogle, loginWithEmail, registerWithEmail, continueAsGuest, logout } = useAuth();
 
   // Helper context (兄弟姊妹). Only meaningful when the user is signed in
   // (not anonymous) and NOT in guest-mode URL. The hook itself is safe to
@@ -599,6 +600,7 @@ export default function App() {
                   userRole={userRole}
                   currentView={currentView}
                   isPremium={isPremium}
+                  isAdmin={isAdmin}
                   onNavigate={setCurrentView}
                 />
               </div>
@@ -649,7 +651,13 @@ export default function App() {
                 filter={discoverFilter}
                 onFilterChange={setDiscoverFilter}
                 onViewProfile={setViewingVendorProfile}
+                user={user}
               />
+            )}
+
+            {/* Admin-only: vendor analytics for monthly membership sales */}
+            {isAdmin && currentView === 'vendor-analytics' && (
+              <VendorAnalytics user={user} isAdmin={isAdmin} />
             )}
 
             {(userRole === 'owner' || userRole === 'reception') &&

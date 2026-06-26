@@ -221,6 +221,26 @@ service cloud.firestore {
         allow write: if isSignedIn() && request.auth.uid == vendorUid;
       }
 
+      // ---- Vendor analytics events --------------------------------------
+      // Anyone signed in (including guest-anonymous is excluded — they
+      // can't read; they can write via client but trackVendorEvent writes
+      // require auth, so anonymous sessions will silently no-op in the
+      // client before reaching here).
+      // Admin reads require the `admin` custom claim.
+      function isAdmin() {
+        return isSignedIn() && request.auth.token.admin == true;
+      }
+
+      match /vendor_events/{eventId} {
+        allow create: if isSignedIn()
+          && request.resource.data.type in ['view', 'click']
+          && request.resource.data.vendorId is string
+          && request.resource.data.vendorId.size() > 0
+          && request.resource.data.timestamp == request.time;
+        allow read: if isAdmin();
+        allow update, delete: if false;
+      }
+
       // ---- Default deny everything else --------------------------------
       match /{document=**} {
         allow read, write: if false;
