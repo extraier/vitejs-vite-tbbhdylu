@@ -430,3 +430,67 @@ export const updateHelperPerms = onCall(async (req) => {
 
   return { ok: true };
 });
+// ─── Admin Bootstrap ─────────────────────────────────────────────────────
+//
+// First-call: NO admin exists yet. Anyone signed in can call this once
+// to grant themselves admin (bootstrap pattern — there's no way out of
+// the chicken-and-egg problem otherwise).
+//
+// Subsequent calls: require the caller to already be admin. Admin can
+// promote/demote any other user.
+//
+// Usage from the browser console while signed in:
+//   const { getFunctions, httpsCallable } = await import('firebase/functions');
+//   const fn = httpsCallable(getFunctions(), 'grantAdmin');
+//   const r = await fn({ uid: 'TARGET_UID', admin: true });
+//   console.log(r.data);
+//
+// To find a UID: Firebase Console → Authentication → Users → copy
+// the "User UID" column for the row matching the email.
+
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+
+export const grantAdmin = onCall(async (req) => {
+  if (!req.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const { uid, admin } = req.data as { uid?: string; admin?: boolean };
+  if (!uid || typeof admin !== 'boolean') {
+    throw new HttpsError('invalid-argument', 'uid (string) and admin (bool) required.');
+  }
+  if (uid === req.auth.uid) {
+    throw new HttpsError('invalid-argument', 'Use setMyAdminSelf to self-promote.');
+  }
+
+  // Authorization: caller must already be admin.
+  const callerClaims = (req.auth.token as { admin?: boolean }) || {};
+  if (!callerClaims.admin) {
+    throw new HttpsError('permission-denied', 'Only existing admins can grant admin.');
+  }
+
+  const auth = getAdminAuth();
+  await auth.setCustomUserClaims(uid, { admin });
+  await auth.revokeRefreshTokens(uid);
+  return { ok: true, uid, admin };
+});
+
+// selfPromoteAdmin — bootstrap call when NO admin exists yet.
+// Hard-gated: only works if there are currently zero admins in the
+// project. Once any admin exists, this function refuses (use grantAdmin).
+export const selfPromoteAdmin = onCall(async (req) => {
+  if (!req.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in first.');
+  }
+
+  const auth = getAdminAuth();
+  // Check if any admin already exists.
+  const list = await auth.listUsers(1000);
+  const anyAdmin = list.users.some((u) => u.customClaims && (u.customClaims as { admin?: boolean }).admin === true);
+  if (anyAdmin) {
+    throw new HttpsError('already-exists', 'An admin already exists. Ask them to grant you admin via grantAdmin.');
+  }
+
+  await auth.setCustomUserClaims(req.auth.uid, { admin: true });
+  await auth.revokeRefreshTokens(req.auth.uid);
+  return { ok: true, uid: req.auth.uid, bootstrapped: true };
+});
