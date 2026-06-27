@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "vendor_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "monthBucket", "order": "ASCENDING" },
+        { "fieldPath": "vendorId", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
