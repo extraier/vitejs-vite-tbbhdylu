@@ -614,6 +614,17 @@ export default function App() {
                 newEventName={newEventName}
                 onNewEventNameChange={setNewEventName}
                 onCreate={handleCreateEvent}
+                onSelectEvent={(ev) => {
+                  setCurrentEvent(ev);
+                  // Route to the role-appropriate landing view for this event.
+                  if (userRole === 'vendor') {
+                    setCurrentView('vendor-dashboard');
+                  } else if (userRole === 'reception') {
+                    setCurrentView('reception-scanner');
+                  } else {
+                    setCurrentView('couple-checklist');
+                  }
+                }}
               />
             )}
 

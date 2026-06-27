@@ -1,6 +1,6 @@
 import { Heart, Calendar, ArrowRight, Plus, Crown } from 'lucide-react';
 
-export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate }) {
+export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate, onSelectEvent }) {
   return (
     <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
       <div className="text-center mb-12">
@@ -11,7 +11,7 @@ export function EventsDashboard({ events, newEventName, onNewEventNameChange, on
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {events.map((ev) => (
-          <EventCard key={ev.id} event={ev} />
+          <EventCard key={ev.id} event={ev} onSelect={onSelectEvent} />
         ))}
 
         <div className="bg-rose-50 p-6 rounded-2xl border-2 border-dashed border-rose-200 hover:border-rose-400 transition-all flex flex-col items-center justify-center text-center min-h-[200px]">
@@ -41,9 +41,20 @@ export function EventsDashboard({ events, newEventName, onNewEventNameChange, on
   );
 }
 
-function EventCard({ event }) {
+function EventCard({ event, onSelect }) {
   return (
-    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-lg hover:border-rose-300 transition-all cursor-pointer group relative overflow-hidden">
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect?.(event)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect?.(event);
+        }
+      }}
+      className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-lg hover:border-rose-300 transition-all cursor-pointer group relative overflow-hidden"
+    >
       {event.tier === 'premium' && (
         <div className="absolute top-0 right-0 bg-amber-400 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl flex items-center gap-1">
           <Crown className="w-3 h-3" /> PREMIUM
