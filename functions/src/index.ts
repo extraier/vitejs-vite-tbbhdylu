@@ -494,3 +494,64 @@ export const selfPromoteAdmin = onCall(async (req) => {
   await auth.revokeRefreshTokens(req.auth.uid);
   return { ok: true, uid: req.auth.uid, bootstrapped: true };
 });
+
+// admin_listUsers — admin-only list of all Firebase Auth users with their
+// custom claims. Used by the Admin Users panel to show a master list and
+// toggle admin/disabled state. Paginated via `pageToken` (Firestore
+// listUsers returns up to 1000 per page; default 50 for snappy UI).
+export const admin_listUsers = onCall(async (req) => {
+  if (!req.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const callerClaims = (req.auth.token as { admin?: boolean }) || {};
+  if (!callerClaims.admin) {
+    throw new HttpsError('permission-denied', 'Admin only.');
+  }
+  const { pageToken, pageSize = 50 } = req.data as { pageToken?: string; pageSize?: number };
+  const auth = getAdminAuth();
+  const result = await auth.listUsers(Math.min(Math.max(pageSize, 1), 1000), pageToken);
+
+  const users = result.users.map((u) => ({
+    uid: u.uid,
+    email: u.email || null,
+    emailVerified: u.emailVerified || false,
+    disabled: u.disabled || false,
+    displayName: u.displayName || null,
+    photoURL: u.photoURL || null,
+    providerData: (u.providerData || []).map((p) => ({
+      providerId: p.providerId,
+      email: p.email || null,
+      displayName: p.displayName || null,
+    })),
+    customClaims: u.customClaims || null,
+    creationTime: u.metadata.creationTime,
+    lastSignInTime: u.metadata.lastSignInTime,
+  }));
+
+  return {
+    users,
+    nextPageToken: result.pageToken || null,
+  };
+});
+
+// admin_setDisabled — admin-only enable/disable toggle for a user account.
+// Mirrors `auth.updateUser(uid, { disabled })`. Does not delete the account.
+export const admin_setDisabled = onCall(async (req) => {
+  if (!req.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const callerClaims = (req.auth.token as { admin?: boolean }) || {};
+  if (!callerClaims.admin) {
+    throw new HttpsError('permission-denied', 'Admin only.');
+  }
+  const { uid, disabled } = req.data as { uid?: string; disabled?: boolean };
+  if (!uid || typeof disabled !== 'boolean') {
+    throw new HttpsError('invalid-argument', 'uid (string) and disabled (bool) required.');
+  }
+  if (uid === req.auth.uid) {
+    throw new HttpsError('failed-precondition', 'Cannot disable your own admin account here.');
+  }
+  const auth = getAdminAuth();
+  await auth.updateUser(uid, { disabled });
+  return { ok: true, uid, disabled };
+});

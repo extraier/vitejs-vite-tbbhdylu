@@ -18,6 +18,7 @@ export function tabsForRole(userRole, helperPerms, isAdmin = false) {
       ['photo-drop', '📸 互動相片牆'],
     ];
     if (isAdmin) tabs.push(['vendor-analytics', '📊 商戶數據']);
+    if (isAdmin) tabs.push(['admin-users', '🛡️ 管理員控制台']);
     return tabs;
   }
 

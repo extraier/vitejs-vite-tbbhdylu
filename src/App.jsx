@@ -49,6 +49,7 @@ import { GuestList } from './screens/GuestList';
 import { PhotoDrop } from './screens/PhotoDrop';
 import { DiscoverDirectory } from './screens/DiscoverDirectory';
 import { VendorAnalytics } from './screens/VendorAnalytics';
+import { AdminUsers } from './screens/AdminUsers';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
 import { ReceptionScanner } from './screens/ReceptionScanner';
@@ -669,6 +670,11 @@ export default function App() {
             {/* Admin-only: vendor analytics for monthly membership sales */}
             {isAdmin && currentView === 'vendor-analytics' && (
               <VendorAnalytics user={user} isAdmin={isAdmin} />
+            )}
+
+            {/* Admin-only: master user list with admin/disable toggles */}
+            {isAdmin && currentView === 'admin-users' && (
+              <AdminUsers user={user} isAdmin={isAdmin} />
             )}
 
             {(userRole === 'owner' || userRole === 'reception') &&

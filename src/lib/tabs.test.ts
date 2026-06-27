@@ -10,9 +10,9 @@ import { defaultHelperPerms } from './helpers';
 
 // Mirror of the JSX filter from components/TabNav.jsx.
 // Returns the list of (viewKey, label) tuples the TabNav would render.
-export function tabsForRole(userRole, helperPerms) {
+export function tabsForRole(userRole, helperPerms, isAdmin = false) {
   if (userRole === 'owner') {
-    return [
+    const tabs = [
       ['couple-checklist', '📋 籌備清單'],
       ['couple-budget', '💰 預算管理'],
       ['discover-vendors', '🔍 商戶指南'],
@@ -20,6 +20,9 @@ export function tabsForRole(userRole, helperPerms) {
       ['couple-guests', '🎟️ 嘉賓與座位'],
       ['photo-drop', '📸 互動相片牆'],
     ];
+    if (isAdmin) tabs.push(['vendor-analytics', '📊 商戶數據']);
+    if (isAdmin) tabs.push(['admin-users', '🛡️ 管理員控制台']);
+    return tabs;
   }
 
   if (userRole === 'reception' || userRole === 'helper') {
