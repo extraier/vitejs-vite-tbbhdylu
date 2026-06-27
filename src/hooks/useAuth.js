@@ -5,7 +5,13 @@
 // Returns:
 //   user / authChecked            — current Firebase user, ready flag
 //   isAdmin                       — true if user has the `admin` custom claim
-//   loginWithGoogle               — popup-based Google sign-in
+//   loginWithGoogle               — redirect-based Google sign-in
+//                                   (uses signInWithRedirect, not signInWithPopup,
+//                                   to avoid COOP `window.closed` violations
+//                                   on deployments with Cross-Origin-Opener-Policy
+//                                   set, which crash the popup-monitoring code
+//                                   in firebase-auth SDK before the auth flow
+//                                   completes — see vitejs-vite-tbbhdylu@index-B8dxT2ln.js:3175 / :3280)
 //   loginWithEmail / registerWithEmail — email/password sign-in / sign-up
 //   continueAsGuest               — anonymous sign-in (used by the "Continue
 //                                   as guest" button on LoginScreen)
@@ -18,7 +24,7 @@ import {
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
-  signInWithPopup,
+  signInWithRedirect,
   signOut,
 } from 'firebase/auth';
 import { auth } from '../lib/firebase';
@@ -63,7 +69,11 @@ export function useAuth() {
 
   const loginWithGoogle = async () => {
     const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    // Use redirect instead of popup to avoid COOP `window.closed` errors
+    // (Vercel preview deployments and some browsers set COOP same-origin by
+    // default, which crashes the popup-monitoring code in firebase-auth SDK
+    // before the OAuth flow can complete).
+    await signInWithRedirect(auth, provider);
   };
 
   const registerWithEmail = async (email, password) => {
