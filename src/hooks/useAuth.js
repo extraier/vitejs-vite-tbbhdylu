@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react';
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
+  getRedirectResult,
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
@@ -39,6 +40,29 @@ export function useAuth() {
   const [allowAnonymous, setAllowAnonymous] = useState(false);
 
   useEffect(() => {
+    // With signInWithRedirect, the auth response comes back on the page
+    // that the browser is redirected to. Firebase Hosting's /__/auth/handler
+    // bounces the user to window.location.origin — but the redirect-result
+    // must be picked up explicitly via getRedirectResult() (or onAuthStateChanged
+    // will fire with the right user, but only AFTER we call it).
+    // Calling getRedirectResult() on mount is the canonical pattern.
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await getRedirectResult(auth);
+        if (!cancelled && result?.user) {
+          // Force a token refresh so the fresh {admin:true} claim is read.
+          await result.user.getIdToken(true);
+        }
+      } catch (err) {
+        // No pending redirect result — this is normal on first visit / sign-out.
+        if (err?.code && err.code !== 'auth/no-redirect-result' && err.code !== 'auth/redirect-cancelled-by-user') {
+          // eslint-disable-next-line no-console
+          console.warn('[useAuth] getRedirectResult failed:', err?.message || err);
+        }
+      }
+    })();
+
     const unsub = onAuthStateChanged(auth, async (currentUser) => {
       // Anonymous users (guest mode) never auto-restore on next visit —
       // they must explicitly click "Continue as guest" again. This keeps
