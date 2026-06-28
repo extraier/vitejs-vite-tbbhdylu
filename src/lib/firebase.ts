@@ -48,3 +48,36 @@ export const auth: Auth = getAuth(app);
 export const db: Firestore = getFirestore(app);
 export const storage: FirebaseStorage = getStorage(app);
 export const appId: string = resolveAppId();
+
+// DevTools convenience: expose the Firebase SDKs on `window.__fb` in dev
+// builds so you can run callables from the console without dynamic-import
+// gymnastics (Vite-bundled bare specifiers like `firebase/functions` don't
+// resolve from DevTools — it can't see Vite's module graph).
+//
+// Example from DevTools after signing in:
+//   const fn = window.__fb.httpsCallable(window.__fb.functions, 'selfPromoteAdmin');
+//   const r = await fn();
+//   console.log(r.data);
+//
+// Stripped from production builds by Vite's dead-code elimination since
+// `import.meta.env.DEV` is statically `false` in production.
+if (import.meta.env.DEV) {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  void Promise.all([
+    import('firebase/functions'),
+    import('firebase/app'),
+  ]).then(([{ httpsCallable, getFunctions }, { getApp }]) => {
+    (globalThis as unknown as { __fb: unknown }).__fb = {
+      app,
+      getApp,
+      auth,
+      db,
+      storage,
+      appId,
+      functions: getFunctions(app),
+      httpsCallable,
+    };
+    // eslint-disable-next-line no-console
+    console.info('[firebase] DevTools helpers attached: window.__fb');
+  });
+}
