@@ -49,35 +49,40 @@ export const db: Firestore = getFirestore(app);
 export const storage: FirebaseStorage = getStorage(app);
 export const appId: string = resolveAppId();
 
-// DevTools convenience: expose the Firebase SDKs on `window.__fb` in dev
-// builds so you can run callables from the console without dynamic-import
-// gymnastics (Vite-bundled bare specifiers like `firebase/functions` don't
-// resolve from DevTools — it can't see Vite's module graph).
+// DevTools convenience: expose the Firebase SDKs on `window.__fb` so callables
+// (admin SDK operations, etc.) can be invoked from the browser console. This is
+// needed because Vite-bundled bare specifiers like `firebase/functions` don't
+// resolve from DevTools dynamic imports — Vite's module graph is invisible to
+// the console, so the user gets:
+//   "Failed to resolve module specifier 'firebase/functions'"
+// when they try the obvious `await import('firebase/functions')` pattern.
 //
 // Example from DevTools after signing in:
 //   const fn = window.__fb.httpsCallable(window.__fb.functions, 'selfPromoteAdmin');
 //   const r = await fn();
 //   console.log(r.data);
 //
-// Stripped from production builds by Vite's dead-code elimination since
-// `import.meta.env.DEV` is statically `false` in production.
-if (import.meta.env.DEV) {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  void Promise.all([
-    import('firebase/functions'),
-    import('firebase/app'),
-  ]).then(([{ httpsCallable, getFunctions }, { getApp }]) => {
-    (globalThis as unknown as { __fb: unknown }).__fb = {
-      app,
-      getApp,
-      auth,
-      db,
-      storage,
-      appId,
-      functions: getFunctions(app),
-      httpsCallable,
-    };
-    // eslint-disable-next-line no-console
-    console.info('[firebase] DevTools helpers attached: window.__fb');
-  });
-}
+// SECURITY: This exposes no secrets — only public Firebase client SDK handles
+// + the user's own auth state. The Admin SDK / service account keys are not
+// bundled into the client, so this is the same surface area as the rest of
+// the app. The auth/claims layer still gates what the user can DO.
+//
+// Kept in production builds (not DEV-gated) so admins can run bootstrap
+// callables from DevTools on the live site. The bundle cost is ~50 bytes.
+void Promise.all([
+  import('firebase/functions'),
+  import('firebase/app'),
+]).then(([{ httpsCallable, getFunctions }, { getApp }]) => {
+  (globalThis as unknown as { __fb: unknown }).__fb = {
+    app,
+    getApp,
+    auth,
+    db,
+    storage,
+    appId,
+    functions: getFunctions(app),
+    httpsCallable,
+  };
+  // eslint-disable-next-line no-console
+  console.info('[firebase] DevTools helpers attached: window.__fb');
+});
