@@ -644,42 +644,45 @@ export const admin_listVendors = onCall(async (req) => {
   };
 
   // Vendors are not under artifacts/{appId} — they're flat at /vendors/{uid}
-  // per firestore.rules. collectionGroup gives us a defensive query path
-  // in case the schema gets nested later.
-  let snap;
+  // per firestore.rules. listDocuments() enumerates WITHOUT reading, so it
+  // succeeds on missing collections (unlike .get() which throws).
+  let docRefs: FirebaseFirestore.DocumentReference[];
   try {
-    snap = await db.collection('vendors').get();
+    docRefs = await db.collection('vendors').listDocuments();
   } catch (err: unknown) {
-    throw new HttpsError('internal', `Vendor query failed: ${(err as Error).message}`);
+    // Even listDocuments can theoretically fail (e.g. IAM); surface cleanly.
+    throw new HttpsError('internal', `Vendor enumerate failed: ${(err as Error).message}`);
   }
 
-  const docs = snap.docs;
-  const start = pageToken ? Math.max(0, docs.findIndex((d) => d.id === pageToken) + 1) : 0;
-  const end = Math.min(docs.length, start + Math.min(Math.max(pageSize, 1), 200));
-  const slice = docs.slice(start, end);
-  const nextPageToken = end < docs.length ? docs[end - 1].id : null;
+  // Sort for deterministic pagination, then fetch snapshots in parallel.
+  docRefs.sort((a, b) => a.id.localeCompare(b.id));
+  const start = pageToken ? Math.max(0, docRefs.findIndex((d) => d.id === pageToken) + 1) : 0;
+  const end = Math.min(docRefs.length, start + Math.min(Math.max(pageSize, 1), 200));
+  const slice = docRefs.slice(start, end);
+  const nextPageToken = end < docRefs.length ? docRefs[end - 1].id : null;
 
+  const snaps = await Promise.all(slice.map((d) => d.get()));
   const auth = getAdminAuth();
   const vendors = await Promise.all(
-    slice.map(async (d) => {
-      const data = d.data();
+    snaps.map(async (snap) => {
+      const data = snap.data() || {};
       let email: string | null = null;
       let disabled = false;
       try {
-        const u = await auth.getUser(d.id);
+        const u = await auth.getUser(snap.id);
         email = u.email || null;
         disabled = !!u.disabled;
       } catch {
         // Auth user gone — leave email null, disabled unknown.
       }
       return {
-        vendorUid: d.id,
-        name: data.name || null,
-        category: data.category || null,
+        vendorUid: snap.id,
+        name: typeof data.name === 'string' ? data.name : null,
+        category: typeof data.category === 'string' ? data.category : null,
         rating: typeof data.rating === 'number' ? data.rating : null,
-        price: data.price || null,
+        price: typeof data.price === 'string' ? data.price : null,
         tags: Array.isArray(data.tags) ? data.tags : [],
-        description: data.description || null,
+        description: typeof data.description === 'string' ? data.description : null,
         portfolio: Array.isArray(data.portfolio) ? data.portfolio : [],
         email,
         authDisabled: disabled,
@@ -688,7 +691,7 @@ export const admin_listVendors = onCall(async (req) => {
     }),
   );
 
-  return { vendors, nextPageToken, total: docs.length };
+  return { vendors, nextPageToken, total: docRefs.length };
 });
 
 /**
