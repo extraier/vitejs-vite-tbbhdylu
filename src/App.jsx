@@ -50,6 +50,7 @@ import { PhotoDrop } from './screens/PhotoDrop';
 import { DiscoverDirectory } from './screens/DiscoverDirectory';
 import { VendorAnalytics } from './screens/VendorAnalytics';
 import { AdminUsers } from './screens/AdminUsers';
+import { AdminVendors } from './screens/AdminVendors';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
 import { ReceptionScanner } from './screens/ReceptionScanner';
@@ -538,7 +539,11 @@ export default function App() {
         }
         onSwitch={(target) => {
           // Admin pills pass a view key directly instead of a role.
-          if (target === 'vendor-analytics' || target === 'admin-users') {
+          if (
+            target === 'vendor-analytics' ||
+            target === 'admin-users' ||
+            target === 'admin-vendors'
+          ) {
             // Stay in owner role; just swap the view. Clear any guest-portal
             // overlay so the admin screen has the full header / tab area.
             setUserRole('owner');
@@ -700,6 +705,11 @@ export default function App() {
             {/* Admin-only: master user list with admin/disable toggles */}
             {isAdmin && currentView === 'admin-users' && (
               <AdminUsers user={user} isAdmin={isAdmin} />
+            )}
+
+            {/* Admin-only: vendor CRUD (list / edit / delete) */}
+            {isAdmin && currentView === 'admin-vendors' && (
+              <AdminVendors user={user} isAdmin={isAdmin} />
             )}
 
             {(userRole === 'owner' || userRole === 'reception') &&

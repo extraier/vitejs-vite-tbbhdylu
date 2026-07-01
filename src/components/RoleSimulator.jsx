@@ -1,4 +1,4 @@
-import { Users, Shield, BarChart3 } from 'lucide-react';
+import { Users, Shield, BarChart3, Store } from 'lucide-react';
 
 /**
  * RoleSimulator — dark "developer-mode" pill bar at the top of the screen.
@@ -10,6 +10,10 @@ import { Users, Shield, BarChart3 } from 'lucide-react';
  *
  *   - 📊 商戶數據   → currentView = 'vendor-analytics'
  *   - 🛡️ 管理員控制台 → currentView = 'admin-users'
+ *
+ * As of 2026-07-02 a third admin pill was added:
+ *
+ *   - 🛍️ 商戶控制台 → currentView = 'admin-vendors'
  *
  * Active state mirrors the corresponding role chip pattern (color-coded).
  * Admin pills are considered active when currentView matches one of those two.
@@ -99,6 +103,18 @@ export function RoleSimulator({
           >
             <Shield className="w-3.5 h-3.5" />
             🛡️ 管理員控制台
+          </button>
+          <button
+            onClick={() => onSwitch('admin-vendors')}
+            title="商戶檔案管理 (平台管理員)"
+            className={`px-3 py-1 rounded-full flex items-center gap-1 ${
+              currentView === 'admin-vendors'
+                ? 'bg-emerald-500 font-bold'
+                : 'bg-slate-800 hover:bg-slate-700'
+            }`}
+          >
+            <Store className="w-3.5 h-3.5" />
+            🛍️ 商戶控制台
           </button>
         </>
       )}

@@ -1,9 +1,11 @@
 import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
 
 // Hermes 2026-06-25: use `define:` (not vi.stubEnv) so the env vars are baked
 // in at transform time. The module reads import.meta.env at import — which
 // happens before beforeEach — so stubbing at runtime is too late.
 export default defineConfig({
+  plugins: [react()],
   test: {
     environment: 'jsdom',
     globals: true,

@@ -555,3 +555,204 @@ export const admin_setDisabled = onCall(async (req) => {
   await auth.updateUser(uid, { disabled });
   return { ok: true, uid, disabled };
 });
+
+// =============================================================================
+// Admin Vendor Console — read / update / delete vendor docs in /vendors/{uid}.
+// =============================================================================
+//
+// Vendor profiles live at /artifacts/{appId}/public/data/vendors/{vendorUid}
+// (per the existing firestore.rules match). Each vendor doc is owned by the
+// user whose uid is the doc id. Admins get read + update + delete via these
+// three callables so the 🛍️ 商戶控制台 screen can manage the marketplace.
+//
+// IMPORTANT: the current vendor UI is fed from a hardcoded DEFAULT_VENDORS
+// array in src/lib/config.ts — vendors shown to couples are NOT yet wired to
+// Firestore. These functions still work against any vendor docs that exist
+// (e.g. ones vendors self-create once they sign up), and they're ready for
+// when the frontend gets migrated to read from Firestore.
+//
+// Auth model: all three endpoints require the caller to have the `admin`
+// custom claim. We do NOT soft-delete — admin_deleteVendor is hard delete
+// (the vendor's Firebase Auth account is left alone; use admin_setDisabled
+// for that).
+
+// Allowed edit keys on a vendor doc. Anything else is rejected so we don't
+// leak through arbitrary fields (e.g. internal flags added later).
+const VENDOR_EDITABLE_KEYS = [
+  'name',
+  'category',
+  'rating',
+  'price',
+  'tags',
+  'description',
+  'portfolio',
+] as const;
+
+function validateVendorEditable(payload: Record<string, unknown>): void {
+  for (const key of Object.keys(payload)) {
+    if (!(VENDOR_EDITABLE_KEYS as readonly string[]).includes(key)) {
+      throw new HttpsError('invalid-argument', `Unknown vendor field: ${key}`);
+    }
+  }
+  if ('rating' in payload) {
+    const r = payload.rating;
+    if (typeof r !== 'number' || r < 0 || r > 5) {
+      throw new HttpsError('invalid-argument', 'rating must be a number 0..5.');
+    }
+  }
+  if ('name' in payload && typeof payload.name !== 'string') {
+    throw new HttpsError('invalid-argument', 'name must be a string.');
+  }
+  if ('category' in payload && typeof payload.category !== 'string') {
+    throw new HttpsError('invalid-argument', 'category must be a string.');
+  }
+  if ('price' in payload && typeof payload.price !== 'string') {
+    throw new HttpsError('invalid-argument', 'price must be a string.');
+  }
+  if ('description' in payload && typeof payload.description !== 'string') {
+    throw new HttpsError('invalid-argument', 'description must be a string.');
+  }
+  for (const arrKey of ['tags', 'portfolio'] as const) {
+    if (arrKey in payload) {
+      const v = payload[arrKey];
+      if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) {
+        throw new HttpsError('invalid-argument', `${arrKey} must be string[].`);
+      }
+    }
+  }
+}
+
+/**
+ * admin_listVendors — paginated list of vendor profiles (admin only).
+ * Mirrors admin_listUsers' pagination shape (pageToken + pageSize).
+ * Joins each vendor's email via Firebase Auth when the vendorUid exists
+ * as an auth user; returns null otherwise (the vendor may have been
+ * deleted from auth while their vendor doc lingers).
+ */
+export const admin_listVendors = onCall(async (req) => {
+  if (!req.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const callerClaims = (req.auth.token as { admin?: boolean }) || {};
+  if (!callerClaims.admin) {
+    throw new HttpsError('permission-denied', 'Admin only.');
+  }
+
+  const { pageSize = 50, pageToken } = req.data as {
+    pageSize?: number;
+    pageToken?: string;
+  };
+
+  // Vendors are not under artifacts/{appId} — they're flat at /vendors/{uid}
+  // per firestore.rules. collectionGroup gives us a defensive query path
+  // in case the schema gets nested later.
+  let snap;
+  try {
+    snap = await db.collection('vendors').get();
+  } catch (err: unknown) {
+    throw new HttpsError('internal', `Vendor query failed: ${(err as Error).message}`);
+  }
+
+  const docs = snap.docs;
+  const start = pageToken ? Math.max(0, docs.findIndex((d) => d.id === pageToken) + 1) : 0;
+  const end = Math.min(docs.length, start + Math.min(Math.max(pageSize, 1), 200));
+  const slice = docs.slice(start, end);
+  const nextPageToken = end < docs.length ? docs[end - 1].id : null;
+
+  const auth = getAdminAuth();
+  const vendors = await Promise.all(
+    slice.map(async (d) => {
+      const data = d.data();
+      let email: string | null = null;
+      let disabled = false;
+      try {
+        const u = await auth.getUser(d.id);
+        email = u.email || null;
+        disabled = !!u.disabled;
+      } catch {
+        // Auth user gone — leave email null, disabled unknown.
+      }
+      return {
+        vendorUid: d.id,
+        name: data.name || null,
+        category: data.category || null,
+        rating: typeof data.rating === 'number' ? data.rating : null,
+        price: data.price || null,
+        tags: Array.isArray(data.tags) ? data.tags : [],
+        description: data.description || null,
+        portfolio: Array.isArray(data.portfolio) ? data.portfolio : [],
+        email,
+        authDisabled: disabled,
+        updatedAt: data.updatedAt || null,
+      };
+    }),
+  );
+
+  return { vendors, nextPageToken, total: docs.length };
+});
+
+/**
+ * admin_updateVendor — admin-only. Patches whitelisted fields on a vendor doc.
+ * Rejects unknown keys so the frontend can't widen the surface.
+ */
+export const admin_updateVendor = onCall(async (req) => {
+  if (!req.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const callerClaims = (req.auth.token as { admin?: boolean }) || {};
+  if (!callerClaims.admin) {
+    throw new HttpsError('permission-denied', 'Admin only.');
+  }
+
+  const { vendorUid, updates } = req.data as {
+    vendorUid?: string;
+    updates?: Record<string, unknown>;
+  };
+  if (!vendorUid || !updates) {
+    throw new HttpsError('invalid-argument', 'vendorUid and updates required.');
+  }
+  validateVendorEditable(updates);
+
+  const ref = db.collection('vendors').doc(vendorUid);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    throw new HttpsError('not-found', 'Vendor not found.');
+  }
+
+  await ref.update({
+    ...updates,
+    updatedAt: FieldValue.serverTimestamp(),
+    updatedBy: req.auth.uid,
+  });
+
+  return { ok: true, vendorUid };
+});
+
+/**
+ * admin_deleteVendor — admin-only. Hard-deletes a vendor doc.
+ * The vendor's Firebase Auth account is NOT touched (use admin_setDisabled
+ * to also kill their login ability — a separate action by design).
+ */
+export const admin_deleteVendor = onCall(async (req) => {
+  if (!req.auth) {
+    throw new HttpsError('unauthenticated', 'Sign in first.');
+  }
+  const callerClaims = (req.auth.token as { admin?: boolean }) || {};
+  if (!callerClaims.admin) {
+    throw new HttpsError('permission-denied', 'Admin only.');
+  }
+
+  const { vendorUid } = req.data as { vendorUid?: string };
+  if (!vendorUid) {
+    throw new HttpsError('invalid-argument', 'vendorUid required.');
+  }
+
+  const ref = db.collection('vendors').doc(vendorUid);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    throw new HttpsError('not-found', 'Vendor not found.');
+  }
+
+  await ref.delete();
+  return { ok: true, vendorUid };
+});
