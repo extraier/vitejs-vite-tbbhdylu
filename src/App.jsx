@@ -609,7 +609,12 @@ export default function App() {
           )}
 
           <main className="max-w-7xl mx-auto px-4">
-            {!currentEvent && currentView === 'events-dashboard' && (
+            {/* Events dashboard: shown when no event is picked, OR when an
+                admin/user explicitly navigates back to the "home" view via
+                the 囍程 header. In the latter case we still show the event
+                cards (so the user can re-select) PLUS, for admins, the
+                inline admin section appended below the cards. */}
+            {currentView === 'events-dashboard' && (
               <EventsDashboard
                 events={events}
                 newEventName={newEventName}
@@ -626,6 +631,8 @@ export default function App() {
                     setCurrentView('couple-checklist');
                   }
                 }}
+                isAdmin={isAdmin}
+                user={user}
               />
             )}
 

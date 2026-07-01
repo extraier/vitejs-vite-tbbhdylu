@@ -5,13 +5,20 @@
 //   - admin_setDisabled  : toggle auth.updateUser(uid, { disabled })
 // Admin role toggle uses the existing `grantAdmin` callable from helpers.ts.
 //
-// Gating: only renders if isAdmin === true. App.jsx already wraps this in
-// `isAdmin && currentView === 'admin-users'`, so this is a defence-in-depth
-// guard.
+// Component shape (post-extraction, 2026-07-01):
+//   <AdminUsersBar/>      – 4-KPI card strip (live rendering on EventsDashboard)
+//   <AdminUsersTable/>    – full users table with actions
+//   <AdminUsers/>         – renders both above, kept for the existing tab nav entry
+//   <AdminDashboardSection/> – the "Both" combo for EventsDashboard:
+//       KPIs inline at top + full table below event cards.
+//
+// Data hook is lifted into ./adminUsersHook.js so the EventsDashboard can
+// call it once and feed both subcomponents — avoids two Firebase round-trips.
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { Search, RefreshCw, ChevronLeft, ChevronRight, Shield, ShieldOff, Lock, Unlock, Mail, AlertCircle } from 'lucide-react';
+import { useAdminUsers, computeAdminStats } from './adminUsersHook';
 
 function fmtDate(iso) {
   if (!iso) return '—';
@@ -36,33 +43,56 @@ function providerLabel(p) {
   }
 }
 
-export function AdminUsers({ user, isAdmin }) {
-  const [users, setUsers] = useState([]);
-  const [nextPageToken, setNextPageToken] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+function StatCard({ label, value, icon }) {
+  return (
+    <div className="bg-white rounded-xl border border-slate-100 px-4 py-3 flex items-center gap-3">
+      <div className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center">{icon}</div>
+      <div>
+        <div className="text-xs text-slate-500">{label}</div>
+        <div className="text-2xl font-bold text-slate-900">{value}</div>
+      </div>
+    </div>
+  );
+}
+
+function AdminStatsCards({ stats, loading }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <StatCard label="總用戶" value={loading ? '—' : stats.total} icon={<Mail className="w-5 h-5" />} />
+      <StatCard label="已驗證電郵" value={loading ? '—' : stats.verified} icon={<Mail className="w-5 h-5 text-emerald-600" />} />
+      <StatCard label="管理員" value={loading ? '—' : stats.admins} icon={<Shield className="w-5 h-5 text-indigo-600" />} />
+      <StatCard label="已停用" value={loading ? '—' : stats.disabled} icon={<Lock className="w-5 h-5 text-red-600" />} />
+    </div>
+  );
+}
+
+/**
+ * AdminUsersBar — 4-KPI strip driven by parent-provided data.
+ * Callers should pass the same `users` / `loading` / `error` they use for
+ * <AdminUsersTable/> so the two subcomponents stay in lockstep.
+ */
+export function AdminUsersBar({ isAdmin, users, loading, error }) {
+  if (!isAdmin) return null;
+  const stats = useMemo(() => computeAdminStats(users), [users]);
+  if (error) {
+    return (
+      <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+        管理員數據載入失敗: {error}
+      </div>
+    );
+  }
+  return <AdminStatsCards stats={stats} loading={loading} />;
+}
+
+/**
+ * AdminUsersTable — full management table (search, toggle, paginate).
+ * `users` / `setUsers` / `loading` / `error` / `loadPage` come from the parent
+ * hook so mounting both Bar and Table together (on EventsDashboard) doesn't
+ * trigger two parallel Firebase calls.
+ */
+export function AdminUsersTable({ isAdmin, user, users, setUsers, loading, error, loadPage, nextPageToken }) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [pendingAction, setPendingAction] = useState(null); // `${uid}:admin|disabled`
-
-  const loadPage = useCallback(async (token) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const fn = httpsCallable(getFunctions(), 'admin_listUsers');
-      const res = await fn({ pageSize: 50, pageToken: token || undefined });
-      const data = res.data;
-      setUsers(data.users || []);
-      setNextPageToken(data.nextPageToken || null);
-    } catch (err) {
-      setError(err?.message || 'Failed to load users');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isAdmin) loadPage(null);
-  }, [isAdmin, loadPage]);
+  const [pendingAction, setPendingAction] = useState(null);
 
   async function toggleAdmin(u) {
     if (u.uid === user?.uid) {
@@ -75,7 +105,6 @@ export function AdminUsers({ user, isAdmin }) {
     try {
       const fn = httpsCallable(getFunctions(), 'grantAdmin');
       await fn({ uid: u.uid, admin: newVal });
-      // Optimistic update — re-fetch only this row's claim
       setUsers((prev) =>
         prev.map((row) =>
           row.uid === u.uid
@@ -129,43 +158,10 @@ export function AdminUsers({ user, isAdmin }) {
     });
   }, [users, searchQuery]);
 
-  const stats = useMemo(() => {
-    const total = users.length;
-    const admins = users.filter((u) => u.customClaims?.admin).length;
-    const disabled = users.filter((u) => u.disabled).length;
-    const verified = users.filter((u) => u.emailVerified).length;
-    return { total, admins, disabled, verified };
-  }, [users]);
-
-  if (!isAdmin) {
-    return (
-      <div className="max-w-2xl mx-auto mt-16 text-center">
-        <div className="bg-white p-12 rounded-2xl shadow-lg border border-slate-100">
-          <Lock className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-slate-900 mb-2">管理員專用</h2>
-          <p className="text-slate-500">此頁面僅供管理員使用。</p>
-        </div>
-      </div>
-    );
-  }
+  if (!isAdmin) return null;
 
   return (
-    <div className="max-w-7xl mx-auto mt-8 px-4 pb-16">
-      <div className="mb-8">
-        <div className="flex items-center gap-3 mb-2">
-          <Shield className="w-8 h-8 text-indigo-600" />
-          <h1 className="text-3xl font-black text-slate-900">管理員控制台</h1>
-        </div>
-        <p className="text-slate-500">查看所有用戶帳號，調整管理員權限或停用帳戶。</p>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="總用戶" value={stats.total} icon={<Mail className="w-5 h-5" />} />
-        <StatCard label="已驗證電郵" value={stats.verified} icon={<Mail className="w-5 h-5 text-emerald-600" />} />
-        <StatCard label="管理員" value={stats.admins} icon={<Shield className="w-5 h-5 text-indigo-600" />} />
-        <StatCard label="已停用" value={stats.disabled} icon={<Lock className="w-5 h-5 text-red-600" />} />
-      </div>
-
+    <>
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -340,18 +336,60 @@ export function AdminUsers({ user, isAdmin }) {
         <summary className="cursor-pointer hover:text-slate-600">查看當前管理員 UID（除錯用）</summary>
         <div className="mt-2 font-mono">{user?.uid}</div>
       </details>
+    </>
+  );
+}
+
+/**
+ * AdminDashboardSection — the "embed on home" combo:
+ *   - 4 KPI cards inline at the top of the section
+ *   - full table below them
+ * Owns the data hook so callers don't need to wire `useAdminUsers` themselves.
+ */
+export function AdminDashboardSection({ isAdmin, user }) {
+  const data = useAdminUsers(isAdmin);
+  if (!isAdmin) return null;
+  return (
+    <div className="mt-10 pt-10 border-t border-slate-200">
+      <div className="flex items-center gap-3 mb-2">
+        <Shield className="w-7 h-7 text-indigo-600" />
+        <h2 className="text-2xl font-black text-slate-900">管理員控制台</h2>
+      </div>
+      <p className="text-slate-500 mb-6">查看所有用戶帳號，調整管理員權限或停用帳戶。</p>
+      <AdminUsersBar isAdmin={isAdmin} users={data.users} loading={data.loading} error={data.error} />
+      <AdminUsersTable
+        isAdmin={isAdmin}
+        user={user}
+        users={data.users}
+        setUsers={data.setUsers}
+        loading={data.loading}
+        error={data.error}
+        loadPage={data.loadPage}
+        nextPageToken={data.nextPageToken}
+      />
     </div>
   );
 }
 
-function StatCard({ label, value, icon }) {
-  return (
-    <div className="bg-white rounded-xl border border-slate-100 px-4 py-3 flex items-center gap-3">
-      <div className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center">{icon}</div>
-      <div>
-        <div className="text-xs text-slate-500">{label}</div>
-        <div className="text-2xl font-bold text-slate-900">{value}</div>
+/**
+ * AdminUsers — full screen (KPI cards + table) for the existing `/admin-users` tab.
+ * Kept as a union so the TabNav entry still works.
+ */
+export function AdminUsers({ user, isAdmin }) {
+  if (!isAdmin) {
+    return (
+      <div className="max-w-2xl mx-auto mt-16 text-center">
+        <div className="bg-white p-12 rounded-2xl shadow-lg border border-slate-100">
+          <Lock className="w-16 h-16 text-slate-300 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">管理員專用</h2>
+          <p className="text-slate-500">此頁面僅供管理員使用。</p>
+        </div>
       </div>
+    );
+  }
+  return (
+    <div className="max-w-7xl mx-auto mt-8 px-4 pb-16">
+      <AdminDashboardSection isAdmin={isAdmin} user={user} />
     </div>
   );
 }

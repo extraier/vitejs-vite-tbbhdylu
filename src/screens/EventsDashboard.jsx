@@ -1,6 +1,7 @@
 import { Heart, Calendar, ArrowRight, Plus, Crown } from 'lucide-react';
+import { AdminDashboardSection } from './AdminUsers';
 
-export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate, onSelectEvent }) {
+export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate, onSelectEvent, isAdmin = false, user = null }) {
   return (
     <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
       <div className="text-center mb-12">
@@ -36,6 +37,11 @@ export function EventsDashboard({ events, newEventName, onNewEventNameChange, on
             </button>
           </form>
         </div>
+      </div>
+
+      {/* Admin embed: KPIs + full management table, below the event cards */}
+      <div className="max-w-7xl mx-auto px-4">
+        <AdminDashboardSection isAdmin={isAdmin} user={user} />
       </div>
     </div>
   );
