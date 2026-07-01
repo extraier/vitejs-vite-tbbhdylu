@@ -526,6 +526,8 @@ export default function App() {
       <RoleSimulator
         userRole={userRole}
         activeGuestPortal={activeGuestPortal}
+        isAdmin={isAdmin}
+        currentView={currentView}
         // Simulator is a dev tool — only show to event owners (signed-in
         // users who aren't helpers on someone else's wedding). Helpers
         // have a single fixed role on the platform.
@@ -534,7 +536,17 @@ export default function App() {
           !user.isAnonymous &&
           !helperCtx.isHelper
         }
-        onSwitch={(role) => {
+        onSwitch={(target) => {
+          // Admin pills pass a view key directly instead of a role.
+          if (target === 'vendor-analytics' || target === 'admin-users') {
+            // Stay in owner role; just swap the view. Clear any guest-portal
+            // overlay so the admin screen has the full header / tab area.
+            setUserRole('owner');
+            setActiveGuestPortal(null);
+            setCurrentView(target);
+            return;
+          }
+          const role = target;
           if (role === 'owner') {
             setUserRole('owner');
             if (activeGuestPortal) setCurrentView('couple-guests');
@@ -601,7 +613,6 @@ export default function App() {
                   userRole={userRole}
                   currentView={currentView}
                   isPremium={isPremium}
-                  isAdmin={isAdmin}
                   onNavigate={setCurrentView}
                 />
               </div>

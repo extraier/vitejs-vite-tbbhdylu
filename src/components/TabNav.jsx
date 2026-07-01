@@ -1,24 +1,13 @@
 import { Camera, Crown } from 'lucide-react';
-import { tabsForRole, ADMIN_DIVIDER } from '../lib/tabs';
+import { tabsForRole } from '../lib/tabs';
 
-export function TabNav({ userRole, currentView, isPremium, helperPerms, isAdmin = false, onNavigate }) {
-  const tabs = tabsForRole(userRole, helperPerms, isAdmin);
+export function TabNav({ userRole, currentView, isPremium, helperPerms, onNavigate }) {
+  // Note: isAdmin is intentionally NOT a TabNav input. Admin tabs are
+  // surfaced in the role-switcher pill row (RoleSimulator.jsx), not here.
+  const tabs = tabsForRole(userRole, helperPerms, false);
   return (
-    <div className="flex items-center space-x-1 overflow-x-auto custom-scrollbar">
-      {tabs.map((entry, idx) => {
-        // The divider sentinel separates the admin prefix from the owner
-        // suffix when an admin is logged in. It renders as a thin vertical
-        // bar but is not clickable.
-        if (entry === ADMIN_DIVIDER) {
-          return (
-            <span
-              key={`__divider-${idx}`}
-              aria-hidden="true"
-              className="mx-2 h-6 w-px bg-slate-200 self-stretch"
-            />
-          );
-        }
-        const [view, label] = entry;
+    <div className="flex space-x-1 overflow-x-auto custom-scrollbar">
+      {tabs.map(([view, label]) => {
         // Owner uses rose palette, reception/helper uses indigo, vendor uses emerald
         const color = userRole === 'owner' ? 'rose' : userRole === 'vendor' ? 'emerald' : 'indigo';
         const isPhotoTab = view === 'photo-drop';

@@ -1,27 +1,16 @@
 // Tests for the tab ordering logic — what TabNav renders per role/perms/admin.
 //
-// The test file has historically had a hand-mirrored copy of `tabsForRole` so
-// the assertions could run without spinning up jsdom or the React tree. As of
-// 2026-07-01 we now re-export from src/lib/tabs.ts so the test cannot drift.
-// If you change tabsForRole, this file reflects it automatically.
+// Source of truth is src/lib/tabs.ts (re-exported here so the test cannot drift).
 
 import { describe, it, expect } from 'vitest';
-import { tabsForRole, ADMIN_DIVIDER } from './tabs';
+import { tabsForRole } from './tabs';
 import { defaultHelperPerms } from './helpers';
 
-// Convenience: pluck just the viewKey from each entry, dropping the
-// divider sentinel so equality checks against the user-visible tab order
-// stay readable.
-function viewKeys(entries: readonly any[]): string[] {
-  return entries.filter((e) => e !== ADMIN_DIVIDER).map(([v]) => v);
-}
-
 describe('tabsForRole', () => {
-  it('owner (non-admin) sees 6 tabs in the old order, no divider', () => {
+  it('owner sees exactly 6 tabs in the canonical order', () => {
     const tabs = tabsForRole('owner', null, false);
     expect(tabs.length).toBe(6);
-    expect(tabs.includes(ADMIN_DIVIDER as any)).toBe(false);
-    expect(viewKeys(tabs)).toEqual([
+    expect(tabs.map(([v]) => v)).toEqual([
       'couple-checklist',
       'couple-budget',
       'discover-vendors',
@@ -31,14 +20,11 @@ describe('tabsForRole', () => {
     ]);
   });
 
-  it('admin owner sees admin tabs PREPENDED, divider after them, then 6 owner tabs', () => {
+  it('isAdmin no longer adds admin tabs to the bottom nav', () => {
+    // 2026-07-01: admin prefix moved to RoleSimulator pills.
     const tabs = tabsForRole('owner', null, true);
-    expect(tabs.length).toBe(9); // 2 admin + 1 divider + 6 owner
-    expect(viewKeys(tabs).slice(0, 2)).toEqual(['vendor-analytics', 'admin-users']);
-    expect(tabs[2]).toBe(ADMIN_DIVIDER); // sentinel sits at index 2 (in the raw array)
-    // viewKeys() filters out the divider, so admin=2 entries + owner=6 entries = 8 total.
-    // Owner entries start at index 2 of the *filtered* array.
-    expect(viewKeys(tabs).slice(2)).toEqual([
+    expect(tabs.length).toBe(6);
+    expect(tabs.map(([v]) => v)).toEqual([
       'couple-checklist',
       'couple-budget',
       'discover-vendors',
@@ -50,20 +36,19 @@ describe('tabsForRole', () => {
 
   it('reception (no helperPerms) sees scan + guest list', () => {
     const tabs = tabsForRole('reception', null);
-    expect(viewKeys(tabs)).toEqual(['reception-scanner', 'couple-guests']);
-    expect(tabs.includes(ADMIN_DIVIDER as any)).toBe(false);
+    expect(tabs.map(([v]) => v)).toEqual(['reception-scanner', 'couple-guests']);
   });
 
   it('helper with canScan only sees scanner tab', () => {
     const perms = { ...defaultHelperPerms(), canScan: true };
     const tabs = tabsForRole('helper', perms);
-    expect(viewKeys(tabs)).toEqual(['reception-scanner']);
+    expect(tabs.map(([v]) => v)).toEqual(['reception-scanner']);
   });
 
   it('helper with canViewPhotos only sees photo tab', () => {
     const perms = { ...defaultHelperPerms(), canViewPhotos: true };
     const tabs = tabsForRole('helper', perms);
-    expect(viewKeys(tabs)).toEqual(['photo-drop']);
+    expect(tabs.map(([v]) => v)).toEqual(['photo-drop']);
   });
 
   it('helper with zero perms sees NO tabs', () => {
@@ -80,7 +65,7 @@ describe('tabsForRole', () => {
       canViewPhotos: true,
     };
     const tabs = tabsForRole('helper', perms);
-    const views = viewKeys(tabs);
+    const views = tabs.map(([v]) => v);
     expect(views).toContain('reception-scanner');
     expect(views).toContain('couple-budget');
     expect(views).toContain('photo-drop');
@@ -89,7 +74,7 @@ describe('tabsForRole', () => {
 
   it('vendor sees their two tabs regardless of helperPerms', () => {
     const tabs = tabsForRole('vendor', defaultHelperPerms());
-    expect(viewKeys(tabs)).toEqual(['vendor-dashboard', 'vendor-profile']);
+    expect(tabs.map(([v]) => v)).toEqual(['vendor-dashboard', 'vendor-profile']);
   });
 
   it('unknown role returns empty array', () => {
