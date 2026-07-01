@@ -581,7 +581,21 @@ export default function App() {
                 <div className="flex justify-between items-center py-4">
                   <h1
                     className="text-xl font-black text-slate-800 flex items-center gap-2 cursor-pointer"
-                    onClick={() => setCurrentView('events-dashboard')}
+                    onClick={() => {
+                      // From outside a project, this navigates to the
+                      // dashboard (no event → renders the picker).
+                      // From inside a project, route to the role's
+                      // landing view rather than dumping the user onto
+                      // a blank screen — they always have at least one
+                      // event when this header is shown.
+                      if (!currentEvent) {
+                        setCurrentView('events-dashboard');
+                        return;
+                      }
+                      if (userRole === 'vendor') setCurrentView('vendor-dashboard');
+                      else if (userRole === 'reception') setCurrentView('reception-scanner');
+                      else setCurrentView('couple-checklist');
+                    }}
                   >
                     <Heart className="w-6 h-6 fill-rose-500 text-rose-500" /> 囍程
                     <span className="text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded ml-2">
@@ -620,12 +634,7 @@ export default function App() {
           )}
 
           <main className="max-w-7xl mx-auto px-4">
-            {/* Events dashboard: shown when no event is picked, OR when an
-                admin/user explicitly navigates back to the "home" view via
-                the 囍程 header. In the latter case we still show the event
-                cards (so the user can re-select) PLUS, for admins, the
-                inline admin section appended below the cards. */}
-            {currentView === 'events-dashboard' && (
+            {!currentEvent && currentView === 'events-dashboard' && (
               <EventsDashboard
                 events={events}
                 newEventName={newEventName}
@@ -642,8 +651,6 @@ export default function App() {
                     setCurrentView('couple-checklist');
                   }
                 }}
-                isAdmin={isAdmin}
-                user={user}
               />
             )}
 

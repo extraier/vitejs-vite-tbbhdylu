@@ -1,7 +1,13 @@
 import { Heart, Calendar, ArrowRight, Plus, Crown } from 'lucide-react';
-import { AdminDashboardSection } from './AdminUsers';
 
-export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate, onSelectEvent, isAdmin = false, user = null }) {
+// `isAdmin` and `user` used to be passed in here so the page could embed
+// the admin KPI strip + users table below the event cards. As of 2026-07-01
+// admin tools live in the dark role-switcher bar at the top of the screen
+// (RoleSimulator.jsx), so this screen is back to its pre-admin-embed shape.
+// We intentionally do NOT accept those props anymore — leaving them in
+// would invite future engineers to re-add the embed.
+
+export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate, onSelectEvent }) {
   return (
     <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
       <div className="text-center mb-12">
@@ -37,11 +43,6 @@ export function EventsDashboard({ events, newEventName, onNewEventNameChange, on
             </button>
           </form>
         </div>
-      </div>
-
-      {/* Admin embed: KPIs + full management table, below the event cards */}
-      <div className="max-w-7xl mx-auto px-4">
-        <AdminDashboardSection isAdmin={isAdmin} user={user} />
       </div>
     </div>
   );
