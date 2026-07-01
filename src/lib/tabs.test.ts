@@ -1,73 +1,69 @@
-// Tests for TabNav — the helper-aware tab filtering logic.
+// Tests for the tab ordering logic — what TabNav renders per role/perms/admin.
 //
-// We don't render JSX in jsdom tests (vitest setup is jsdom but we're not
-// importing @testing-library). Instead we extract the pure decision logic
-// into a helper that the test can call directly. The actual JSX uses the
-// same helper.
+// The test file has historically had a hand-mirrored copy of `tabsForRole` so
+// the assertions could run without spinning up jsdom or the React tree. As of
+// 2026-07-01 we now re-export from src/lib/tabs.ts so the test cannot drift.
+// If you change tabsForRole, this file reflects it automatically.
 
 import { describe, it, expect } from 'vitest';
+import { tabsForRole, ADMIN_DIVIDER } from './tabs';
 import { defaultHelperPerms } from './helpers';
 
-// Mirror of the JSX filter from components/TabNav.jsx.
-// Returns the list of (viewKey, label) tuples the TabNav would render.
-export function tabsForRole(userRole, helperPerms, isAdmin = false) {
-  if (userRole === 'owner') {
-    const tabs = [
-      ['couple-checklist', '📋 籌備清單'],
-      ['couple-budget', '💰 預算管理'],
-      ['discover-vendors', '🔍 商戶指南'],
-      ['couple-jobboard', '🆘 出Post求救'],
-      ['couple-guests', '🎟️ 嘉賓與座位'],
-      ['photo-drop', '📸 互動相片牆'],
-    ];
-    if (isAdmin) tabs.push(['vendor-analytics', '📊 商戶數據']);
-    if (isAdmin) tabs.push(['admin-users', '🛡️ 管理員控制台']);
-    return tabs;
-  }
-
-  if (userRole === 'reception' || userRole === 'helper') {
-    // Reception (no helperPerms) sees all the basic tabs (legacy demo).
-    // Helper (with helperPerms) sees only what they're allowed.
-    const tabs = [];
-    if (!helperPerms || helperPerms.canScan) tabs.push(['reception-scanner', '📷 掃描 QR Code']);
-    if (!helperPerms || helperPerms.canViewGuestList) tabs.push(['couple-guests', '📋 查閱名單']);
-    if (helperPerms?.canViewBudget) tabs.push(['couple-budget', '💰 預算管理']);
-    if (helperPerms?.canViewChecklist) tabs.push(['couple-checklist', '📋 籌備清單']);
-    if (helperPerms?.canViewPhotos) tabs.push(['photo-drop', '📸 互動相片牆']);
-    return tabs;
-  }
-
-  if (userRole === 'vendor') {
-    return [
-      ['vendor-dashboard', '💼 接單大堂'],
-      ['vendor-profile', '👤 管理專頁'],
-    ];
-  }
-
-  return [];
+// Convenience: pluck just the viewKey from each entry, dropping the
+// divider sentinel so equality checks against the user-visible tab order
+// stay readable.
+function viewKeys(entries: readonly any[]): string[] {
+  return entries.filter((e) => e !== ADMIN_DIVIDER).map(([v]) => v);
 }
 
 describe('tabsForRole', () => {
-  it('owner sees all 6 tabs', () => {
-    const tabs = tabsForRole('owner', null);
+  it('owner (non-admin) sees 6 tabs in the old order, no divider', () => {
+    const tabs = tabsForRole('owner', null, false);
     expect(tabs.length).toBe(6);
+    expect(tabs.includes(ADMIN_DIVIDER as any)).toBe(false);
+    expect(viewKeys(tabs)).toEqual([
+      'couple-checklist',
+      'couple-budget',
+      'discover-vendors',
+      'couple-jobboard',
+      'couple-guests',
+      'photo-drop',
+    ]);
+  });
+
+  it('admin owner sees admin tabs PREPENDED, divider after them, then 6 owner tabs', () => {
+    const tabs = tabsForRole('owner', null, true);
+    expect(tabs.length).toBe(9); // 2 admin + 1 divider + 6 owner
+    expect(viewKeys(tabs).slice(0, 2)).toEqual(['vendor-analytics', 'admin-users']);
+    expect(tabs[2]).toBe(ADMIN_DIVIDER); // sentinel sits at index 2 (in the raw array)
+    // viewKeys() filters out the divider, so admin=2 entries + owner=6 entries = 8 total.
+    // Owner entries start at index 2 of the *filtered* array.
+    expect(viewKeys(tabs).slice(2)).toEqual([
+      'couple-checklist',
+      'couple-budget',
+      'discover-vendors',
+      'couple-jobboard',
+      'couple-guests',
+      'photo-drop',
+    ]);
   });
 
   it('reception (no helperPerms) sees scan + guest list', () => {
     const tabs = tabsForRole('reception', null);
-    expect(tabs.map((t) => t[0])).toEqual(['reception-scanner', 'couple-guests']);
+    expect(viewKeys(tabs)).toEqual(['reception-scanner', 'couple-guests']);
+    expect(tabs.includes(ADMIN_DIVIDER as any)).toBe(false);
   });
 
   it('helper with canScan only sees scanner tab', () => {
     const perms = { ...defaultHelperPerms(), canScan: true };
     const tabs = tabsForRole('helper', perms);
-    expect(tabs.map((t) => t[0])).toEqual(['reception-scanner']);
+    expect(viewKeys(tabs)).toEqual(['reception-scanner']);
   });
 
   it('helper with canViewPhotos only sees photo tab', () => {
     const perms = { ...defaultHelperPerms(), canViewPhotos: true };
     const tabs = tabsForRole('helper', perms);
-    expect(tabs.map((t) => t[0])).toEqual(['photo-drop']);
+    expect(viewKeys(tabs)).toEqual(['photo-drop']);
   });
 
   it('helper with zero perms sees NO tabs', () => {
@@ -84,17 +80,16 @@ describe('tabsForRole', () => {
       canViewPhotos: true,
     };
     const tabs = tabsForRole('helper', perms);
-    const views = tabs.map((t) => t[0]);
+    const views = viewKeys(tabs);
     expect(views).toContain('reception-scanner');
     expect(views).toContain('couple-budget');
     expect(views).toContain('photo-drop');
-    // Order matters in the UI — let's also assert scanner comes first
     expect(views[0]).toBe('reception-scanner');
   });
 
   it('vendor sees their two tabs regardless of helperPerms', () => {
     const tabs = tabsForRole('vendor', defaultHelperPerms());
-    expect(tabs.map((t) => t[0])).toEqual(['vendor-dashboard', 'vendor-profile']);
+    expect(viewKeys(tabs)).toEqual(['vendor-dashboard', 'vendor-profile']);
   });
 
   it('unknown role returns empty array', () => {
