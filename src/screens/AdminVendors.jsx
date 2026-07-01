@@ -262,7 +262,13 @@ export function AdminVendors({ user, isAdmin }) {
           <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
           <div>
             <div className="font-semibold text-red-900">載入失敗</div>
-            <div className="text-sm text-red-700">{error}</div>
+            <div className="text-sm text-red-700 whitespace-pre-wrap">{error}</div>
+            {(error.includes('internal') || error.toLowerCase().includes('missing')) && (
+              <div className="text-xs text-red-600 mt-2">
+                提示：可能是 /vendors 集合尚未存在或函式還在部署中。
+                請稍候重試，或聯絡管理員。
+              </div>
+            )}
           </div>
         </div>
       )}
