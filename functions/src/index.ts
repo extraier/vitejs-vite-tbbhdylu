@@ -450,6 +450,9 @@ export const updateHelperPerms = onCall(async (req) => {
 
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 
+// Restore 2026-07-02: re-export sendInvitations (defined in invitations.ts)
+export * from './invitations';
+
 export const grantAdmin = onCall(async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
