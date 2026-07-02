@@ -263,12 +263,18 @@ export function AdminVendors({ user, isAdmin }) {
           <div>
             <div className="font-semibold text-red-900">載入失敗</div>
             <div className="text-sm text-red-700 whitespace-pre-wrap">{error}</div>
-            {(error.includes('internal') || error.toLowerCase().includes('missing')) && (
-              <div className="text-xs text-red-600 mt-2">
-                提示：可能是 /vendors 集合尚未存在或函式還在部署中。
-                請稍候重試，或聯絡管理員。
+            {error.code && (
+              <div className="text-xs text-red-600 mt-2 font-mono">
+                err.code = {String(error.code)}
               </div>
             )}
+            <div className="text-xs text-red-600 mt-2">
+              提示：開 DevTools → Network tab 揾 <code>admin_listVendors</code> request，
+              copy response body + 撳「重新整理」按鈕重試。
+              如果係「&quot;internal&quot;」通常係 (a) Firebase API key 無效 / 被封 / (b) Cloud Function
+              部署失敗。請用 <code>firebase functions:log --only admin_listVendors</code> 查
+              server-side stack trace。
+            </div>
           </div>
         </div>
       )}
