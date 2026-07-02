@@ -10,7 +10,7 @@ import { getStorage, type FirebaseStorage } from 'firebase/storage';
 // Production config for "savetheday-2377a" — also acts as the
 // Canvas-environment fallback if __firebase_config isn't injected.
 const DEFAULT_FIREBASE_CONFIG = {
-  apiKey: 'AIzaSyBrH5bUXbBFAsMZ6Ya5IDWV9p7OpvLbAWo',
+  apiKey: 'AIzaSy...mEXs', // 2026-07-02-deploy
   authDomain: 'savetheday-2377a.firebaseapp.com',
   projectId: 'savetheday-2377a',
   storageBucket: 'savetheday-2377a.firebasestorage.app',
