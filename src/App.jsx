@@ -123,6 +123,14 @@ export default function App() {
     headCount: 1,
     tableNumber: '未分配',
   });
+  // Restore 2026-07-02: family-form state for household expandable rows
+  const [familyForm, setFamilyForm] = useState({
+    name: '',
+    email: '',
+    group: '男家親戚',
+    tableNumber: '',
+    members: [''],
+  });
   const [newJobForm, setNewJobForm] = useState({
     serviceNeeded: '場地佈置',
     venueInput: '',
@@ -341,6 +349,75 @@ export default function App() {
     await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'guests'), newGuest);
     setNewGuestForm({ name: '', group: '男家親戚', headCount: 1, tableNumber: '未分配' });
     showToast('✅ 嘉賓已加入名單，已生成專屬 QR Code！');
+  };
+
+  /**
+   * Restore 2026-07-02: handleAddFamily — atomic batch write of 1 parent + N members.
+   * Schema:
+   *   parent row: { householdId: <own guestId>, isHouseholdParent: true, name, email, ... }
+   *   member rows: { householdId: <parent guestId>, name } (no email — parent's email is the contact)
+   * Migration-safe: rows without householdId behave exactly like legacy single rows.
+   */
+  const handleAddFamily = async (e) => {
+    e.preventDefault();
+    if (!user || !currentEvent) return;
+    const f = familyForm;
+    const memberNames = (f.members || []).map((m) => m.trim()).filter(Boolean);
+    if (!f.name.trim()) return;
+    if (memberNames.length === 0) {
+      showToast('⚠️ 至少要加一位家庭成員');
+      return;
+    }
+
+    // Parent gets its own random guestId; children reference it.
+    const parentGuestId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const batch = writeBatch(db);
+    const guestsCol = collection(db, 'artifacts', appId, 'users', user.uid, 'guests');
+
+    // Parent row (carries household-level fields: contact email, head count)
+    const parentRef = doc(guestsCol);
+    batch.set(parentRef, {
+      eventId: currentEvent.id,
+      guestId: parentGuestId,
+      householdId: parentGuestId,       // self-reference = "I am the parent"
+      isHouseholdParent: true,
+      name: f.name.trim(),
+      email: f.email.trim(),
+      group: f.group,
+      tableNumber: f.tableNumber,
+      headCount: memberNames.length + 1,
+      hasAttended: false,
+      hasGifted: false,
+      giftAmount: 0,
+      createdAt: Date.now(),
+    });
+
+    // Member rows (one per actual attendee)
+    for (const mName of memberNames) {
+      const childGuestId = Math.random().toString(36).substring(2, 8).toUpperCase();
+      const childRef = doc(guestsCol);
+      batch.set(childRef, {
+        eventId: currentEvent.id,
+        guestId: childGuestId,
+        householdId: parentGuestId,       // points at parent
+        name: mName,
+        group: f.group,
+        tableNumber: f.tableNumber,
+        headCount: 1,
+        hasAttended: false,
+        hasGifted: false,
+        giftAmount: 0,
+        createdAt: Date.now(),
+      });
+    }
+
+    try {
+      await batch.commit();
+      showToast(`✅ 已加入「${f.name}」家庭（${memberNames.length + 1}人）`);
+      setFamilyForm({ name: '', email: '', group: '男家親戚', tableNumber: '', members: [''] });
+    } catch (err) {
+      showToast('✗ 加入失敗：' + (err?.message || '未知錯誤'));
+    }
   };
 
   // Restore 2026-07-02: edit/delete single-row guest via EditGuestModal
@@ -783,11 +860,15 @@ export default function App() {
                 <GuestList
                   guests={eventGuests}
                   userRole={userRole}
+                  helperPerms={helperPerms}
                   searchQuery={''}
                   onSearchChange={() => {}}
                   newGuestForm={newGuestForm}
                   onNewGuestFormChange={setNewGuestForm}
                   onAddGuest={handleAddGuest}
+                  familyForm={familyForm}
+                  onFamilyFormChange={setFamilyForm}
+                  onAddFamily={handleAddFamily}
                   onPreviewAsGuest={(g) => {
                     setActiveGuestPortal(g);
                     setUserRole('guest_portal');
