@@ -295,6 +295,31 @@ export default function App() {
     });
   };
 
+  // Restore 2026-07-02: inline edit budget target from CoupleBudget EditableBudgetCard
+  const handleSaveBudget = async (newBudget) => {
+    if (!user || !currentEvent) return;
+    const eventRef = doc(db, 'artifacts', appId, 'users', user.uid, 'events', currentEvent.id);
+    await updateDoc(eventRef, { budget: Number(newBudget) });
+    // Optimistic local update so the UI reflects the change immediately
+    setCurrentEvent({ ...currentEvent, budget: Number(newBudget) });
+    showToast('✅ 總預算已更新');
+    return Number(newBudget);
+  };
+
+  // Restore 2026-07-02: inline edit task cost from CoupleChecklist
+  const [editingTaskId, setEditingTaskId] = useState(null);
+  const handleUpdateTaskCost = async (task, newCost) => {
+    if (!user) return;
+    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id);
+    await updateDoc(taskRef, {
+      estimatedCost: Number(newCost),
+      // If task is already complete, also update actualCost so totals stay consistent
+      ...(task.isCompleted ? { actualCost: Number(newCost) } : {}),
+    });
+    setEditingTaskId(null);
+    showToast('✅ 任務金額已更新');
+  };
+
   const handleDeleteTask = async (task) => {
     if (!user) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id));
@@ -693,12 +718,15 @@ export default function App() {
                 vendors={vendors}
                 activeCategory={activeCategory}
                 activeVenue={activeVenue}
+                editingTaskId={editingTaskId}
+                onClearEditingTask={() => setEditingTaskId(null)}
                 onSelectCategory={(cat, venue) => {
                   setActiveCategory(cat);
                   setActiveVenue(venue);
                 }}
                 onToggleTask={toggleTask}
                 onDeleteTask={handleDeleteTask}
+                onUpdateTaskCost={handleUpdateTaskCost}
                 newTaskForm={newTaskForm}
                 onNewTaskFormChange={setNewTaskForm}
                 onAddTask={handleAddTask}
@@ -712,7 +740,16 @@ export default function App() {
             )}
 
             {userRole === 'owner' && currentEvent && currentView === 'couple-budget' && (
-              <CoupleBudget tasks={eventTasks} totalBudget={totalBudget} totalSpent={totalSpent} />
+              <CoupleBudget
+                tasks={eventTasks}
+                totalBudget={totalBudget}
+                totalSpent={totalSpent}
+                canEdit={userRole === 'owner'}
+                onSaveBudget={handleSaveBudget}
+                onSelectTask={(taskId) => {
+                  setCurrentView('couple-checklist');
+                }}
+              />
             )}
 
             {userRole === 'owner' && currentEvent && currentView === 'discover-vendors' && (
