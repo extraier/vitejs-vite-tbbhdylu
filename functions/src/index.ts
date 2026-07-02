@@ -509,7 +509,12 @@ export const admin_listUsers = onCall(async (req) => {
   }
   const { pageToken, pageSize = 50 } = req.data as { pageToken?: string; pageSize?: number };
   const auth = getAdminAuth();
-  const result = await auth.listUsers(Math.min(Math.max(pageSize, 1), 1000), pageToken);
+  // firebase-admin's listUsers() rejects undefined as pageToken with
+  // "The page token must be a valid non-empty string." — pass undefined only
+  // when the caller is paging past page 1.
+  const result = pageToken
+    ? await auth.listUsers(Math.min(Math.max(pageSize, 1), 1000), pageToken)
+    : await auth.listUsers(Math.min(Math.max(pageSize, 1), 1000));
 
   const users = result.users.map((u) => ({
     uid: u.uid,

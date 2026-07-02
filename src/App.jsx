@@ -55,12 +55,14 @@ import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
 import { ReceptionScanner } from './screens/ReceptionScanner';
 import { PersonalGuestPortal } from './screens/PersonalGuestPortal';
+import { InvitationEditor } from './screens/InvitationEditor';
 
 import { RoleSimulator } from './components/RoleSimulator';
 import { TabNav } from './components/TabNav';
 import { UpgradeModal } from './components/modals/UpgradeModal';
 import { PaymentModal } from './components/modals/PaymentModal';
 import { QrCodeModal } from './components/modals/QrCodeModal';
+import { EditGuestModal } from './components/modals/EditGuestModal';
 import { VendorModal } from './components/modals/VendorModal';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { InviteModal } from './components/modals/InviteModal';
@@ -131,6 +133,8 @@ export default function App() {
 
   // Modals
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showInvitationEditor, setShowInvitationEditor] = useState(false);
+  const [editingGuest, setEditingGuest] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showHelperManager, setShowHelperManager] = useState(false);
@@ -312,6 +316,30 @@ export default function App() {
     await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'guests'), newGuest);
     setNewGuestForm({ name: '', group: '男家親戚', headCount: 1, tableNumber: '未分配' });
     showToast('✅ 嘉賓已加入名單，已生成專屬 QR Code！');
+  };
+
+  // Restore 2026-07-02: edit/delete single-row guest via EditGuestModal
+  const handleSaveGuest = async (formData) => {
+    if (!user || !editingGuest) return;
+    const ownerUid = editingGuest.isGuestMode ? editingGuest.qOwner : user.uid;
+    const ref = doc(db, 'artifacts', appId, 'users', ownerUid, 'guests', editingGuest.id);
+    await updateDoc(ref, {
+      name: formData.name,
+      email: formData.email || '',
+      group: formData.group,
+      tableNumber: formData.tableNumber,
+      headCount: formData.headCount,
+    });
+    setEditingGuest(null);
+    showToast('✅ 嘉賓資料已更新');
+  };
+
+  const handleDeleteGuest = async (guestRow) => {
+    if (!user) return;
+    const ownerUid = guestRow.isGuestMode ? guestRow.qOwner : user.uid;
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', ownerUid, 'guests', guestRow.id));
+    setEditingGuest(null);
+    showToast('🗑️ 嘉賓已刪除');
   };
 
   const handleGiveRedPacket = async (amount) => {
@@ -730,6 +758,8 @@ export default function App() {
                   }}
                   onShowQr={setViewingQrCode}
                   onCheckIn={handleSimulateReceptionScan}
+                  onOpenInvitationEditor={() => setShowInvitationEditor(true)}
+                  onEditGuest={setEditingGuest}
                 />
               )}
 
@@ -813,6 +843,26 @@ export default function App() {
           onClose={() => setShowHelperManager(false)}
         />
       )}
+
+      {showInvitationEditor && user?.uid && currentEvent && (
+        <InvitationEditor
+          isOpen={showInvitationEditor}
+          ownerUid={user.uid}
+          eventId={currentEvent.id}
+          event={currentEvent}
+          guests={eventGuests}
+          ownerTier={currentEvent.tier || 'free'}
+          onClose={() => setShowInvitationEditor(false)}
+        />
+      )}
+
+      <EditGuestModal
+        isOpen={Boolean(editingGuest)}
+        guest={editingGuest}
+        onClose={() => setEditingGuest(null)}
+        onSave={handleSaveGuest}
+        onDelete={handleDeleteGuest}
+      />
 
       <style
         dangerouslySetInnerHTML={{

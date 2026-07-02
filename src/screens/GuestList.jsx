@@ -6,6 +6,7 @@ import {
   Smartphone,
   QrCode,
   ScanLine,
+  Pencil,
 } from 'lucide-react';
 
 export function GuestList({
@@ -20,6 +21,8 @@ export function GuestList({
   onPreviewAsGuest,
   onShowQr,
   onCheckIn,
+  onOpenInvitationEditor,
+  onEditGuest,
 }) {
   // Helpers can see gift presence but not amounts unless canViewGiftAmount.
   // We don't strip here (server returns full data anyway) — instead GuestRow
@@ -35,6 +38,14 @@ export function GuestList({
           </h2>
           <p className="text-slate-500 text-sm mt-1">每個嘉賓都有專屬 ID，生成獨立 QR Code 網址。</p>
         </div>
+        {userRole === 'owner' && onOpenInvitationEditor && (
+          <button
+            onClick={onOpenInvitationEditor}
+            className="bg-gradient-to-r from-rose-500 to-pink-500 text-white font-bold px-5 py-2.5 rounded-xl hover:from-rose-600 hover:to-pink-600 shadow-md flex items-center gap-2"
+          >
+            📨 寄出電子請帖
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -71,6 +82,7 @@ export function GuestList({
                   onPreviewAsGuest={onPreviewAsGuest}
                   onShowQr={onShowQr}
                   onCheckIn={onCheckIn}
+                  onEdit={onEditGuest}
                 />
               ))}
             </tbody>
@@ -144,7 +156,7 @@ export function GuestList({
   );
 }
 
-function GuestRow({ guest, userRole, helperPerms, onPreviewAsGuest, onShowQr, onCheckIn }) {
+function GuestRow({ guest, userRole, helperPerms, onPreviewAsGuest, onShowQr, onCheckIn, onEdit }) {
   // canViewGiftAmount gates the actual dollar amount, but helpers always see
   // whether the gift was given (the hasGifted flag). This matches the owner's
   // intent: helpers should know "did this guest pay?" without seeing how much.
@@ -187,6 +199,15 @@ function GuestRow({ guest, userRole, helperPerms, onPreviewAsGuest, onShowQr, on
       <td className="p-4 text-right">
         {userRole === 'owner' ? (
           <div className="flex justify-end gap-2">
+            {onEdit && (
+              <button
+                onClick={() => onEdit(guest)}
+                className="p-2 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg"
+                title="編輯 / 刪除嘉賓"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+            )}
             <button
               onClick={() => onPreviewAsGuest(guest)}
               className="p-2 text-rose-500 bg-rose-50 hover:bg-rose-100 rounded-lg"
