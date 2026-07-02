@@ -31,7 +31,10 @@ import {
   X,
   Save,
   AlertCircle,
+  Eye,
 } from 'lucide-react';
+
+import { VendorModal } from '../components/modals/VendorModal';
 
 const CATEGORY_LABELS = {
   photography: '📸 攝影',
@@ -99,6 +102,7 @@ export function AdminVendors({ user, isAdmin }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
   const [editingVendor, setEditingVendor] = useState(null);
+  const [previewingVendor, setPreviewingVendor] = useState(null);
   const [pageTokens, setPageTokens] = useState([null]); // history stack for prev page
 
   const loadPage = useCallback(async (token) => {
@@ -381,6 +385,14 @@ export function AdminVendors({ user, isAdmin }) {
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
                         <button
+                          onClick={() => setPreviewingVendor(v)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                          title="預覽完整商戶專頁（客人睇到嘅樣）"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          預覽
+                        </button>
+                        <button
                           onClick={() => setEditingVendor(v)}
                           className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
                           title="編輯商戶資料"
@@ -450,6 +462,13 @@ export function AdminVendors({ user, isAdmin }) {
           }}
         />
       )}
+
+      {/* Restore 2026-07-02: admin-side preview modal — shows the vendor
+          profile exactly as couples see it from the DiscoverDirectory. */}
+      <VendorModal
+        vendor={previewingVendor}
+        onClose={() => setPreviewingVendor(null)}
+      />
     </div>
   );
 }
