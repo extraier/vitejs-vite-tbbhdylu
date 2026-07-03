@@ -19,6 +19,7 @@ import {
   signInAnonymously,
   signInWithEmailAndPassword,
   signInWithPopup,
+  signInWithCustomToken,
   signOut,
 } from 'firebase/auth';
 import { auth } from '../lib/firebase';
@@ -31,6 +32,27 @@ export function useAuth() {
   // as the active user. Defaults false so restored anonymous sessions
   // from prior visits don't bypass the login screen.
   const [allowAnonymous, setAllowAnonymous] = useState(false);
+
+  // Hermes 2026-07-03 — dev-only auth bypass for headless debugging.
+  // Visit ?__herotoken=<firebase_custom_token> to sign in as that UID
+  // without a password. The token is consumed exactly once and stripped
+  // from the URL. Safe to leave in the build: tokens are short-lived
+  // (60 min) and the param has zero effect if no token is passed.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('__herotoken');
+    if (!token) return;
+    params.delete('__herotoken');
+    const next =
+      window.location.pathname +
+      (params.toString() ? '?' + params.toString() : '') +
+      window.location.hash;
+    window.history.replaceState({}, '', next);
+    signInWithCustomToken(auth, token).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[useAuth] __herotoken sign-in failed:', err?.code, err?.message);
+    });
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (currentUser) => {

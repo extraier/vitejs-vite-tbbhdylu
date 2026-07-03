@@ -81,6 +81,13 @@ export default function App() {
   const helperCtx = useHelperAuth();
   const [helperAccepting, setHelperAccepting] = useState(false);
 
+  // Hermes 2026-07-03: helperPerms is derived once currentEvent is declared
+  // (below, around line 107). The declaration is placed there because
+  // JavaScript's temporal dead zone forbids referencing consts before they
+  // are initialised — and yes, the earlier patch accidentally placed the
+  // derivation above currentEvent's declaration, which threw at render time
+  // and left #root empty.
+
   // Guest-mode URL params
   const guest = parseGuestParams(
     typeof window !== 'undefined' ? window.location.search : '',
@@ -98,6 +105,14 @@ export default function App() {
   // Current selection
   const [currentEvent, setCurrentEvent] = useState(null);
   const [activeCategory, setActiveCategory] = useState(null);
+
+  // Hermes 2026-07-03: derive helperPerms for the current event so the
+  // GuestList (and any other per-event consumer) can read capabilities.
+  // Resolves to null when the user is not a helper for this wedding — which
+  // is the correct "no special perms" shape consumed by GuestList / EditGuest.
+  const helperPerms = currentEvent?.userId
+    ? helperCtx.getPerms(currentEvent.userId)
+    : null;
   const [activeVenue, setActiveVenue] = useState(null);
   const [activeGuestPortal, setActiveGuestPortal] = useState(null);
 
