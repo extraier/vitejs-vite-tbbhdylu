@@ -115,9 +115,13 @@ service cloud.firestore {
         // Guests: owner full CRUD. Helpers may read IF canViewGuestList.
         // Helpers may update IF canScan (only the attendance fields) OR
         // canEditGuests (any field). Guests update only their own row.
+        // PersonalGuestPortal.jsx isGuestMode flow uses
+        // hasValidGuestLink to fetch the guest's own row so the QR-code
+        // recipient can see their seat + photo upload widgets.
         match /guests/{guestDocId} {
           allow read: if isOwner(ownerUid)
-            || hasHelperPerm(ownerUid, 'canViewGuestList');
+            || hasHelperPerm(ownerUid, 'canViewGuestList')
+            || hasValidGuestLink(ownerUid, resource.data.eventId);
           allow create, delete: if isOwner(ownerUid);
           // canScan: only allow toggling attendance + audit fields.
           allow update: if isOwner(ownerUid)

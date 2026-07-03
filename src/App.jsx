@@ -39,6 +39,9 @@ import { useAuth } from './hooks/useAuth';
 import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { useToast } from './hooks/useToast';
+import { signInAnonymously } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
+import { auth, functions } from './lib/firebase';
 
 import { LoginScreen } from './screens/LoginScreen';
 import { EventsDashboard } from './screens/EventsDashboard';
@@ -171,21 +174,63 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
+  // ---- Hermes 2026-07-03: redeem HMAC share token ----
+  // When the page loads with ?o=...&e=...&g=...&token=... (the email link),
+  // we sign in anonymously, then call verifyShareToken callable to write
+  // guestLinks/{auth.uid} so subsequent Firestore reads pass
+  // hasValidGuestLink() in firestore.rules.
+  const [redeemStatus, setRedeemStatus] = useState('pending');
+  useEffect(() => {
+    if (!guest.isGuestMode) {
+      setRedeemStatus('ok');
+      return;
+    }
+    const token = guest.qToken;
+    if (!token) {
+      // No token in URL — likely a direct preview or stale link. Allow
+      // page to attempt load; Firestore rules will gate actual reads.
+      setRedeemStatus('ok');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        // Anonymous sign-in is required so the callable can write
+        // guestLinks/{auth.uid} (firestore.rules keys this doc by uid).
+        if (!auth.currentUser) {
+          await signInAnonymously(auth);
+        }
+        if (cancelled) return;
+        const verify = httpsCallable(functions, 'verifyShareToken');
+        await verify({ token });
+        if (!cancelled) setRedeemStatus('ok');
+      } catch (e) {
+        console.error('[redeem] failed:', e);
+        if (!cancelled) setRedeemStatus('error');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [guest.isGuestMode, guest.qToken]);
+
+  // Wait for redemption before doing the Firestore reads — otherwise the
+  // page shows "loading" forever because rules hasValidGuestLink fails.
+  const guestDataReady = redeemStatus === 'ok';
+
   // ---- Firestore subscriptions (skip when in guest mode) ----
   const targetUid = guest.isGuestMode ? guest.qOwner : user?.uid;
 
   const { data: events } = useFirestoreCollection(
-    targetUid && !guest.isGuestMode
+    guestDataReady && targetUid && !guest.isGuestMode
       ? collection(db, 'artifacts', appId, 'users', targetUid, 'events')
       : null,
-    [targetUid, guest.isGuestMode],
+    [targetUid, guest.isGuestMode, guestDataReady],
   );
 
   const { data: allGuests } = useFirestoreCollection(
-    targetUid
+    guestDataReady && targetUid
       ? collection(db, 'artifacts', appId, 'users', targetUid, 'guests')
       : null,
-    [targetUid],
+    [targetUid, guestDataReady],
   );
 
   const { data: allPhotos } = useFirestoreCollection(

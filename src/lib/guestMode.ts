@@ -5,6 +5,7 @@ export type GuestParams = {
   qOwner: string | null;
   qEvent: string | null;
   qGuest: string | null;
+  qToken: string | null;
   isGuestMode: boolean;
 };
 
@@ -13,10 +14,12 @@ export function parseGuestParams(search: string): GuestParams {
   const qOwner = params.get('o');
   const qEvent = params.get('e');
   const qGuest = params.get('g');
+  const qToken = params.get('token');
   return {
     qOwner,
     qEvent,
     qGuest,
+    qToken,
     isGuestMode: Boolean(qOwner && qEvent && qGuest),
   };
 }

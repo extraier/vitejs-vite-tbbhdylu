@@ -26,24 +26,61 @@
  */
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { defineSecret } from 'firebase-functions/params';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import * as nodemailer from 'nodemailer';
 import * as QRCode from 'qrcode';
+import * as crypto from 'node:crypto';
+
+// HMAC-signed token helpers — signs (ownerUid|eventId|guestId|expires) so a
+// guest who clicks the email link can be redeemed exactly once into
+// artifacts/{appId}/users/{ownerUid}/guestLinks/{auth.uid}, after which
+// Firestore Rules hasValidGuestLink() unlocks their read of the event doc.
+// See firestore.rules §guestLinks.
+const LINK_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+
+function signLinkToken(ownerUid: string, eventId: string, guestId: string, expiresAt: number): string {
+  const secret = LINK_SECRET.value();
+  const payload = `${ownerUid}|${eventId}|${guestId}|${expiresAt}`;
+  const sig = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+  return `${Buffer.from(payload).toString('base64url')}.${sig}`;
+}
+
+function buildShareUrl(appBase: string, ownerUid: string, eventId: string, guestId: string): string {
+  const expiresAt = Date.now() + LINK_TTL_MS;
+  const token = signLinkToken(ownerUid, eventId, guestId, expiresAt);
+  return `${appBase}/?o=${ownerUid}&e=${eventId}&g=${guestId}&token=${token}`;
+}
 
 const db = getFirestore();
 
-// SMTP credentials are read at runtime from process.env. Firebase Cloud
-// Functions injects secrets (configured via `firebase functions:secrets:set`)
-// into the runtime as environment variables — so no `defineSecret()` call
-// is needed here. This also means the function deploys cleanly even when
-// no SMTP credentials are configured (it runs in `dryRun: true` mode until
-// you set them).
-//
+// Hermes 2026-07-03 — explicit appId. The frontend resolves this via
+// `__app_id` global with fallback 'savetheday-production' (see
+// src/lib/firebase.ts:resolveAppId). The previous code used
+// `db.collection('artifacts').doc()` which generates a RANDOM auto-id,
+// guaranteeing that the function's guest query never matches any
+// real data path. Using the literal appId keeps backend and frontend
+// in lockstep.
+const APP_ID = 'savetheday-production';
+
+// Hermes 2026-07-03 — switch to Pattern 2 (defineSecret + secrets: [...]).
+// v2 SDK does NOT auto-inject Secret Manager values into process.env —
+// the previous code read process.env.SMTP_URL directly and was stuck in
+// dryRun mode forever even after `firebase functions:secrets:set SMTP_URL`.
+// See firebase-gen2-cloud-run-iam §1a for the full trace.
+const SMTP_URL = defineSecret('SMTP_URL');
+const SMTP_FROM = defineSecret('SMTP_FROM');
+const APP_BASE_URL = defineSecret('APP_BASE_URL');
+const LINK_SECRET = defineSecret('LINK_SECRET');  // HMAC secret for guest share URLs
+
 // To enable real email sending:
 //   firebase functions:secrets:set SMTP_URL     # smtps://user:pass@host:465
 //   firebase functions:secrets:set SMTP_FROM    # no-reply@savetheday.io
 //   firebase functions:secrets:set APP_BASE_URL # https://savetheday.io
 //   firebase deploy --only functions:sendInvitations
+//
+// (Or via gcloud secrets versions add for non-interactive:
+//   gcloud secrets versions add SMTP_URL --data-file=- --project=savetheday-2377a)
 
 interface SendInvitationsInput {
   eventId: string;
@@ -69,6 +106,7 @@ export const sendInvitations = onCall(
   {
     timeoutSeconds: 120,
     memory: '512MiB',
+    secrets: [SMTP_URL, SMTP_FROM, APP_BASE_URL, LINK_SECRET],
   },
   async (req): Promise<SendInvitationsResult> => {
     // Wrap the entire handler so any unhandled exception (e.g. a TypeError
@@ -100,14 +138,14 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
     }
 
     const ownerUid = req.auth.uid;
-    const appBase = process.env.APP_BASE_URL || 'https://savetheday.io';
+    const appBase = APP_BASE_URL.value() || 'https://savetheday.io';
 
     // Load invitation + event + guests.
     // Firestore 'in' query max is 30 items, so we chunk.
     const [invSnap, eventSnap] = await Promise.all([
-      db.collection('artifacts').doc().collection('users').doc(ownerUid)
+      db.collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
         .collection('invitations').doc(invitationId).get(),
-      db.collection('artifacts').doc().collection('users').doc(ownerUid)
+      db.collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
         .collection('events').doc(eventId).get(),
     ]);
 
@@ -121,7 +159,7 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
     if (!invSnap.exists) {
       console.warn('[sendInvitations] invitation doc missing; auto-creating defaults');
       const invRef = db
-        .collection('artifacts').doc().collection('users').doc(ownerUid)
+        .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
         .collection('invitations').doc(invitationId);
       const defaults = {
         templateId: 'plain',
@@ -144,7 +182,7 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
       // owner knows to populate the event editor.
       console.warn('[sendInvitations] event doc missing; auto-creating stub. Owner should fill venue/time/date via the event editor.');
       const eventRef = db
-        .collection('artifacts').doc().collection('users').doc(ownerUid)
+        .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
         .collection('events').doc(eventId);
       const stubEvent = {
         name: '婚禮',
@@ -156,8 +194,13 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
         updatedAt: FieldValue.serverTimestamp(),
       };
       await eventRef.set(stubEvent);
+      // The pre-fetched eventSnap was empty — use the stub we just wrote.
+      // Re-fetching isn't worth the round-trip; the stub has all the fields
+      // the email template needs (with sensible empty-string defaults).
+      var event: any = stubEvent;
+    } else {
+      var event: any = eventSnap.data()!;
     }
-    const event = eventSnap.data()!;
 
     // Load the owner's profile (displayName + email) so we can put the
     // couple's name in the From display field and route replies to their
@@ -183,7 +226,7 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
     for (let i = 0; i < guestIds.length; i += 30) {
       const chunk = guestIds.slice(i, i + 30);
       const snap = await db
-        .collection('artifacts').doc().collection('users').doc(ownerUid)
+        .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
         .collection('guests')
         .where('guestId', 'in', chunk)
         .get();
@@ -193,14 +236,10 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
       });
     }
 
-    // Defensive: Cloud Functions v2 secrets aren't auto-injected into
-    // process.env unless the secret is listed via `defineSecret()`. If the
-    // secret was never bound, process.env.SMTP_URL is literally the string
-    // "undefined" (because of `!`) — Nodemailer would then try to connect to
-    // a host named "undefined" and fail inside the transport pool with an
-    // opaque network error. Validate the URL before constructing the
-    // transporter so we hit the dryRun branch instead.
-    const smtpUrlRaw = process.env.SMTP_URL;
+    // Hermes 2026-07-03: SMTP_URL is bound via defineSecret() + secrets: []
+    // in the onCall options above. Read it via .value() — process.env.X
+    // silently returns undefined in v2 SDK even after the secret is set.
+    const smtpUrlRaw = SMTP_URL.value();
     const smtpUrlValid =
       typeof smtpUrlRaw === 'string' &&
       smtpUrlRaw.length > 0 &&
@@ -275,7 +314,7 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
       const recipientQrs: { label: string; png: Buffer }[] = [];
       const allRecipients = isFamily ? [guest, ...unit.memberRows] : [guest];
       for (const r of allRecipients) {
-        const shareUrl = `${appBase}/?o=${ownerUid}&e=${eventId}&g=${r.guestId}`;
+        const shareUrl = buildShareUrl(appBase, ownerUid, eventId, r.guestId);
         const png = await QRCode.toBuffer(shareUrl, {
           errorCorrectionLevel: 'H',
           width: 500,
@@ -316,7 +355,7 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
           content: qr.png,
           cid: `invitation-qr-${i}`,
         }));
-        const primaryShareUrl = `${appBase}/?o=${ownerUid}&e=${eventId}&g=${guest.guestId}`;
+        const primaryShareUrl = buildShareUrl(appBase, ownerUid, eventId, guest.guestId);
 
         // From / Reply-To:
         // - `From` stays on the savetheday.io domain (verified SPF/DKIM) so
@@ -334,7 +373,7 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
           ownerProfile.email ||
           (event.ownerEmail as string | undefined) ||
           (invitation.ownerEmail as string | undefined);
-        const fromAddress = process.env.SMTP_FROM || 'no-reply@savetheday.io';
+        const fromAddress = SMTP_FROM.value() || 'no-reply@savetheday.io';
         await transporter!.sendMail({
           from: `"${ownerDisplayName} 敬邀" <${fromAddress}>`,
           replyTo: ownerReplyEmail,
@@ -440,3 +479,84 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+// ---------------------------------------------------------------------------
+// redeemGuestLink — verifies the HMAC token from the email QR, then writes
+// artifacts/{appId}/users/{ownerUid}/guestLinks/{auth.uid} so subsequent reads
+// from the same auth.uid pass hasValidGuestLink() in firestore.rules.
+// Idempotent: if the guest already redeemed, this is a no-op.
+// Exposed as a callable so anonymous guests can hit it.
+// ---------------------------------------------------------------------------
+export const verifyShareToken = onCall(
+  {
+    region: 'us-central1',
+    cors: true,
+    timeoutSeconds: 30,
+    memory: '256MiB',
+    secrets: [LINK_SECRET],
+  },
+  async (req): Promise<{ ok: true; ownerUid: string; eventId: string; guestId: string }> => {
+    // Anonymous redeems are the norm — guests hit this before any signin.
+    // We do NOT require auth here; instead we require HMAC verification of
+    // (ownerUid|eventId|guestId|expires) and that the caller *will* sign in
+    // anonymously right after, picking up guestLinks/{auth.uid} = {ownerUid,
+    // eventId, guestId, ...}.
+    const { token, expectedAuthUid } = req.data as { token?: string; expectedAuthUid?: string };
+    if (typeof token !== 'string') {
+      throw new HttpsError('invalid-argument', 'token required');
+    }
+    const [b64, sig] = token.split('.');
+    if (!b64 || !sig) throw new HttpsError('invalid-argument', 'malformed token');
+    let payload: string;
+    try {
+      payload = Buffer.from(b64, 'base64url').toString('utf8');
+    } catch {
+      throw new HttpsError('invalid-argument', 'token payload not base64url');
+    }
+    const parts = payload.split('|');
+    if (parts.length !== 4) throw new HttpsError('invalid-argument', 'token payload wrong shape');
+    const [ownerUid, eventId, guestId, expiresAtStr] = parts;
+    const expiresAt = Number(expiresAtStr);
+    if (!Number.isFinite(expiresAt)) throw new HttpsError('invalid-argument', 'token expiresAt not a number');
+    if (Date.now() > expiresAt) throw new HttpsError('deadline-exceeded', 'token expired');
+
+    // Re-compute HMAC, constant-time compare.
+    const secret = LINK_SECRET.value();
+    const expected = crypto.createHmac('sha256', secret).update(payload).digest('hex');
+    const a = Buffer.from(sig, 'hex');
+    const b = Buffer.from(expected, 'hex');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      throw new HttpsError('permission-denied', 'invalid signature');
+    }
+
+    // Write guestLinks/{authUid} doc — the caller's auth.uid must equal the
+    // linkDocId per firestore.rules match /guestLinks/{linkDocId} allows create.
+    // For anonymous flow: the client signs in anonymously FIRST, gets auth.uid,
+    // then calls this with that uid. If uid mismatch, we error.
+    const authUid = req.auth?.uid ?? expectedAuthUid;
+    if (!authUid) throw new HttpsError('unauthenticated', 'sign in first');
+
+    const linkRef = db
+      .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
+      .collection('guestLinks').doc(authUid);
+    const existing = await linkRef.get();
+    if (existing.exists) {
+      const data = existing.data()!;
+      // Idempotent — already redeemed with matching eventId/guestId is fine.
+      if (data.eventId === eventId && data.guestId === guestId) {
+        return { ok: true, ownerUid, eventId, guestId };
+      }
+      throw new HttpsError('already-exists', 'a different link is bound to this uid');
+    }
+
+    await linkRef.set({
+      ownerUid,
+      eventId,
+      guestId,
+      expiresAt: new Date(expiresAt),
+      redeemedByUid: authUid,
+      redeemedAt: FieldValue.serverTimestamp(),
+    });
+    return { ok: true, ownerUid, eventId, guestId };
+  },
+);

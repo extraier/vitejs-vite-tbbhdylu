@@ -6,6 +6,7 @@ import { initializeApp, getApps, getApp, type FirebaseApp } from 'firebase/app';
 import { getAuth, type Auth } from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
 import { getStorage, type FirebaseStorage } from 'firebase/storage';
+import { getFunctions, type Functions } from 'firebase/functions';
 
 // Production config for "savetheday-2377a" — also acts as the
 // Canvas-environment fallback if __firebase_config isn't injected.
@@ -47,6 +48,7 @@ const app: FirebaseApp = getApps().length === 0 ? initializeApp(resolveFirebaseC
 export const auth: Auth = getAuth(app);
 export const db: Firestore = getFirestore(app);
 export const storage: FirebaseStorage = getStorage(app);
+export const functions: Functions = getFunctions(app);
 export const appId: string = resolveAppId();
 
 // DevTools convenience: expose the Firebase SDKs on `window.__fb` so callables
