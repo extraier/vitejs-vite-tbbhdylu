@@ -1005,6 +1005,7 @@ export default function App() {
       />
       <QrCodeModal
         guest={viewingQrCode}
+        eventId={currentEvent?.id}
         eventName={currentEvent?.name}
         onClose={() => setViewingQrCode(null)}
         onCopy={() => showToast('✅ 網址已複製！')}

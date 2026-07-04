@@ -1,19 +1,77 @@
-import { X } from 'lucide-react';
+import { useState } from 'react';
+import { X, Mail } from 'lucide-react';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { db, appId } from '../../lib/firebase';
 
-export function QrCodeModal({ guest, eventName, onClose, onCopy }) {
+export function QrCodeModal({
+  guest,
+  eventId,
+  eventName,
+  onClose,
+  onCopy,
+}) {
+  const [sendingEmail, setSendingEmail] = useState(false);
   if (!guest) return null;
 
   const hostUrl =
     typeof window !== 'undefined'
-      ? `${window.location.protocol}//${window.location.host}${window.location.pathname}`
+      ? `${window.location.protocol}//${window.location.host}`
       : '';
-  // The uid (Firebase Auth UID) may not be available yet on this screen;
-  // production builds should pass it down explicitly. We fall back to a
-  // placeholder so the modal still renders in development.
-  const ownerUid = window.__ownerUid || 'pending-uid';
-  const eventId = window.__currentEventId || 'pending-event';
-  const shareUrl = `${hostUrl}?o=${ownerUid}&e=${eventId}&g=${guest.guestId}`;
+  const ownerUid = window.__ownerUid || '';
+  const currentEventId = eventId || window.__currentEventId || '';
+  const invitationId = 'default';
+  const shareUrl = `${hostUrl}/?o=${ownerUid}&e=${currentEventId}&g=${guest.guestId}`;
   const qrCodeImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(shareUrl)}&color=312e81`;
+
+  const handleSendEmail = async () => {
+    if (!guest.email) {
+      alert('此嘉賓未有電郵地址。請先喺 嘉賓名單 補回 email 然後再寄。');
+      return;
+    }
+    setSendingEmail(true);
+    try {
+      // Ensure the invitation doc exists before calling sendInvitations
+      // (autosave only fires on edit; first-send was failing previously)
+      const ref = doc(db, 'artifacts', appId, 'users', ownerUid, 'invitations', invitationId);
+      await setDoc(
+        ref,
+        {
+          templateId: 'plain',
+          bgUrl: null,
+          ownerMessage: '',
+          updatedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+      const fn = httpsCallable(getFunctions(), 'sendInvitations');
+      const result = await fn({
+        eventId: currentEventId,
+        invitationId,
+        guestIds: [guest.guestId],
+        customMessage: '',
+      });
+      const sent = result.data?.sent || [];
+      const ok = sent.find((s) => s.status === 'sent');
+      const skipped = sent.find((s) => s.status === 'skipped');
+      if (ok) {
+        alert(`✅ 已寄出電子喜帖到 ${guest.email}`);
+      } else if (skipped) {
+        alert(`⚠️ 跳過：${skipped.reason || '未設定 SMTP / 電郵地址無效'}`);
+      } else if (result.data?.dryRun) {
+        alert('🔧 DRY RUN：模擬寄出，未真正寄出。請到 Firebase Console 設定 SMTP secrets。');
+      } else {
+        alert('⚠️ 寄出失敗，請稍後再試。');
+      }
+    } catch (err) {
+      const code = err?.code || 'UNKNOWN';
+      const detail = err?.details?.message || err?.details || err?.message || String(err);
+      alert('寄出失敗\ncode: ' + code + '\nmessage: ' + detail);
+    } finally {
+      setSendingEmail(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
@@ -37,6 +95,16 @@ export function QrCodeModal({ guest, eventName, onClose, onCopy }) {
         <p className="text-[10px] text-slate-400 break-all mb-6 bg-slate-50 p-2 rounded">
           {shareUrl}
         </p>
+        {/* Action buttons: Email + Copy/WhatsApp */}
+        <button
+          onClick={handleSendEmail}
+          disabled={sendingEmail || !guest.email}
+          className="w-full mb-2 bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-700 shadow-sm flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          title={!guest.email ? '此嘉賓無電郵地址' : '寄出電子喜帖'}
+        >
+          <Mail className="w-4 h-4" />
+          {sendingEmail ? '寄送中…' : '📧 寄出電子喜帖'}
+        </button>
         <button
           onClick={() => onCopy(shareUrl)}
           className="w-full bg-indigo-500 text-white font-bold py-3 rounded-xl hover:bg-indigo-600 shadow-sm flex items-center justify-center gap-2"
