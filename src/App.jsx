@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Heart, LogOut, Users } from 'lucide-react';
 import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  onSnapshot,
-  updateDoc,
-  writeBatch,
-} from 'firebase/firestore';
+     addDoc,
+     collection,
+     deleteDoc,
+     doc,
+     onSnapshot,
+     query,
+     updateDoc,
+     where,
+     writeBatch,
+   } from 'firebase/firestore';
 
 import { db, appId } from './lib/firebase';
 
@@ -226,12 +228,16 @@ export default function App() {
     [targetUid, guest.isGuestMode, guestDataReady],
   );
 
-  const { data: allGuests } = useFirestoreCollection(
-    guestDataReady && targetUid
-      ? collection(db, 'artifacts', appId, 'users', targetUid, 'guests')
-      : null,
-    [targetUid, guestDataReady],
-  );
+   const { data: allGuests } = useFirestoreCollection(
+     guestDataReady && targetUid
+       ? query(
+           collection(db, 'artifacts', appId, 'users', targetUid, 'guests'),
+           where('eventId', '==', guest.isGuestMode ? guest.qEvent : '__any__')
+         )
+       : null,
+     [targetUid, guestDataReady, guest.qEvent],
+   );
+
 
   const { data: allPhotos } = useFirestoreCollection(
     targetUid
