@@ -57,23 +57,26 @@ service cloud.firestore {
     }
 
     // A guest has redeemed a QR-code link tying them to (owner, event).
+    // appId is hardcoded to 'savetheday-production' because Firestore rules
+    // cannot reliably resolve $(appId) template variables defined in
+    // outer match blocks when referenced from a function definition.
     function hasValidGuestLink(ownerUid, eventId) {
       return isSignedIn() &&
-        exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/guestLinks/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.eventId == eventId &&
-        get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.expiresAt > request.time;
+        exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.eventId == eventId &&
+        get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.expiresAt > request.time;
     }
 
     // A helper has been invited to help with (ownerUid, eventId). Returns the
     // helper doc data if active, otherwise null. Use hasHelperPerm() below
     // for boolean checks.
     function helperDoc(ownerUid) {
-      return get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/helpers/$(request.auth.uid));
+      return get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/helpers/$(request.auth.uid));
     }
 
     function isActiveHelper(ownerUid) {
       return isSignedIn() &&
-        exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/helpers/$(request.auth.uid)) &&
+        exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/helpers/$(request.auth.uid)) &&
         helperDoc(ownerUid).data.status == 'active';
     }
 

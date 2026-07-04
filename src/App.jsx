@@ -232,18 +232,26 @@ export default function App() {
      guestDataReady && targetUid
        ? query(
            collection(db, 'artifacts', appId, 'users', targetUid, 'guests'),
-           where('eventId', '==', guest.isGuestMode ? guest.qEvent : '__any__')
+           // Firestore rules reference resource.data.eventId — the query must
+           // include a where() filter matching that field or list queries are
+           // denied. In guest mode we use guest.qEvent, in owner mode we use
+           // the currently selected event ID.
+           where('eventId', '==', guest.isGuestMode ? guest.qEvent : (currentEvent?.id || '__no_event__'))
          )
        : null,
-     [targetUid, guestDataReady, guest.qEvent],
+     [targetUid, guestDataReady, guest.qEvent, currentEvent?.id],
    );
 
 
   const { data: allPhotos } = useFirestoreCollection(
-    targetUid
-      ? collection(db, 'artifacts', appId, 'users', targetUid, 'photos')
+    targetUid && (guest.isGuestMode || currentEvent)
+      ? query(
+          collection(db, 'artifacts', appId, 'users', targetUid, 'photos'),
+          // Rules reference resource.data.eventId — must filter by it in queries.
+          where('eventId', '==', guest.isGuestMode ? guest.qEvent : currentEvent.id)
+        )
       : null,
-    [targetUid],
+    [targetUid, guest.isGuestMode, guest.qEvent, currentEvent?.id],
   );
 
   const { data: tasks } = useFirestoreCollection(
