@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320">
+  <defs>
+    <radialGradient id="starfield" cx="50%" cy="50%" r="80%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </radialGradient>
+  </defs>
+  <rect width="240" height="320" fill="url(#starfield)"/>
+  <g fill="#fbbf24" opacity="0.8">
+    <circle cx="20" cy="30" r="0.8"/>
+    <circle cx="60" cy="50" r="1.2"/>
+    <circle cx="100" cy="20" r="0.8"/>
+    <circle cx="180" cy="40" r="1"/>
+    <circle cx="220" cy="60" r="0.6"/>
+    <circle cx="40" cy="100" r="0.6"/>
+    <circle cx="200" cy="120" r="0.8"/>
+    <circle cx="15" cy="160" r="1"/>
+    <circle cx="225" cy="200" r="0.8"/>
+    <circle cx="50" cy="240" r="0.6"/>
+  </g>
+  <text x="120" y="44" text-anchor="middle" fill="#fbbf24" font-family="-apple-system, sans-serif" font-size="9" font-weight="900" letter-spacing="3">✦ ELECTRONIC INVITATION ✦</text>
+  <text x="120" y="104" text-anchor="middle" fill="#f8fafc" font-family="serif" font-size="22" font-weight="900">婚禮晚宴</text>
+  <text x="120" y="132" text-anchor="middle" fill="#cbd5e1" font-family="-apple-system, sans-serif" font-size="11" font-weight="600">2026.10.18 · 18:30</text>
+  <text x="120" y="178" text-anchor="middle" fill="#cbd5e1" font-family="serif" font-size="11">親愛的</text>
+  <text x="120" y="210" text-anchor="middle" fill="#f8fafc" font-family="serif" font-size="24" font-weight="900">陳大文</text>
+  <text x="120" y="244" text-anchor="middle" fill="#cbd5e1" font-family="-apple-system, sans-serif" font-size="9">Ritz-Carlton · Hong Kong</text>
+  <rect x="80" y="256" width="80" height="80" fill="#fff" rx="6"/>
+  <rect x="92" y="268" width="56" height="56" fill="#0f172a"/>
+</svg>

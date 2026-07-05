@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { X, Mail, Image as ImageIcon, Send, Upload, Crown, Sparkles } from 'lucide-react';
-import { INVITATION_TEMPLATES } from '../components/invitation/templates';
+import { INVITATION_TEMPLATES, WORDING_TEMPLATES } from '../components/invitation/templates';
 import { InvitationCard } from '../components/invitation/InvitationCard';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
 import { db, appId } from '../lib/firebase';
@@ -261,20 +261,47 @@ function BackgroundStep({ templateId, setTemplateId, bgUrl, setBgUrl, onUpload, 
         <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
           <ImageIcon className="w-4 h-4" /> 揀一個模板
         </h3>
+        {(!INVITATION_TEMPLATES || INVITATION_TEMPLATES.length === 0) ? (
+          <div className="text-sm text-slate-500 italic p-4 bg-slate-50 rounded-xl">
+            載入模板中... 如果長時間空白,請 refresh 頁面。
+          </div>
+        ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {INVITATION_TEMPLATES.map((t) => (
             <button
               key={t.id}
               onClick={() => { setTemplateId(t.id); setBgUrl(null); }}
-              className={`relative rounded-xl border-2 overflow-hidden text-left transition-all ${
+              className={`relative rounded-xl border-2 overflow-hidden text-left transition-all bg-white ${
                 templateId === t.id ? 'border-rose-500 ring-2 ring-rose-200' : 'border-slate-200 hover:border-slate-300'
               }`}
             >
-              <div
-                className="h-24 flex items-center justify-center text-xs font-bold"
-                style={{ backgroundColor: t.palette.bg, color: t.palette.text }}
-              >
-                {t.label}
+              <div className="bg-slate-100 aspect-[3/4] flex items-center justify-center overflow-hidden">
+                {/* Render real SVG preview of the design so the user can
+                    visualize the layout before sending. Falls back to a
+                    color block if the SVG file is missing. */}
+                <img
+                  src={t.previewUrl}
+                  alt={t.label}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    // If the SVG 404s, swap to the colored fallback so the
+                    // UI is never visually empty.
+                    const el = e.currentTarget;
+                    if (!el.dataset.fallback) {
+                      el.dataset.fallback = '1';
+                      el.style.display = 'none';
+                      const parent = el.parentElement;
+                      if (parent && !parent.querySelector('.fallback-tile')) {
+                        const fb = document.createElement('div');
+                        fb.className = 'fallback-tile h-24 w-full flex items-center justify-center text-xs font-bold';
+                        fb.style.backgroundColor = t.palette.bg;
+                        fb.style.color = t.palette.text;
+                        fb.textContent = t.label;
+                        parent.appendChild(fb);
+                      }
+                    }
+                  }}
+                />
               </div>
               <div className="p-2 text-xs font-bold text-slate-700 flex justify-between items-center">
                 {t.label}
@@ -283,6 +310,7 @@ function BackgroundStep({ templateId, setTemplateId, bgUrl, setBgUrl, onUpload, 
             </button>
           ))}
         </div>
+        )}
       </div>
 
       <div className="border-t border-slate-200 pt-6">
@@ -334,7 +362,7 @@ function BackgroundStep({ templateId, setTemplateId, bgUrl, setBgUrl, onUpload, 
 
 function InfoStep({ ownerMessage, setOwnerMessage, event }) {
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-5">
       <h3 className="font-bold text-slate-800">婚禮資料（自動從活動填入，可修改）</h3>
       <div className="bg-slate-50 rounded-xl p-4 space-y-1 text-sm">
         <p><strong>名稱：</strong> {event?.name || '婚禮晚宴'}</p>
@@ -345,6 +373,44 @@ function InfoStep({ ownerMessage, setOwnerMessage, event }) {
       <p className="text-xs text-slate-500">
         想改呢啲資料？去「活動設定」頁改完再返嚟。
       </p>
+
+      {/* Wording templates — pick a starting point, then edit freely below */}
+      <div>
+        <label className="block font-bold text-slate-800 mb-2 flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-rose-500" /> 心意範本（揀一個再改都得）
+        </label>
+        {(!WORDING_TEMPLATES || WORDING_TEMPLATES.length === 0) ? (
+          <div className="text-xs text-slate-400 italic p-3 bg-slate-50 rounded-xl">
+            範本載入中...如果長時間空白,請 refresh 頁面。
+          </div>
+        ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {WORDING_TEMPLATES.map((w) => {
+            const isSelected = ownerMessage === w.text;
+            return (
+              <button
+                key={w.id}
+                type="button"
+                onClick={() => setOwnerMessage(w.text.slice(0, 200))}
+                className={`text-left p-3 rounded-xl border-2 transition-all bg-white ${
+                  isSelected
+                    ? 'border-rose-500 ring-2 ring-rose-200'
+                    : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                  <span className="text-base">{w.icon}</span>
+                  {w.label}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1.5 line-clamp-2 leading-snug">
+                  {w.text}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+        )}
+      </div>
 
       <div>
         <label className="block font-bold text-slate-800 mb-2">個人訊息（會出現在電子喜帖同 email 入面）</label>

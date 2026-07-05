@@ -56,3 +56,41 @@ export const INVITATION_TEMPLATES = [
 export function getTemplate(id) {
   return INVITATION_TEMPLATES.find((t) => t.id === id) || INVITATION_TEMPLATES[0];
 }
+
+// Preset messages the owner can pick from when filling the "personal
+// note" field. Each template targets a different HK wedding tone
+// (formal/traditional/casual/bilingual). The user can also write
+// their own — these are starting points that respect the 200-char
+// textarea limit.
+export const WORDING_TEMPLATES = [
+  {
+    id: 'classic',
+    label: '經典中式',
+    icon: '囍',
+    text: '謹訂於公曆二〇二六年十月十八日（星期六）下午六時，假香港麗思卡爾頓酒店三樓宴會廳，敬備喜酌。恭請蒞臨。',
+  },
+  {
+    id: 'warm',
+    label: '溫馨',
+    icon: '♡',
+    text: '我們結婚了 ❤️ 誠意邀請您蒞臨見證我們的重要時刻，一同分享這份喜悅。期待當晚見到您！',
+  },
+  {
+    id: 'casual',
+    label: '輕鬆',
+    icon: '✨',
+    text: 'Hi！我哋今年 10 月結婚啦，想邀請你一齊嚟見證 + 飲杯 🍾 唔好嘥咗個位啊！',
+  },
+  {
+    id: 'family',
+    label: '家族聚會',
+    icon: '⌂',
+    text: '家族大喜之日，誠邀各位親朋戚友一同慶賀見證。請於 10 月 1 日前回覆以便安排座位。',
+  },
+  {
+    id: 'grateful',
+    label: '感恩',
+    icon: '🙏',
+    text: '感謝您一直以來對我們嘅關懷同支持，期待喺呢個特別嘅日子同您共度。',
+  },
+];

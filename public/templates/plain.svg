@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320">
+  <rect width="240" height="320" fill="#ffffff"/>
+  <rect x="0" y="0" width="240" height="320" fill="none" stroke="#e11d48" stroke-width="1.5" opacity="0.2"/>
+  <text x="120" y="32" text-anchor="middle" fill="#e11d48" font-family="-apple-system, sans-serif" font-size="9" font-weight="900" letter-spacing="3">ELECTRONIC INVITATION</text>
+  <line x1="60" y1="56" x2="105" y2="56" stroke="#e11d48" stroke-width="1"/>
+  <line x1="135" y1="56" x2="180" y2="56" stroke="#e11d48" stroke-width="1"/>
+  <circle cx="120" cy="56" r="4" fill="#e11d48"/>
+  <text x="120" y="100" text-anchor="middle" fill="#1e293b" font-family="-apple-system, sans-serif" font-size="20" font-weight="900">婚禮晚宴</text>
+  <text x="120" y="124" text-anchor="middle" fill="#64748b" font-family="-apple-system, sans-serif" font-size="11" font-weight="600">2026.10.18 · 18:30</text>
+  <text x="120" y="170" text-anchor="middle" fill="#64748b" font-family="-apple-system, sans-serif" font-size="11">親愛的</text>
+  <text x="120" y="198" text-anchor="middle" fill="#1e293b" font-family="-apple-system, sans-serif" font-size="22" font-weight="900">陳大文</text>
+  <text x="120" y="240" text-anchor="middle" fill="#64748b" font-family="-apple-system, sans-serif" font-size="9">Ritz-Carlton</text>
+  <rect x="80" y="260" width="80" height="80" fill="#f8fafc" rx="6"/>
+  <rect x="92" y="272" width="56" height="56" fill="#0f172a"/>
+  <text x="120" y="354" text-anchor="middle" fill="#94a3b8" font-family="-apple-system, sans-serif" font-size="7">Save The Day · 囍程</text>
+</svg>

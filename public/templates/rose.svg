@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 320" width="240" height="320">
+  <rect width="240" height="320" fill="#fff1f2"/>
+  <line x1="40" y1="20" x2="200" y2="20" stroke="#e11d48" stroke-width="1.2" opacity="0.5"/>
+  <line x1="40" y1="300" x2="200" y2="300" stroke="#e11d48" stroke-width="1.2" opacity="0.5"/>
+  <text x="120" y="44" text-anchor="middle" fill="#e11d48" font-family="serif" font-size="10" font-weight="900" letter-spacing="3">~ ELECTRONIC INVITATION ~</text>
+  <text x="120" y="100" text-anchor="middle" fill="#881337" font-family="serif" font-size="22" font-weight="900">婚禮晚宴</text>
+  <line x1="80" y1="130" x2="100" y2="130" stroke="#e11d48" stroke-width="1"/>
+  <text x="120" y="134" text-anchor="middle" fill="#e11d48" font-size="14">♥</text>
+  <line x1="140" y1="130" x2="160" y2="130" stroke="#e11d48" stroke-width="1"/>
+  <text x="120" y="158" text-anchor="middle" fill="#9f1239" font-family="-apple-system, sans-serif" font-size="11" font-weight="600">2026.10.18 · 18:30</text>
+  <text x="120" y="200" text-anchor="middle" fill="#9f1239" font-family="serif" font-size="11">親愛的</text>
+  <text x="120" y="232" text-anchor="middle" fill="#881337" font-family="serif" font-size="24" font-weight="900">陳大文</text>
+  <text x="120" y="268" text-anchor="middle" fill="#9f1239" font-family="serif" font-size="9">Ritz-Carlton · Hong Kong</text>
+  <rect x="80" y="280" width="80" height="80" fill="#fff" rx="4" stroke="#e11d48" stroke-width="0.5" opacity="0.8"/>
+  <rect x="92" y="292" width="56" height="56" fill="#0f172a"/>
+</svg>
