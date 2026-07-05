@@ -453,6 +453,11 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 // Restore 2026-07-02: re-export sendInvitations (defined in invitations.ts)
 export * from './invitations';
 
+// 2026-07-03: admin-only invitation template editor.
+// The callable lives in ./templates.ts (updateTemplate) — re-exported
+// here so `firebase deploy --only functions` picks it up automatically.
+export * from './templates';
+
 export const grantAdmin = onCall(async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');

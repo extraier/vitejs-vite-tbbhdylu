@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { X, Mail, Image as ImageIcon, Send, Upload, Crown, Sparkles } from 'lucide-react';
-import { INVITATION_TEMPLATES, WORDING_TEMPLATES } from '../components/invitation/templates';
+import { X, Mail, Image as ImageIcon, Send, Upload, Crown, Sparkles, Edit2, Check, Loader2 } from 'lucide-react';
+import {
+  INVITATION_TEMPLATES,
+  WORDING_TEMPLATES,
+  loadLiveTemplates,
+} from '../components/invitation/templates';
 import { InvitationCard } from '../components/invitation/InvitationCard';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
 import { db, appId } from '../lib/firebase';
@@ -20,6 +24,7 @@ export function InvitationEditor({
   event,
   guests,
   ownerTier = 'free',
+  isAdmin = false,
   onClose,
   onSent,
 }) {
@@ -34,6 +39,21 @@ export function InvitationEditor({
   const [previewGuestId, setPreviewGuestId] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef(null);
+
+  // 2026-07-03 — load live templates from Firestore/Storage so admin
+  // SVG uploads show up in the picker. INVITATION_TEMPLATES is the
+  // bundled fallback; loadLiveTemplates overlays Firestore overrides
+  // (previewUrl / palette / label / layout) on top.
+  const [templates, setTemplates] = useState(INVITATION_TEMPLATES);
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      const live = await loadLiveTemplates(db, appId);
+      if (!cancelled) setTemplates(live);
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen]);
 
   // Load existing invitation doc on mount
   useEffect(() => {
@@ -130,6 +150,50 @@ export function InvitationEditor({
     }
   };
 
+  // 2026-07-03 — admin-only template SVG editor. Base64-encodes the
+  // chosen file, calls the `updateTemplate` Cloud Function, then refreshes
+  // the live templates list so the picker immediately reflects the new
+  // preview. The function gates on the admin custom claim; if the caller
+  // somehow has the UI without the claim, the call returns
+  // permission-denied and we surface that to the admin so they know to
+  // re-check their auth state.
+  const handleTemplateUpload = async (templateId, file, label) => {
+    setIsUploading(true);
+    try {
+      // Hard client-side check before we waste the upload.
+      if (!file.type.includes('svg') && !file.name.toLowerCase().endsWith('.svg')) {
+        throw new Error('檔案必須係 .svg');
+      }
+      if (file.size > 256 * 1024) {
+        throw new Error('SVG 太大 (上限 256 KB)');
+      }
+      // Read as base64 (chunked-safe; works for files up to a few MB).
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const svgBase64 = dataUrl.split(',')[1];
+
+      const fn = httpsCallable(getFunctions(), 'updateTemplate');
+      const result = await fn({ templateId, svgBase64, label });
+      // Refresh the live list so the picker reflects the new preview URL.
+      const live = await loadLiveTemplates(db, appId);
+      setTemplates(live);
+      // Tiny visual confirmation — we don't toast here because the
+      // BackgroundStep already shows an inline check.
+      return result.data;
+    } catch (err) {
+      // httpsCallable surfaces the server message in err.message.
+      const msg = err?.message || '上傳失敗';
+      alert(`模板上傳失敗: ${msg}`);
+      throw err;
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 overflow-y-auto">
       <div className="min-h-full flex items-start sm:items-center justify-center p-4 pt-20 pb-12 sm:py-8">
@@ -174,14 +238,17 @@ export function InvitationEditor({
         <div className="overflow-visible">
           {step === 0 && (
             <BackgroundStep
+              templates={templates}
               templateId={templateId}
               setTemplateId={setTemplateId}
               bgUrl={bgUrl}
               setBgUrl={setBgUrl}
               onUpload={handleBgUpload}
+              onTemplateUpload={handleTemplateUpload}
               isUploading={isUploading}
               fileInputRef={fileInputRef}
               ownerTier={ownerTier}
+              isAdmin={isAdmin}
               onPremiumRequired={() => setShowUpgrade(true)}
             />
           )}
@@ -263,61 +330,189 @@ export function InvitationEditor({
   );
 }
 
-function BackgroundStep({ templateId, setTemplateId, bgUrl, setBgUrl, onUpload, isUploading, fileInputRef, ownerTier, onPremiumRequired }) {
+function BackgroundStep({
+  templates,
+  templateId,
+  setTemplateId,
+  bgUrl,
+  setBgUrl,
+  onUpload,
+  onTemplateUpload,
+  isUploading,
+  fileInputRef,
+  ownerTier,
+  isAdmin,
+  onPremiumRequired,
+}) {
+  // Per-tile file inputs for the admin upload (one ref per template id so
+  // each tile can trigger its own picker).
+  const tileInputRefs = useRef({});
+  // Track which tile is currently being uploaded so we can show a spinner
+  // overlay on that exact tile, not on the whole grid.
+  const [uploadingTileId, setUploadingTileId] = useState(null);
+  // Cache-bust the preview <img> after an upload so the browser re-fetches
+  // the freshly-updated Storage object (cacheControl=300s means a single
+  // upload inside 5 min would otherwise show the old SVG).
+  const [previewNonce, setPreviewNonce] = useState(0);
+  // Briefly show a green checkmark on a tile after a successful upload.
+  const [recentlyUploadedId, setRecentlyUploadedId] = useState(null);
+
+  // 2026-07-03 — admin upload handler. Wraps onTemplateUpload so we can
+  // show a per-tile spinner + cache-bust the preview.
+  const handleTileUpload = async (tileId, file) => {
+    setUploadingTileId(tileId);
+    try {
+      const tpl = (templates || INVITATION_TEMPLATES).find((t) => t.id === tileId);
+      await onTemplateUpload(tileId, file, tpl?.label);
+      // Force re-fetch of the SVG. The storage object's publicUrl is stable
+      // across uploads (same path), so we append a query string that the
+      // browser treats as a different resource.
+      setPreviewNonce((n) => n + 1);
+      setRecentlyUploadedId(tileId);
+      setTimeout(() => setRecentlyUploadedId(null), 2500);
+    } catch {
+      // alert already shown by onTemplateUpload
+    } finally {
+      setUploadingTileId(null);
+    }
+  };
+
+  // Compose the rendered templates list. Default to INVITATION_TEMPLATES
+  // so the grid renders even before loadLiveTemplates resolves.
+  const tpls = (templates && templates.length > 0) ? templates : INVITATION_TEMPLATES;
+
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
-          <ImageIcon className="w-4 h-4" /> 揀一個模板
-        </h3>
-        {(!INVITATION_TEMPLATES || INVITATION_TEMPLATES.length === 0) ? (
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-slate-800 flex items-center gap-2">
+            <ImageIcon className="w-4 h-4" /> 揀一個模板
+            {isAdmin && (
+              <span className="text-[10px] bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full font-bold">
+                管理員可編輯
+              </span>
+            )}
+          </h3>
+          <span className="text-xs text-slate-400">{tpls.length} 個</span>
+        </div>
+        {(!tpls || tpls.length === 0) ? (
           <div className="text-sm text-slate-500 italic p-4 bg-slate-50 rounded-xl">
             載入模板中... 如果長時間空白,請 refresh 頁面。
           </div>
         ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          {INVITATION_TEMPLATES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => { setTemplateId(t.id); setBgUrl(null); }}
-              className={`relative rounded-xl border-2 overflow-hidden text-left transition-all bg-white ${
-                templateId === t.id ? 'border-rose-500 ring-2 ring-rose-200' : 'border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              <div className="bg-slate-100 aspect-[3/4] flex items-center justify-center overflow-hidden">
-                {/* Render real SVG preview of the design so the user can
-                    visualize the layout before sending. Falls back to a
-                    color block if the SVG file is missing. */}
-                <img
-                  src={t.previewUrl}
-                  alt={t.label}
-                  className="w-full h-full object-cover"
-                  onError={(e) => {
-                    // If the SVG 404s, swap to the colored fallback so the
-                    // UI is never visually empty.
-                    const el = e.currentTarget;
-                    if (!el.dataset.fallback) {
-                      el.dataset.fallback = '1';
-                      el.style.display = 'none';
-                      const parent = el.parentElement;
-                      if (parent && !parent.querySelector('.fallback-tile')) {
-                        const fb = document.createElement('div');
-                        fb.className = 'fallback-tile h-24 w-full flex items-center justify-center text-xs font-bold';
-                        fb.style.backgroundColor = t.palette.bg;
-                        fb.style.color = t.palette.text;
-                        fb.textContent = t.label;
-                        parent.appendChild(fb);
-                      }
-                    }
-                  }}
-                />
+          {tpls.map((t) => {
+            const isSelected = templateId === t.id;
+            const isUploadingThis = uploadingTileId === t.id;
+            const justUploaded = recentlyUploadedId === t.id;
+            // Cache-bust uploaded previews: append ?v=<nonce> so the browser
+            // fetches the freshly-stored SVG instead of the cached one.
+            // We only need the nonce when the template is custom-uploaded;
+            // the bundled fallback already changes when the bundle hash
+            // changes (Vite asset hashing).
+            const src = (t.isCustom && previewNonce > 0)
+              ? `${t.previewUrl}${t.previewUrl.includes('?') ? '&' : '?'}v=${previewNonce}`
+              : t.previewUrl;
+            return (
+              <div
+                key={t.id}
+                className={`relative rounded-xl border-2 overflow-hidden text-left transition-all bg-white ${
+                  isSelected ? 'border-rose-500 ring-2 ring-rose-200' : 'border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => { setTemplateId(t.id); setBgUrl(null); }}
+                  className="block w-full text-left"
+                >
+                  <div className="bg-slate-100 aspect-[3/4] flex items-center justify-center overflow-hidden relative">
+                    {/* Render real SVG preview of the design so the user can
+                        visualize the layout before sending. Falls back to a
+                        color block if the SVG file is missing. */}
+                    <img
+                      src={src}
+                      alt={t.label}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        // If the SVG 404s, swap to the colored fallback so the
+                        // UI is never visually empty.
+                        const el = e.currentTarget;
+                        if (!el.dataset.fallback) {
+                          el.dataset.fallback = '1';
+                          el.style.display = 'none';
+                          const parent = el.parentElement;
+                          if (parent && !parent.querySelector('.fallback-tile')) {
+                            const fb = document.createElement('div');
+                            fb.className = 'fallback-tile h-24 w-full flex items-center justify-center text-xs font-bold';
+                            fb.style.backgroundColor = t.palette.bg;
+                            fb.style.color = t.palette.text;
+                            fb.textContent = t.label;
+                            parent.appendChild(fb);
+                          }
+                        }
+                      }}
+                    />
+                    {/* Per-tile uploading overlay */}
+                    {isUploadingThis && (
+                      <div className="absolute inset-0 bg-white/70 flex items-center justify-center">
+                        <Loader2 className="w-6 h-6 text-rose-500 animate-spin" />
+                      </div>
+                    )}
+                    {/* Just-uploaded confirmation overlay */}
+                    {justUploaded && !isUploadingThis && (
+                      <div className="absolute inset-0 bg-emerald-50/80 flex items-center justify-center">
+                        <div className="bg-emerald-500 text-white rounded-full p-2">
+                          <Check className="w-5 h-5" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-2 text-xs font-bold text-slate-700 flex justify-between items-center">
+                    <span className="flex items-center gap-1">
+                      {t.label}
+                      {t.isPremium && <Crown className="w-3 h-3 text-amber-500" />}
+                      {t.isCustom && (
+                        <span className="text-[9px] font-normal text-emerald-600 ml-1" title="已自訂上傳">
+                          自訂
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </button>
+                {/* Admin-only edit button (rendered ABOVE the click target so it
+                    doesn't accidentally trigger the tile's select handler). */}
+                {isAdmin && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        tileInputRefs.current[t.id]?.click();
+                      }}
+                      disabled={isUploading || isUploadingThis}
+                      title="更換此模板的 SVG"
+                      className="absolute top-2 right-2 bg-white/90 hover:bg-white text-slate-600 hover:text-rose-600 rounded-full p-1.5 shadow-sm border border-slate-200 transition-colors disabled:opacity-40"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                    </button>
+                    <input
+                      ref={(el) => { tileInputRefs.current[t.id] = el; }}
+                      type="file"
+                      accept="image/svg+xml,.svg"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        handleTileUpload(t.id, f);
+                        // Reset so the same file can be re-picked.
+                        e.target.value = '';
+                      }}
+                    />
+                  </>
+                )}
               </div>
-              <div className="p-2 text-xs font-bold text-slate-700 flex justify-between items-center">
-                {t.label}
-                {t.isPremium && <Crown className="w-3 h-3 text-amber-500" />}
-              </div>
-            </button>
-          ))}
+            );
+          })}
         </div>
         )}
       </div>

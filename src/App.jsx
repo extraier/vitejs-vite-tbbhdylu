@@ -1045,6 +1045,7 @@ export default function App() {
           event={currentEvent}
           guests={eventGuests}
           ownerTier={currentEvent.tier || 'free'}
+          isAdmin={isAdmin}
           onClose={() => setShowInvitationEditor(false)}
         />
       )}

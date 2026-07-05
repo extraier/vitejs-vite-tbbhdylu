@@ -1,6 +1,19 @@
 // Pure-data registry of stock invitation templates.
 // Each template describes a visual layout; the renderer (InvitationCard.jsx)
 // uses these props to paint text + accents on top of an optional bg image.
+//
+// Storage layout
+// --------------
+// The 6 hardcoded entries below are the BUNDLED FALLBACK. When Firestore
+// has an overriding doc at artifacts/{appId}/templates/{id}, `loadLiveTemplates`
+// merges it on top — admin-uploaded SVGs win, but the same 6 IDs stay stable
+// so the picker never breaks.
+//
+// Why hardcoded IDs (not generated)
+// ---------------------------------
+// IDs are referenced everywhere (background templates, InvitationCard renderer,
+// email templates, email log records). Changing one would orphan every saved
+// invitation. Keep these stable forever.
 
 export const INVITATION_TEMPLATES = [
   {
@@ -10,6 +23,8 @@ export const INVITATION_TEMPLATES = [
     layout: 'centered',
     isPremium: false,
     previewUrl: '/templates/plain.svg',
+    storagePath: 'invitation-templates/plain.svg',
+    isCustom: false,
   },
   {
     id: 'tpl-rose',
@@ -18,6 +33,8 @@ export const INVITATION_TEMPLATES = [
     layout: 'ornate',
     isPremium: false,
     previewUrl: '/templates/rose.svg',
+    storagePath: 'invitation-templates/rose.svg',
+    isCustom: false,
   },
   {
     id: 'tpl-jade',
@@ -26,6 +43,8 @@ export const INVITATION_TEMPLATES = [
     layout: 'stacked',
     isPremium: false,
     previewUrl: '/templates/jade.svg',
+    storagePath: 'invitation-templates/jade.svg',
+    isCustom: false,
   },
   {
     id: 'tpl-midnight',
@@ -34,6 +53,8 @@ export const INVITATION_TEMPLATES = [
     layout: 'centered',
     isPremium: false,
     previewUrl: '/templates/midnight.svg',
+    storagePath: 'invitation-templates/midnight.svg',
+    isCustom: false,
   },
   {
     id: 'tpl-blush',
@@ -42,6 +63,8 @@ export const INVITATION_TEMPLATES = [
     layout: 'ornate',
     isPremium: false,
     previewUrl: '/templates/blush.svg',
+    storagePath: 'invitation-templates/blush.svg',
+    isCustom: false,
   },
   {
     id: 'tpl-sage',
@@ -50,11 +73,75 @@ export const INVITATION_TEMPLATES = [
     layout: 'stacked',
     isPremium: false,
     previewUrl: '/templates/sage.svg',
+    storagePath: 'invitation-templates/sage.svg',
+    isCustom: false,
   },
 ];
 
 export function getTemplate(id) {
   return INVITATION_TEMPLATES.find((t) => t.id === id) || INVITATION_TEMPLATES[0];
+}
+
+// ─── Live overlay ─────────────────────────────────────────────────────────
+//
+// loadLiveTemplates(db, appId) reads artifacts/{appId}/templates/* + the
+// cache-buster meta doc, then returns a NEW array of 6 templates where any
+// admin-uploaded overrides win over the bundled fallback. The function is
+// defensive: a Firestore read failure returns the bundled fallback
+// unchanged (the picker never goes blank).
+//
+// Why we DON'T mutate INVITATION_TEMPLATES
+// ----------------------------------------
+// Modules in JS are cached singletons. Mutating exports means a stale
+// Vercel bundle could ship a poisoned picker the next time the user
+// refreshes — once. We return a fresh array each call so the function is
+// pure and the caller controls when to re-render.
+
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
+
+export async function loadLiveTemplates(db, appId) {
+  try {
+    const snap = await getDocs(collection(db, 'artifacts', appId, 'templates'));
+    if (snap.empty) return INVITATION_TEMPLATES;
+
+    const overrides = {};
+    snap.forEach((d) => { overrides[d.id] = d.data(); });
+
+    return INVITATION_TEMPLATES.map((tpl) => {
+      const ov = overrides[tpl.id];
+      if (!ov) return tpl;
+      return {
+        ...tpl,
+        // Admin-uploaded SVG wins; fall back to bundled if missing.
+        previewUrl: ov.publicUrl || tpl.previewUrl,
+        storagePath: ov.storagePath || tpl.storagePath,
+        label: ov.label || tpl.label,
+        palette: { ...tpl.palette, ...(ov.palette || {}) },
+        layout: ov.layout || tpl.layout,
+        // Mark as custom-uploaded so the UI shows an "updated X" badge.
+        updatedAt: ov.updatedAt || null,
+        updatedBy: ov.updatedBy || null,
+        isCustom: true,
+      };
+    });
+  } catch (err) {
+    console.warn('[templates] loadLiveTemplates failed; using bundled fallback:', err);
+    return INVITATION_TEMPLATES;
+  }
+}
+
+// Returns the server timestamp of the last template upload (or null). The
+// caller can compare against its last-known value to decide whether to
+// re-fetch loadLiveTemplates.
+export async function getTemplatesVersion(db, appId) {
+  try {
+    const snap = await getDoc(doc(db, 'artifacts', appId, 'meta', 'templates'));
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    return data.updatedAt?.toMillis?.() || null;
+  } catch {
+    return null;
+  }
 }
 
 // Preset messages the owner can pick from when filling the "personal

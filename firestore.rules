@@ -168,6 +168,33 @@ service cloud.firestore {
           allow write: if isOwner(ownerUid);
         }
 
+        // Invitations: owner full CRUD. These are the electronic-invitation
+        // templates (templateId, bgUrl, ownerMessage) that sendInvitations
+        // callable reads to build the per-guest email/QR. No helper access —
+        // inviting guests is an owner-only decision.
+        match /invitations/{invitationId} {
+          allow read, write: if isOwner(ownerUid);
+        }
+
+        // 2026-07-03 — admin-managed invitation template catalog.
+        // These are the 6 stock SVG templates (plain / tpl-rose / tpl-jade /
+        // tpl-midnight / tpl-blush / tpl-sage) the picker renders on
+        // InvitationEditor step 1. Public read so guests can preview tiles
+        // without signing in. Writes are admin-only — the in-app UI goes
+        // through the `updateTemplate` Cloud Function (which runs as the
+        // service account and bypasses these rules), so this admin gate
+        // is the second line of defense for direct client writes.
+        match /templates/{templateId} {
+          allow read: if true;
+          allow write: if isAdmin();
+        }
+        // Cache-buster touched whenever templates/* is updated. Clients
+        // watch this doc's updatedAt to know when to re-fetch.
+        match /meta/{metaId} {
+          allow read: if true;
+          allow write: if isAdmin();
+        }
+
         // GuestLinks: owner generates + reads. Guest creates exactly ONE
         // (their own doc, keyed by auth.uid) during QR redemption.
         match /guestLinks/{linkDocId} {
