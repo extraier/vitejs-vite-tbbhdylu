@@ -131,10 +131,11 @@ export function InvitationEditor({
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl max-w-5xl w-full max-h-[92vh] overflow-hidden flex flex-col shadow-2xl">
+    <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 overflow-y-auto">
+      <div className="min-h-full flex items-center justify-center p-4 py-8">
+      <div className="bg-white rounded-3xl max-w-5xl w-full flex flex-col shadow-2xl my-auto">
         {/* Header */}
-        <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-gradient-to-r from-rose-50 to-pink-50">
+        <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-gradient-to-r from-rose-50 to-pink-50 rounded-t-3xl">
           <div>
             <h2 className="text-xl font-black text-slate-800 flex items-center gap-2">
               <Mail className="w-5 h-5 text-rose-500" />
@@ -162,8 +163,11 @@ export function InvitationEditor({
           ))}
         </div>
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Body — flex-1 + min-h-0 lets this own the remaining space when
+            parent has a fixed height. With max-h removed and the modal
+            sized to its content, the body simply takes its natural height
+            and the outer fixed container scrolls. */}
+        <div className="flex-1 min-h-0 overflow-visible">
           {step === 0 && (
             <BackgroundStep
               templateId={templateId}
@@ -191,7 +195,7 @@ export function InvitationEditor({
           )}
         </div>
 
-        {/* Live preview pane (always visible) */}
+        {/* Live preview pane (always visible) — collapsible on small screens */}
         <div className="border-t border-slate-200 bg-slate-50 p-4">
           <p className="text-xs text-slate-500 mb-2 font-bold flex items-center gap-1">
             <Sparkles className="w-3 h-3" /> 即時預覽 · {previewGuest?.name || '（揀一位嘉賓）'}
@@ -209,7 +213,7 @@ export function InvitationEditor({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-slate-200 flex justify-between">
+        <div className="p-4 border-t border-slate-200 flex justify-between rounded-b-3xl">
           <button
             onClick={() => setStep(Math.max(0, step - 1))}
             disabled={step === 0}
@@ -250,7 +254,8 @@ export function InvitationEditor({
           alert('感謝支持！Premium 功能稍後正式開通，現可繼續使用免費模板。');
         }}
       />
-    </div>
+      </div>
+      </div>
   );
 }
 
