@@ -132,7 +132,7 @@ export function InvitationEditor({
 
   return (
     <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-50 overflow-y-auto">
-      <div className="min-h-full flex items-center justify-center p-4 py-8">
+      <div className="min-h-full flex items-start sm:items-center justify-center p-4 pt-20 pb-12 sm:py-8">
       <div className="bg-white rounded-3xl max-w-5xl w-full flex flex-col shadow-2xl my-auto">
         {/* Header */}
         <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-gradient-to-r from-rose-50 to-pink-50 rounded-t-3xl">
@@ -163,11 +163,15 @@ export function InvitationEditor({
           ))}
         </div>
 
-        {/* Body — flex-1 + min-h-0 lets this own the remaining space when
-            parent has a fixed height. With max-h removed and the modal
-            sized to its content, the body simply takes its natural height
-            and the outer fixed container scrolls. */}
-        <div className="flex-1 min-h-0 overflow-visible">
+        {/* Body — keeps its natural content height. `flex-1` would zero
+            out here because the modal is content-sized (no h-[X]),
+            and flex-1 with flex-basis:0% means "grow from 0", which
+            leaves 0 leftover for siblings that already consume all
+            the room. Without flex-1, the body simply takes its
+            natural ~500px on step 2 / ~600px on step 1. The outer
+            fixed-inset-0 overflow-y-auto handles scroll if the
+            modal exceeds viewport. */}
+        <div className="overflow-visible">
           {step === 0 && (
             <BackgroundStep
               templateId={templateId}
