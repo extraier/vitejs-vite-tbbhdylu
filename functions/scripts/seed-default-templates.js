@@ -65,6 +65,23 @@ const BUCKET_NAME =
     ? `${PROJECT_ID}.appspot.com`
     : `${PROJECT_ID}.appspot.com`);
 
+// If GOOGLE_APPLICATION_CREDENTIALS is set but the JSON file is missing
+// `project_id` (common with gcloud's legacy_credentials ADC files), patch
+// it inline before handing to firebase-admin. This is the same trick
+// scripts/mint-token.cjs uses.
+function loadServiceAccount() {
+  const adcPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (!adcPath) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(adcPath, 'utf8'));
+    if (!raw.project_id) raw.project_id = PROJECT_ID;
+    return raw;
+  } catch (e) {
+    console.error('Could not read GOOGLE_APPLICATION_CREDENTIALS:', e.message);
+    return null;
+  }
+}
+
 // The 6 stock templates — keep in sync with src/components/invitation/templates.js.
 // When you add a 7th slot, add a row here AND a matching SVG in public/templates/.
 const TEMPLATES = [
@@ -117,10 +134,10 @@ async function main() {
   // emulators we point at localhost so getFirestore()/getStorage() pick up
   // FIRESTORE_EMULATOR_HOST / FIREBASE_STORAGE_EMULATOR_HOST automatically.
   if (!admin.apps.length) {
-    admin.initializeApp({
-      projectId: PROJECT_ID,
-      storageBucket: BUCKET_NAME,
-    });
+    const credential = loadServiceAccount();
+    const initOpts = { projectId: PROJECT_ID, storageBucket: BUCKET_NAME };
+    if (credential) initOpts.credential = admin.credential.cert(credential);
+    admin.initializeApp(initOpts);
   }
 
   const db = admin.firestore();
