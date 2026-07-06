@@ -160,12 +160,19 @@ export function InvitationEditor({
   const handleTemplateUpload = async (templateId, file, label) => {
     setIsUploading(true);
     try {
-      // Hard client-side check before we waste the upload.
-      if (!file.type.includes('svg') && !file.name.toLowerCase().endsWith('.svg')) {
-        throw new Error('檔案必須係 .svg');
+      // Soft client-side check. Server-side magic-byte sniffing is the
+      // source of truth — we just want to give a friendlier error before
+      // uploading a 256KB blob that will be rejected anyway.
+      const ok =
+        file.type === 'image/svg+xml' ||
+        file.type === 'image/png' ||
+        file.type === 'image/jpeg' ||
+        file.name.toLowerCase().match(/\.(svg|png|jpe?g)$/);
+      if (!ok) {
+        throw new Error('檔案必須係 SVG / PNG / JPG');
       }
       if (file.size > 256 * 1024) {
-        throw new Error('SVG 太大 (上限 256 KB)');
+        throw new Error('檔案太大 (上限 256 KB)');
       }
       // Read as base64 (chunked-safe; works for files up to a few MB).
       const dataUrl = await new Promise((resolve, reject) => {
@@ -498,7 +505,7 @@ function BackgroundStep({
                     <input
                       ref={(el) => { tileInputRefs.current[t.id] = el; }}
                       type="file"
-                      accept="image/svg+xml,.svg"
+                      accept="image/svg+xml,image/png,image/jpeg,.svg,.png,.jpg,.jpeg"
                       className="hidden"
                       onChange={(e) => {
                         const f = e.target.files?.[0];

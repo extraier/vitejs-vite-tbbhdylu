@@ -44,8 +44,14 @@ interface UpdateTemplateInput {
   label?: string;
   palette?: { bg?: string; text?: string; accent?: string; muted?: string };
   layout?: 'centered' | 'ornate' | 'stacked';
-  svgBase64: string;       // raw SVG bytes, base64-encoded (no data: prefix)
-  contentType?: string;    // must be 'image/svg+xml'
+  // The raw file bytes as base64. Accepts:
+  //   - SVG (image/svg+xml): stored as-is
+  //   - PNG  (image/png):     wrapped in SVG <image> at upload time
+  //   - JPEG (image/jpeg):    wrapped in SVG <image> at upload time
+  // We sniff the magic bytes server-side; the client's file.type is
+  // advisory only.
+  svgBase64: string;
+  contentType?: string;    // optional advisory hint from the client
 }
 
 interface UpdateTemplateResult {
@@ -55,6 +61,8 @@ interface UpdateTemplateResult {
   publicUrl: string;
   bytes: number;
   sha256: string;
+  sourceFormat: 'svg' | 'png' | 'jpeg';
+  sourceDimensions: { width: number; height: number } | null;
   updatedAt: number;
 }
 
@@ -140,20 +148,168 @@ async function getAccessToken(): Promise<string> {
 }
 
 /**
+ * Image format detection — sniffs the first few bytes of a buffer and
+ * returns the MIME type if it's an image we can handle, otherwise null.
+ *
+ * Supported: image/svg+xml, image/png, image/jpeg
+ * (webp omitted: most editors don't export, and we don't want to
+ * add a libwebp dependency just for that.)
+ */
+function detectImageMime(buf: Buffer): 'image/svg+xml' | 'image/png' | 'image/jpeg' | null {
+  // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+  if (buf.length >= 8 &&
+      buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47 &&
+      buf[4] === 0x0D && buf[5] === 0x0A && buf[6] === 0x1A && buf[7] === 0x0A) {
+    return 'image/png';
+  }
+  // JPEG signature: FF D8 FF
+  if (buf.length >= 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) {
+    return 'image/jpeg';
+  }
+  // SVG: text content starting with <svg or <?xml ... <svg
+  const head = buf.slice(0, 4096).toString('utf8').trimStart();
+  if (head.startsWith('<svg') || head.startsWith('<?xml')) {
+    // Also confirm it eventually contains <svg (not just XML prolog)
+    if (head.startsWith('<?xml')) {
+      if (/<svg[\s>]/i.test(head.slice(head.indexOf('?>') + 2))) return 'image/svg+xml';
+    } else {
+      return 'image/svg+xml';
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract width/height from a PNG buffer by reading the IHDR chunk.
+ * PNG layout: 8-byte signature, then chunks. Each chunk has
+ *   length(4) | type(4) | data(length) | crc(4)
+ * IHDR data is 13 bytes: width(4) + height(4) + bitDepth(1) +
+ *   colorType(1) + compression(1) + filter(1) + interlace(1).
+ * Width/height are big-endian uint32.
+ */
+function readPngDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (buf.length < 24) return null;
+  // IHDR starts at offset 8 (after signature), chunk type at offset 12,
+  // width at offset 16, height at offset 20.
+  // Verify chunk type is "IHDR" (bytes 12..15).
+  if (buf[12] !== 0x49 || buf[13] !== 0x48 || buf[14] !== 0x44 || buf[15] !== 0x52) return null;
+  const width = buf.readUInt32BE(16);
+  const height = buf.readUInt32BE(20);
+  if (width <= 0 || height <= 0 || width > 8192 || height > 8192) return null;
+  return { width, height };
+}
+
+/**
+ * Extract width/height from a JPEG buffer by walking markers until we
+ * find SOF0 (baseline) or SOF2 (progressive). The SOF marker data is:
+ *   length(2) | precision(1) | height(2) | width(2) ...
+ * Both dimensions are big-endian uint16.
+ *
+ * Returns null on any malformed JPEG — caller should treat as "couldn't
+ * determine dimensions" rather than "invalid file", because some JPEGs
+ * (lossless, CMYK-reversed) use different markers we don't care about.
+ */
+function readJpegDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (buf.length < 4 || buf[0] !== 0xFF || buf[1] !== 0xD8) return null;
+  let i = 2;
+  while (i < buf.length - 1) {
+    if (buf[i] !== 0xFF) return null;
+    // Skip any 0xFF fill bytes (allowed between markers).
+    while (i < buf.length && buf[i] === 0xFF) i++;
+    if (i >= buf.length) return null;
+    const marker = buf[i];
+    i++;
+    // Standalone markers (no length): RST0-RST7 (0xD0-0xD7), SOI (0xD8), EOI (0xD9), TEM (0x01)
+    if (
+      (marker >= 0xD0 && marker <= 0xD7) ||
+      marker === 0xD8 ||
+      marker === 0xD9 ||
+      marker === 0x01
+    ) continue;
+    // All other markers have a 2-byte length right after.
+    if (i + 2 > buf.length) return null;
+    const segLen = buf.readUInt16BE(i);
+    // SOF0 (0xC0) = baseline, SOF2 (0xC2) = progressive. Skip the others
+    // (SOF1 = extended sequential, SOF3 = lossless, etc. — uncommon).
+    if (marker === 0xC0 || marker === 0xC2) {
+      if (i + 7 > buf.length) return null;
+      const height = buf.readUInt16BE(i + 3);
+      const width = buf.readUInt16BE(i + 5);
+      if (width <= 0 || height <= 0 || width > 8192 || height > 8192) return null;
+      return { width, height };
+    }
+    // Skip the segment's data.
+    i += segLen;
+  }
+  return null;
+}
+
+/**
  * Cheap SVG check — confirms the file is an XML document with an <svg>
  * root element. We don't try to render or fully validate against the
  * SVG spec (the renderer in InvitationCard is tolerant), but we DO want
- * to reject anything that obviously isn't SVG (pngs renamed to .svg,
- * html, etc.) so the preview grid doesn't blow up.
+ * to reject anything that obviously isn't SVG (html, plain text, etc.)
+ * so the preview grid doesn't blow up.
  */
 function isLikelySvg(buf: Buffer): boolean {
-  // Strip leading whitespace + BOM.
   const head = buf.slice(0, 4096).toString('utf8').trimStart();
-  // Must start with <svg or <?xml followed by <svg (allow XML prolog).
   if (head.startsWith('<?xml')) {
     return /<svg[\s>]/i.test(head.slice(head.indexOf('?>') + 2));
   }
   return /^<svg[\s>]/i.test(head);
+}
+
+/**
+ * Best-effort width/height parse off the <svg ...> root tag's attributes.
+ * Used only for telemetry — the renderer's CSS handles cropping, so this
+ * is purely informational. Returns null if the attributes are missing
+ * or use unsupported units (em, %, etc.).
+ */
+function parseSvgDimensions(buf: Buffer): { width: number; height: number } | null {
+  const head = buf.slice(0, 2048).toString('utf8');
+  const m = head.match(/<svg[\s>][^>]*?>/i);
+  if (!m) return null;
+  const tag = m[0];
+  const w = tag.match(/\bwidth=["']?([\d.]+)/i);
+  const h = tag.match(/\bheight=["']?([\d.]+)/i);
+  if (!w || !h) return null;
+  const width = parseFloat(w[1]);
+  const height = parseFloat(h[1]);
+  if (!isFinite(width) || !isFinite(height) || width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+/**
+ * Wrap a raster image (PNG/JPEG) in a minimal SVG <image> element so it
+ * can be served from a .svg URL and rendered by the InvitationCard.
+ *
+ * The viewBox is the natural image dimensions (not 240×320). The renderer
+ * uses object-cover / aspect-[3/4] which crops to its container, so the
+ * intrinsic SVG size doesn't matter as long as the preserveAspectRatio
+ * does the right thing.
+ *
+ * We embed the raster as a data URL so the SVG is fully self-contained —
+ * no extra Storage lookup, no CORS gymnastics, works offline. base64
+ * inflates size by ~33% but at <256 KB cap that's still tiny.
+ */
+function wrapRasterInSvg(buf: Buffer, mime: 'image/png' | 'image/jpeg'): Buffer {
+  const dims = mime === 'image/png' ? readPngDimensions(buf) : readJpegDimensions(buf);
+  // If we can't read dimensions, fall back to a generic 1000×1000 viewBox —
+  // the renderer crops anyway, so the visible result is fine.
+  const width = dims?.width ?? 1000;
+  const height = dims?.height ?? 1000;
+  const dataUrl = `data:${mime};base64,${buf.toString('base64')}`;
+  // preserveAspectRatio="xMidYMid slice" = center + crop-to-fill, same
+  // semantics as CSS object-fit: cover.
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
+    `viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" ` +
+    `preserveAspectRatio="xMidYMid slice">` +
+    `<image href="${dataUrl}" xlink:href="${dataUrl}" ` +
+    `x="0" y="0" width="${width}" height="${height}" ` +
+    `preserveAspectRatio="xMidYMid slice"/>` +
+    `</svg>`;
+  return Buffer.from(svg, 'utf8');
 }
 
 export const updateTemplate = onCall(
@@ -203,22 +359,57 @@ async function _updateTemplateImpl(req: any): Promise<UpdateTemplateResult> {
     throw new HttpsError('invalid-argument', `layout must be one of: ${[...VALID_LAYOUTS].join(', ')}`);
   }
 
-  // 3. Decode + validate the SVG bytes.
-  let buf: Buffer;
+  // 3. Decode + validate the file bytes. Accepts SVG, PNG, JPEG.
+  //    SVG passes through; raster gets wrapped in an SVG <image> element
+  //    so it can be served from a .svg URL and rendered by InvitationCard.
+  let rawBuf: Buffer;
   try {
-    buf = Buffer.from(svgBase64, 'base64');
+    rawBuf = Buffer.from(svgBase64, 'base64');
   } catch {
     throw new HttpsError('invalid-argument', 'svgBase64 is not valid base64.');
   }
-  if (buf.length === 0) {
+  if (rawBuf.length === 0) {
     throw new HttpsError('invalid-argument', 'svgBase64 decoded to empty buffer.');
   }
-  // Cap at 256 KB — these are decorative previews, anything bigger is suspicious.
-  if (buf.length > 256 * 1024) {
-    throw new HttpsError('invalid-argument', `SVG too large (${buf.length} bytes; max 256 KB).`);
+  // 256 KB cap on the INPUT (raster). After wrapping, the SVG may be
+  // ~33% larger (base64 inflation) — still well under any reasonable limit.
+  if (rawBuf.length > 256 * 1024) {
+    throw new HttpsError('invalid-argument', `File too large (${rawBuf.length} bytes; max 256 KB).`);
   }
-  if (!isLikelySvg(buf)) {
-    throw new HttpsError('invalid-argument', 'File is not a valid SVG (no <svg> root element).');
+
+  // Sniff magic bytes (don't trust client-supplied contentType).
+  const mime = detectImageMime(rawBuf);
+  if (!mime) {
+    throw new HttpsError('invalid-argument', 'Unsupported file type. Use SVG, PNG, or JPEG.');
+  }
+
+  // Build the final SVG. SVG passes through; raster gets wrapped.
+  let buf: Buffer;
+  let sourceFormat: 'svg' | 'png' | 'jpeg';
+  let sourceDimensions: { width: number; height: number } | null;
+  if (mime === 'image/svg+xml') {
+    if (!isLikelySvg(rawBuf)) {
+      throw new HttpsError('invalid-argument', 'SVG file is malformed (no <svg> root).');
+    }
+    buf = rawBuf;
+    sourceFormat = 'svg';
+    // Best-effort: parse width/height attrs off the <svg> tag.
+    sourceDimensions = parseSvgDimensions(rawBuf);
+  } else {
+    // PNG or JPEG — wrap in SVG.
+    if (mime === 'image/png') {
+      sourceDimensions = readPngDimensions(rawBuf);
+    } else {
+      sourceDimensions = readJpegDimensions(rawBuf);
+    }
+    buf = wrapRasterInSvg(rawBuf, mime);
+    sourceFormat = mime === 'image/png' ? 'png' : 'jpeg';
+  }
+
+  // Sanity check on the wrapped SVG size too — a giant raster could
+  // inflate to >1 MB after base64 wrapping.
+  if (buf.length > 1024 * 1024) {
+    throw new HttpsError('invalid-argument', `Wrapped SVG too large (${buf.length} bytes; max 1 MB). Use a smaller image.`);
   }
 
   // 4. Write to Storage first (so any Firestore failure leaves the previous
@@ -286,6 +477,8 @@ async function _updateTemplateImpl(req: any): Promise<UpdateTemplateResult> {
     publicUrl,
     bytes: buf.length,
     sha256,
+    sourceFormat,
+    sourceDimensions,
     updatedAt: FieldValue.serverTimestamp(),
     updatedBy: req.auth.uid,
   };
@@ -327,6 +520,8 @@ async function _updateTemplateImpl(req: any): Promise<UpdateTemplateResult> {
     publicUrl,
     bytes: buf.length,
     sha256,
+    sourceFormat,
+    sourceDimensions,
     updatedAt: Date.now(),
   };
 }
