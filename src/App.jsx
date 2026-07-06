@@ -733,14 +733,11 @@ export default function App() {
         activeGuestPortal={activeGuestPortal}
         isAdmin={isAdmin}
         currentView={currentView}
-        // Simulator is a dev tool — only show to event owners (signed-in
-        // users who aren't helpers on someone else's wedding). Helpers
-        // have a single fixed role on the platform.
-        show={
-          Boolean(user) &&
-          !user.isAnonymous &&
-          !helperCtx.isHelper
-        }
+        // Simulator is an admin / dev tool — only show to platform admins
+        // (users with the admin custom claim). Helpers and regular owners
+        // should never see this bar; it lets you impersonate other roles
+        // and jump to admin-only views.
+        show={Boolean(user) && !user.isAnonymous && isAdmin}
         onSwitch={(target) => {
           // Admin pills pass a view key directly instead of a role.
           if (
