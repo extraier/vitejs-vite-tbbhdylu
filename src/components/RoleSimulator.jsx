@@ -64,10 +64,22 @@ export function RoleSimulator({
         💼 商戶 (Vendor)
       </button>
 
-      {/* Guest portal pill — pre-existing, kept verbatim. */}
+      {/* Guest portal pill — pre-existing, kept verbatim.
+          2026-07-03 — wired onClick so clicking it exits the guest
+          preview and returns to the owner's events dashboard. Before
+          this fix the button had no handler at all (zero feedback),
+          which made the dev panel feel incomplete. */}
       {activeGuestPortal && (
-        <button className="px-3 py-1 rounded-full bg-pink-500 font-bold text-white shadow-md border-2 border-white/20 animate-pulse">
-          📱 賓客專屬網頁 ({activeGuestPortal.name})
+        <button
+          onClick={() => {
+            setUserRole('owner');
+            setActiveGuestPortal(null);
+            setCurrentView('events-dashboard');
+          }}
+          title="離開賓客預覽，返回主人 Dashboard"
+          className="px-3 py-1 rounded-full bg-pink-500 font-bold text-white shadow-md border-2 border-white/20 animate-pulse hover:bg-pink-600 transition-colors"
+        >
+          📱 賓客專屬網頁 ({activeGuestPortal.name}) · 退出
         </button>
       )}
 
