@@ -474,7 +474,7 @@ function BackgroundStep({
                       </div>
                     )}
                   </div>
-                  <div className="p-2 text-xs font-bold text-slate-700 flex justify-between items-center">
+                  <div className="p-2 text-xs font-bold text-slate-700 flex flex-col gap-0.5">
                     <span className="flex items-center gap-1">
                       {t.label}
                       {t.isPremium && <Crown className="w-3 h-3 text-amber-500" />}
@@ -484,6 +484,19 @@ function BackgroundStep({
                         </span>
                       )}
                     </span>
+                    {/* 2026-07-03 — admin can see the source dimensions + format of
+                        their uploaded design. Helps when iterating in a graphics
+                        editor (e.g. "should I export at 600×800 instead of 343×361?").
+                        Shows nothing for the bundled fallback templates. */}
+                    {t.isCustom && (t.sourceFormat || t.sourceDimensions) && (
+                      <span className="text-[9px] font-normal text-slate-400 leading-tight">
+                        {t.sourceDimensions
+                          ? `${t.sourceDimensions.width}×${t.sourceDimensions.height}`
+                          : '?'}
+                        {' '}
+                        {t.sourceFormat ? t.sourceFormat.toUpperCase() : ''}
+                      </span>
+                    )}
                   </div>
                 </button>
                 {/* Admin-only edit button (rendered ABOVE the click target so it

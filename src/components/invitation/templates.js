@@ -122,6 +122,13 @@ export async function loadLiveTemplates(db, appId) {
         updatedAt: ov.updatedAt || null,
         updatedBy: ov.updatedBy || null,
         isCustom: true,
+        // 2026-07-03 — surface upload metadata so the admin tile can
+        // show "Original: 343×361 PNG" etc.
+        // ov.bytes is the wrapped-SVG size; not useful for the user.
+        // We surface sourceFormat + sourceDimensions from the Cloud
+        // Function response (which writes these to Firestore too).
+        sourceFormat: ov.sourceFormat || null,
+        sourceDimensions: ov.sourceDimensions || null,
       };
     });
   } catch (err) {
