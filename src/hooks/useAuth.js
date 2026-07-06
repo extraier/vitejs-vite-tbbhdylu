@@ -5,16 +5,23 @@
 // Returns:
 //   user / authChecked            — current Firebase user, ready flag
 //   isAdmin                       — true if user has the `admin` custom claim
+//   isAnonymous                   — true for guest users (can browse, can't save)
 //   loginWithGoogle               — popup-based Google sign-in
 //   loginWithEmail / registerWithEmail — email/password sign-in / sign-up
 //   continueAsGuest               — anonymous sign-in (used by the "Continue
 //                                   as guest" button on LoginScreen)
+//   linkAnonymousWithEmail        — upgrade the current anonymous user to a
+//                                   permanent email/password account, KEEPING
+//                                   their existing UID + Firestore data
+//                                   (the hybrid "guest try + then save" flow)
 //   logout                        — sign out
 
 import { useEffect, useState } from 'react';
 import {
+  EmailAuthProvider,
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
+  linkWithCredential,
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
@@ -103,6 +110,27 @@ export function useAuth() {
     await signInAnonymously(auth);
   };
 
+  // 2026-07-03 — hybrid guest-flow upgrade. Anonymous users can explore
+  // the app freely (their Firestore writes go under their anonymous UID),
+  // and when they're ready to commit, we LINK the existing anonymous
+  // account to a permanent email/password credential. Firebase preserves
+  // the UID on link, so all their data (events, tasks, guests, photos)
+  // carries over with zero migration. After link, isAnonymous flips to
+  // false and the user can sign in normally on future visits.
+  //
+  // Throws if the current user isn't anonymous (defensive — caller should
+  // only invoke this from the guest signup prompt) or if the email is
+  // already taken by a different account.
+  const linkAnonymousWithEmail = async (email, password) => {
+    if (!auth.currentUser) throw new Error('No current user to link.');
+    if (!auth.currentUser.isAnonymous) {
+      throw new Error('Already a permanent account — sign in directly.');
+    }
+    const credential = EmailAuthProvider.credential(email, password);
+    const result = await linkWithCredential(auth.currentUser, credential);
+    return result.user;
+  };
+
   const logout = async () => {
     setAllowAnonymous(false);
     await signOut(auth);
@@ -112,10 +140,12 @@ export function useAuth() {
     user,
     authChecked,
     isAdmin,
+    isAnonymous: Boolean(user?.isAnonymous),
     loginWithGoogle,
     loginWithEmail,
     registerWithEmail,
     continueAsGuest,
+    linkAnonymousWithEmail,
     logout,
   };
 }

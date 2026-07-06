@@ -63,6 +63,7 @@ import { PersonalGuestPortal } from './screens/PersonalGuestPortal';
 import { InvitationEditor } from './screens/InvitationEditor';
 
 import { RoleSimulator } from './components/RoleSimulator';
+import { GuestBanner } from './components/GuestBanner';
 import { TabNav } from './components/TabNav';
 import { UpgradeModal } from './components/modals/UpgradeModal';
 import { PaymentModal } from './components/modals/PaymentModal';
@@ -75,10 +76,31 @@ import { HelperManager } from './components/modals/HelperManager';
 import { HelperWaitingScreen } from './screens/HelperWaitingScreen';
 import { ScanResultModal } from './components/modals/ScanResultModal';
 import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
+import { SignUpPromptModal } from './components/modals/SignUpPromptModal';
 
 export default function App() {
   // Auth
-  const { user, authChecked, isAdmin, loginWithGoogle, loginWithEmail, registerWithEmail, continueAsGuest, logout } = useAuth();
+  const {
+    user,
+    authChecked,
+    isAdmin,
+    isAnonymous,
+    loginWithGoogle,
+    loginWithEmail,
+    registerWithEmail,
+    continueAsGuest,
+    linkAnonymousWithEmail,
+    logout,
+  } = useAuth();
+  // 2026-07-03 — guest signup prompt state. Triggered by either the
+  // GuestBanner CTA, the "create event" button, or any other write-
+  // capable action when the user is anonymous. On successful link,
+  // isAnonymous flips false and the modal self-closes via parent re-render.
+  const [showSignUpPrompt, setShowSignUpPrompt] = useState(false);
+  // Stash the create-event form input so we can replay the create after
+  // a successful anonymous→email link. Set by handleCreateEvent when
+  // it bails on isAnonymous, cleared by handleLinkGuestAccount on success.
+  const [pendingCreateEventName, setPendingCreateEventName] = useState(null);
 
   // Helper context (兄弟姊妹). Only meaningful when the user is signed in
   // (not anonymous) and NOT in guest-mode URL. The hook itself is safe to
@@ -327,6 +349,18 @@ export default function App() {
   const handleCreateEvent = async (e) => {
     e.preventDefault();
     if (!user || !newEventName) return;
+    // 2026-07-03 — guest-flow gate. Anonymous users CAN explore (we
+    // let them click around) but writes are blocked until they upgrade.
+    // We pop the signup modal here instead of failing silently — the
+    // modal's onLink callback (App.jsx:showSignUpPrompt) calls back into
+    // handleLinkGuestAccount which completes the create after a
+    // successful link. We stash the form input so we can replay it
+    // post-signup without forcing the user to retype.
+    if (isAnonymous) {
+      setPendingCreateEventName(newEventName);
+      setShowSignUpPrompt(true);
+      return;
+    }
     const newEvent = {
       name: newEventName,
       date: '2027-01-01',
@@ -342,6 +376,43 @@ export default function App() {
     showToast('🎉 婚禮專案建立成功！');
     setCurrentEvent({ id: docRef.id, ...newEvent });
     setCurrentView('couple-checklist');
+  };
+
+  // 2026-07-03 — post-link handler for the create-event flow. Called by
+  // SignUpPromptModal's onLink after a successful anonymous→email link.
+  // Completes the create that was deferred in handleCreateEvent.
+  const handleLinkGuestAccount = async (email, password) => {
+    await linkAnonymousWithEmail(email, password);
+    // After link, isAnonymous flips to false (Firebase re-fires
+    // onAuthStateChanged and our useAuth hook updates). We close the
+    // modal and replay any deferred create. If no event was queued
+    // (user just clicked the banner without trying to create), we
+    // just close the modal.
+    setShowSignUpPrompt(false);
+    if (pendingCreateEventName) {
+      const name = pendingCreateEventName;
+      setPendingCreateEventName(null);
+      // user.uid is the SAME UID we had pre-link — Firebase preserved
+      // it during linkWithCredential. So the write goes to the same
+      // path; nothing to migrate.
+      const newEvent = {
+        name,
+        date: '2027-01-01',
+        tier: 'free',
+        budget: 350000,
+        createdAt: Date.now(),
+      };
+      const docRef = await addDoc(
+        collection(db, 'artifacts', appId, 'users', user.uid, 'events'),
+        newEvent,
+      );
+      setNewEventName('');
+      showToast('🎉 婚禮專案建立成功！');
+      setCurrentEvent({ id: docRef.id, ...newEvent });
+      setCurrentView('couple-checklist');
+    } else {
+      showToast('🎉 帳號已建立，你之前的資料都保存咗！');
+    }
   };
 
   const handleAddTask = async (e) => {
@@ -728,6 +799,18 @@ export default function App() {
         </div>
       )}
 
+      {/* 2026-07-03 — GuestBanner is shown ABOVE the regular header so it
+          stays visible no matter how the user scrolls. The sticky `top-0`
+          keeps it pinned during scroll. NOT dismissable (per design
+          decision — dismissing defeats the nag). Skipped for actual
+          guest-portal URL visitors (they're not "trying out" the app). */}
+      {isAnonymous && !guest.isGuestMode && (
+        <GuestBanner
+          onSignUp={() => setShowSignUpPrompt(true)}
+          onLogout={handleLogout}
+        />
+      )}
+
       <RoleSimulator
         userRole={userRole}
         activeGuestPortal={activeGuestPortal}
@@ -1053,6 +1136,29 @@ export default function App() {
         onClose={() => setEditingGuest(null)}
         onSave={handleSaveGuest}
         onDelete={handleDeleteGuest}
+      />
+
+      {/* 2026-07-03 — guest signup modal. Triggered by:
+            - GuestBanner CTA ("註冊以保存 →")
+            - handleCreateEvent when isAnonymous (stashes the form input
+              in pendingCreateEventName so it can replay after link)
+          After a successful link, isAnonymous flips false and this
+          modal self-closes (the show prop becomes false). */}
+      <SignUpPromptModal
+        isOpen={showSignUpPrompt}
+        onClose={() => {
+          setShowSignUpPrompt(false);
+          setPendingCreateEventName(null); // user opted out — forget the queued create
+        }}
+        onLink={handleLinkGuestAccount}
+        onSignIn={async (email, password) => {
+          // If the email is already taken, the user picks "sign in
+          // instead". This abandons the anonymous work and switches to
+          // the existing account. The anonymous UID is signed out.
+          setShowSignUpPrompt(false);
+          setPendingCreateEventName(null);
+          await loginWithEmail(email, password);
+        }}
       />
 
       <style
