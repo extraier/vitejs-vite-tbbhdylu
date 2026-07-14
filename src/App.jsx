@@ -46,6 +46,7 @@ import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from './lib/firebase';
 
 import { LoginScreen } from './screens/LoginScreen';
+import { VendorSignupCard } from './components/VendorSignupCard';
 import { EventsDashboard } from './screens/EventsDashboard';
 import { CoupleChecklist } from './screens/CoupleChecklist';
 import { CoupleBudget } from './screens/CoupleBudget';
@@ -103,6 +104,12 @@ export default function App() {
   // a successful anonymous→email link. Set by handleCreateEvent when
   // it bails on isAnonymous, cleared by handleLinkGuestAccount on success.
   const [pendingCreateEventName, setPendingCreateEventName] = useState(null);
+
+  // 2026-07-14 — 'signing up as' toggle. null = regular login, 'vendor' =
+  // show the dedicated VendorSignupCard instead. Set when the user clicks
+  // the green 'I'm a Vendor' CTA on the public main page, cleared when
+  // they click 'back to sign in' on the vendor card.
+  const [signingUpAs, setSigningUpAs] = useState(null);
 
   // 2026-07-14 — defensive modal close. If the user signs in (Google or
   // email) WHILE the signup prompt is open, the modal stays open unless
@@ -786,12 +793,28 @@ export default function App() {
 
   // ---- Render ----
   if (authChecked && !user && !guest.isGuestMode) {
+    // 2026-07-14 — dedicated vendor signup card when the user clicked
+    // the green 'I'm a Vendor' CTA. Stays on this card until they hit
+    // the back link or complete sign-up.
+    if (signingUpAs === 'vendor') {
+      return (
+        <VendorSignupCard
+          onGoogleLogin={loginWithGoogle}
+          onEmailRegister={registerWithEmail}
+          onBack={() => {
+            try { sessionStorage.removeItem('postLoginIntent'); } catch {}
+            setSigningUpAs(null);
+          }}
+        />
+      );
+    }
     return (
       <LoginScreen
         onGoogleLogin={loginWithGoogle}
         onEmailLogin={loginWithEmail}
         onEmailRegister={registerWithEmail}
         onContinueAsGuest={continueAsGuest}
+        onVendorSignup={() => setSigningUpAs('vendor')}
       />
     );
   }

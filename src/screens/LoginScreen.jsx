@@ -104,7 +104,7 @@ const STRINGS = {
 //   onEmailRegister   — (email, password) => Promise<void>
 //   onContinueAsGuest — optional () => Promise<void> (renders guest button)
 
-export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest }) {
+export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup }) {
   const [lang, setLang] = useState('zh'); // 'zh' | 'en'
   const t = STRINGS[lang];
 
@@ -167,18 +167,12 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     setError(null);
   };
 
-  // 2026-07-14 — 'I\'m a Vendor' CTA. Sets a session flag so App.jsx
-  // routes the user straight into the wizard after they finish signing
-  // up or signing in. We use sessionStorage (cleared on tab close) so
-  // a vendor who comes back next week doesn't get auto-routed.
+  // 2026-07-14 — 'I'm a Vendor' CTA. Now delegates to App.jsx which
+  // swaps in the dedicated <VendorSignupCard/>. Previously this just
+  // set a sessionStorage flag and flipped the form to signup mode —
+  // users reported it looked like nothing happened.
   const handleVendorCta = () => {
-    try {
-      sessionStorage.setItem('postLoginIntent', 'vendor-onboarding');
-    } catch {
-      // sessionStorage can throw in private mode / disabled storage;
-      // fall back to just flipping the form to signup.
-    }
-    switchMode('signup');
+    if (onVendorSignup) onVendorSignup();
   };
 
   const handleGuest = async () => {

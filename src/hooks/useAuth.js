@@ -95,8 +95,19 @@ export function useAuth() {
     await signInWithPopup(auth, provider);
   };
 
-  const registerWithEmail = async (email, password) => {
+  const registerWithEmail = async (email, password, displayName = '') => {
     const cred = await createUserWithEmailAndPassword(auth, email, password);
+    // 2026-07-14 — vendor signup passes a displayName so it shows up on
+    // the Firebase user profile. Used by Step 1 of the wizard to pre-fill
+    // the vendor business name (saves the user retyping).
+    if (displayName) {
+      try {
+        await cred.user.updateProfile({ displayName });
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[useAuth] updateProfile failed:', err?.message || err);
+      }
+    }
     return cred.user;
   };
 
