@@ -970,9 +970,12 @@ export default function App() {
             )}
 
             {/* "我是商戶" CTA — shown to signed-in non-vendor users on the
-                events dashboard. Sits between EventsDashboard and the
-                tab bar so it doesn't crowd the create-event flow. */}
-            {user && userRole !== 'vendor' && !isAdmin && !currentEvent && currentView === 'events-dashboard' && (
+                events dashboard. The CTA is hidden for users who already
+                have a vendor: true custom claim (they're past onboarding).
+                Admins see it too — admins need a way to preview/test the
+                wizard without going through Firebase Console, and it's
+                useful for them to see the flow as a real vendor would. */}
+            {user && userRole !== 'vendor' && !currentEvent && currentView === 'events-dashboard' && (
               <div className="mt-6">
                 <JoinAsVendorCTA
                   user={user}
