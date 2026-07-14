@@ -361,6 +361,39 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           )}
         </div>
 
+        {/*
+          2026-07-14 — added inline vendor CTA inside the login card so it's
+          visible above the fold (the existing dark CTA card at the bottom
+          of the page gets missed by users who don't scroll). Sits between
+          the login form and the features section.
+
+          Two intents:
+            1. New users signing up just to become a vendor can click
+               '立即註冊' directly from here.
+            2. Existing couples/admins can share this link with vendor
+               friends — they sign up via Google and the wizard auto-opens.
+        */}
+        <div className="mt-3">
+          <div className="flex items-center gap-3 my-3">
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="text-xs font-bold text-slate-400 tracking-widest">
+              {lang === 'zh' ? '其他身份' : 'OTHER ROLES'}
+            </span>
+            <div className="flex-1 h-px bg-slate-200" />
+          </div>
+          <a
+            href="#signup-as-vendor"
+            onClick={(e) => { e.preventDefault(); switchMode('signup'); }}
+            className="w-full inline-flex items-center justify-between gap-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold py-3 px-4 rounded-xl transition-colors text-sm"
+          >
+            <span className="flex items-center gap-2">
+              <Briefcase className="w-4 h-4" />
+              <span>{lang === 'zh' ? '我是商戶 / 申請加入' : 'I\'m a Vendor — Apply'}</span>
+            </span>
+            <span className="text-emerald-600">→</span>
+          </a>
+        </div>
+
         {/* Features row — three core value props */}
         <section className="mt-8">
           <h3 className="text-center text-xs font-black tracking-widest text-slate-500 uppercase mb-4">
