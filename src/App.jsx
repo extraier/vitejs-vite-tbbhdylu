@@ -111,7 +111,16 @@ export default function App() {
   // email sign-in flow don't go through that path. This effect catches
   // every "user is no longer anonymous" transition and closes the modal.
   useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.log('[App.jsx] modal-close effect', {
+      isAnonymous,
+      hasUser: Boolean(user),
+      userIsAnon: user?.isAnonymous,
+      showSignUpPrompt,
+    });
     if (!isAnonymous && user && showSignUpPrompt) {
+      // eslint-disable-next-line no-console
+      console.log('[App.jsx] closing modal — user is no longer anonymous');
       setShowSignUpPrompt(false);
       setPendingCreateEventName(null);
     }
@@ -371,6 +380,8 @@ export default function App() {
     // handleLinkGuestAccount which completes the create after a
     // successful link. We stash the form input so we can replay it
     // post-signup without forcing the user to retype.
+    // eslint-disable-next-line no-console
+    console.log('[App.jsx] handleCreateEvent called', { isAnonymous, newEventName });
     if (isAnonymous) {
       setPendingCreateEventName(newEventName);
       setShowSignUpPrompt(true);
