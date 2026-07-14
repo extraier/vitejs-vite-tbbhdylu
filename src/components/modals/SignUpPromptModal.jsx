@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { X, Heart, Mail, Lock, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Heart, X, Mail, Lock, Loader2 } from 'lucide-react';
 
 /**
  * SignUpPromptModal — appears when an anonymous (guest) user attempts
@@ -29,6 +29,18 @@ export function SignUpPromptModal({ onClose, onLink, onSignIn, linkedAccountEmai
   // When Firebase says the email is already taken, we flip into a
   // sign-in mode so the user can claim their real account instead.
   const [mode, setMode] = useState('signup'); // 'signup' | 'signin'
+
+  // 2026-07-14 — Escape key closes the modal. Users coming from stale
+  // tabs sometimes find the X button unresponsive (cached state, race
+  // conditions with Vercel mid-deploy). Escape is a global UX
+  // expectation for dismissable modals and gives them a way out.
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape' && !busy) onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [busy, onClose]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -177,6 +189,23 @@ export function SignUpPromptModal({ onClose, onLink, onSignIn, linkedAccountEmai
           註冊即代表你同意儲存你的婚禮資料。
           訪客模式下建立的資料會喺你註冊之後保留，唔會流失。
         </p>
+
+        {/*
+          2026-07-14 — last-resort dismiss button. Users on iPhone / mobile
+          don't have an Escape key, and sometimes the X button is
+          unresponsive due to stale state (cached service-worker state,
+          mid-deploy refresh, etc.). This button is the explicit "I'm not
+          ready to sign up right now" path — same as X but bigger and
+          labeled, so it's harder to miss.
+        */}
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          className="mt-4 w-full text-sm text-slate-500 hover:text-slate-700 disabled:opacity-50"
+        >
+          稍後再說 / Continue as guest
+        </button>
       </div>
     </div>
   );
