@@ -104,6 +104,19 @@ export default function App() {
   // it bails on isAnonymous, cleared by handleLinkGuestAccount on success.
   const [pendingCreateEventName, setPendingCreateEventName] = useState(null);
 
+  // 2026-07-14 — defensive modal close. If the user signs in (Google or
+  // email) WHILE the signup prompt is open, the modal stays open unless
+  // something explicitly closes it. handleLinkGuestAccount closes it on
+  // successful anonymous→email link, but Google login and the regular
+  // email sign-in flow don't go through that path. This effect catches
+  // every "user is no longer anonymous" transition and closes the modal.
+  useEffect(() => {
+    if (!isAnonymous && user && showSignUpPrompt) {
+      setShowSignUpPrompt(false);
+      setPendingCreateEventName(null);
+    }
+  }, [isAnonymous, user, showSignUpPrompt]);
+
   // Helper context (兄弟姊妹). Only meaningful when the user is signed in
   // (not anonymous) and NOT in guest-mode URL. The hook itself is safe to
   // call unconditionally — it no-ops if no user.
