@@ -9,6 +9,7 @@ import {
   Wallet,
   Users,
   Globe,
+  Briefcase,
 } from 'lucide-react';
 
 // ─── i18n strings ───────────────────────────────────────────────────────
@@ -383,6 +384,31 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
             })}
           </div>
         </section>
+
+        {/* Vendor CTA — appears below the value props. Drives sign-ups by
+            showing vendors there's a path for them too. */}
+        <div className="mt-6 bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-5 text-white">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
+              <Briefcase className="w-5 h-5 text-emerald-400" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-sm font-bold mb-1">{lang === 'zh' ? '我是商戶' : 'For Vendors'}</h3>
+              <p className="text-xs text-slate-300 mb-2">
+                {lang === 'zh'
+                  ? '加入囍程商戶指南，接觸全港新人。先註冊帳號再填寫商戶資料。'
+                  : 'Join the directory to reach HK couples. Sign up first, then complete your vendor profile.'}
+              </p>
+              <a
+                href="#signup"
+                onClick={(e) => { e.preventDefault(); setMode('signup'); }}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold transition-colors"
+              >
+                {lang === 'zh' ? '建立商戶帳號 →' : 'Create vendor account →'}
+              </a>
+            </div>
+          </div>
+        </div>
 
         {/* Audience pills */}
         <section className="mt-6">

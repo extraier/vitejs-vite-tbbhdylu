@@ -56,6 +56,7 @@ import { DiscoverDirectory } from './screens/DiscoverDirectory';
 import { VendorAnalytics } from './screens/VendorAnalytics';
 import { AdminUsers } from './screens/AdminUsers';
 import { AdminVendors } from './screens/AdminVendors';
+import { VendorOnboarding } from './screens/VendorOnboarding';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
 import { ReceptionScanner } from './screens/ReceptionScanner';
@@ -65,6 +66,7 @@ import { InvitationEditor } from './screens/InvitationEditor';
 import { RoleSimulator } from './components/RoleSimulator';
 import { GuestBanner } from './components/GuestBanner';
 import { TabNav } from './components/TabNav';
+import { JoinAsVendorCTA } from './components/JoinAsVendorCTA';
 import { UpgradeModal } from './components/modals/UpgradeModal';
 import { PaymentModal } from './components/modals/PaymentModal';
 import { QrCodeModal } from './components/modals/QrCodeModal';
@@ -943,6 +945,18 @@ export default function App() {
               />
             )}
 
+            {/* "我是商戶" CTA — shown to signed-in non-vendor users on the
+                events dashboard. Sits between EventsDashboard and the
+                tab bar so it doesn't crowd the create-event flow. */}
+            {user && userRole !== 'vendor' && !isAdmin && !currentEvent && currentView === 'events-dashboard' && (
+              <div className="mt-6">
+                <JoinAsVendorCTA
+                  user={user}
+                  onJoin={() => setCurrentView('vendor-onboarding')}
+                />
+              </div>
+            )}
+
             {userRole === 'owner' && currentEvent && currentView === 'couple-checklist' && (
               <CoupleChecklist
                 tasks={eventTasks}
@@ -1068,6 +1082,18 @@ export default function App() {
 
             {userRole === 'vendor' && currentView === 'vendor-profile' && (
               <VendorProfileEdit vendor={vendors[0]} />
+            )}
+
+            {/* Vendor onboarding wizard — reachable from any signed-in user.
+                Re-uses the same RoleSimulator/admin layout but does not
+                require userRole === 'vendor' (you can't be a vendor before
+                applying). */}
+            {user && currentView === 'vendor-onboarding' && (
+              <VendorOnboarding
+                user={user}
+                onComplete={() => setCurrentView('events-dashboard')}
+                onCancel={() => setCurrentView('events-dashboard')}
+              />
             )}
           </main>
         </>

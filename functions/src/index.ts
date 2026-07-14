@@ -458,6 +458,10 @@ export * from './invitations';
 // here so `firebase deploy --only functions` picks it up automatically.
 export * from './templates';
 
+// 2026-07-11: vendor onboarding & self-service (applyAsVendor,
+// updateMyVendorProfile, uploadVendorPortfolio). Lives in ./vendors.ts.
+export * from './vendors';
+
 export const grantAdmin = onCall(async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
@@ -599,6 +603,16 @@ const VENDOR_EDITABLE_KEYS = [
   'tags',
   'description',
   'portfolio',
+  // 2026-07-11 — vendor onboarding (applyAsVendor) added these.
+  // Admin can edit them on existing vendors too (e.g. to approve a
+  // pending application by setting status: 'approved').
+  'status',
+  'yearsInBusiness',
+  'serviceArea',
+  'priceMin',
+  'priceMax',
+  'currency',
+  'openEnded',
 ] as const;
 
 function validateVendorEditable(payload: Record<string, unknown>): void {
@@ -618,6 +632,15 @@ function validateVendorEditable(payload: Record<string, unknown>): void {
   }
   if ('category' in payload && typeof payload.category !== 'string') {
     throw new HttpsError('invalid-argument', 'category must be a string.');
+  }
+  if ('status' in payload) {
+    const validStatuses = ['pending', 'approved', 'rejected', 'suspended'];
+    if (typeof payload.status !== 'string' || !validStatuses.includes(payload.status)) {
+      throw new HttpsError(
+        'invalid-argument',
+        `status must be one of: ${validStatuses.join(', ')}.`,
+      );
+    }
   }
   if ('price' in payload && typeof payload.price !== 'string') {
     throw new HttpsError('invalid-argument', 'price must be a string.');
@@ -697,9 +720,16 @@ export const admin_listVendors = onCall(async (req) => {
         tags: Array.isArray(data.tags) ? data.tags : [],
         description: typeof data.description === 'string' ? data.description : null,
         portfolio: Array.isArray(data.portfolio) ? data.portfolio : [],
+        // 2026-07-11 — vendor onboarding (applyAsVendor) writes these.
+        // Pre-onboarding vendor docs don't have status/years/area; treat as
+        // null so the UI can show a sensible "未提交申請" badge.
+        status: typeof data.status === 'string' ? data.status : null,
+        yearsInBusiness: typeof data.yearsInBusiness === 'number' ? data.yearsInBusiness : null,
+        serviceArea: typeof data.serviceArea === 'string' ? data.serviceArea : null,
         email,
         authDisabled: disabled,
         updatedAt: data.updatedAt || null,
+        createdAt: data.createdAt || null,
       };
     }),
   );

@@ -4,8 +4,12 @@ import { trackVendorView, trackVendorClick } from '../lib/vendorAnalytics';
 
 export function DiscoverDirectory({ vendors, filter, onFilterChange, onViewProfile, user }) {
   const filtered = useMemo(() => {
-    if (filter === 'all') return vendors;
-    return vendors.filter((v) => v.category === filter);
+    // Hide vendors that are still pending admin review. Status is set by
+    // applyAsVendor on submission. Pre-onboarding DEFAULT_VENDORS don't
+    // have a status field, which we treat as 'approved'.
+    const visible = vendors.filter((v) => v.status !== 'pending');
+    if (filter === 'all') return visible;
+    return visible.filter((v) => v.category === filter);
   }, [filter, vendors]);
 
   // Track one view per (vendor, render). Dedupe by vendorId in a ref so

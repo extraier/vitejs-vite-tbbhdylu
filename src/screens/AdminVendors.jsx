@@ -32,6 +32,10 @@ import {
   Save,
   AlertCircle,
   Eye,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  Pause,
 } from 'lucide-react';
 
 import { VendorModal } from '../components/modals/VendorModal';
@@ -93,6 +97,61 @@ function StatCard({ label, value, icon }) {
   );
 }
 
+// StatusChip — clickable filter pill above the vendor table.
+// tone is one of: 'slate' | 'amber' | 'emerald' | 'rose' — sets the active
+// color so admin can tell at a glance which filter is engaged.
+const CHIP_TONES = {
+  slate: { active: 'bg-slate-700 text-white border-slate-700', inactive: 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50' },
+  amber: { active: 'bg-amber-500 text-white border-amber-500', inactive: 'bg-white text-amber-700 border-amber-200 hover:bg-amber-50' },
+  emerald: { active: 'bg-emerald-600 text-white border-emerald-600', inactive: 'bg-white text-emerald-700 border-emerald-200 hover:bg-emerald-50' },
+  rose: { active: 'bg-rose-600 text-white border-rose-600', inactive: 'bg-white text-rose-700 border-rose-200 hover:bg-rose-50' },
+};
+function StatusChip({ label, active, onClick, count, tone = 'slate' }) {
+  const t = CHIP_TONES[tone] || CHIP_TONES.slate;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${
+        active ? t.active : t.inactive
+      }`}
+    >
+      <span>{label}</span>
+      <span
+        className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1 rounded-full text-[10px] ${
+          active ? 'bg-white/20' : 'bg-slate-100'
+        }`}
+      >
+        {count}
+      </span>
+    </button>
+  );
+}
+
+// StatusBadge — small pill rendered inside each table row. Pre-onboarding
+// docs (no status) render as 'approved' so existing DEFAULT_VENDORS look
+// normal to admin.
+function StatusBadge({ status }) {
+  const effective = status || 'approved';
+  const map = {
+    pending: { Icon: Clock, className: 'bg-amber-100 text-amber-800', label: '待審批' },
+    approved: { Icon: CheckCircle2, className: 'bg-emerald-100 text-emerald-800', label: '已批准' },
+    rejected: { Icon: XCircle, className: 'bg-rose-100 text-rose-800', label: '已拒絕' },
+    suspended: { Icon: Pause, className: 'bg-slate-200 text-slate-700', label: '已停權' },
+  };
+  const cfg = map[effective] || map.approved;
+  const { Icon, className, label } = cfg;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${className}`}
+      title={effective === 'pending' ? '新申請，等待審批' : effective}
+    >
+      <Icon className="w-3 h-3" />
+      {label}
+    </span>
+  );
+}
+
 export function AdminVendors({ user, isAdmin }) {
   const [vendors, setVendors] = useState([]);
   const [total, setTotal] = useState(0);
@@ -100,6 +159,15 @@ export function AdminVendors({ user, isAdmin }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  // 2026-07-11 — vendor onboarding. Filter the table by approval status.
+  //   'all'        → show everyone (default)
+  //   'pending'    → only new applications awaiting admin review
+  //   'approved'   → only currently-visible vendors
+  //   'rejected'   → only denied applications
+  //   'suspended'  → only previously-approved-now-hidden vendors
+  // Pre-onboarding vendor docs (no status field) are treated as 'approved'
+  // so existing DEFAULT_VENDORS + admin-created vendors stay visible.
+  const [statusFilter, setStatusFilter] = useState('all');
   const [pendingAction, setPendingAction] = useState(null);
   const [editingVendor, setEditingVendor] = useState(null);
   const [previewingVendor, setPreviewingVendor] = useState(null);
@@ -128,8 +196,18 @@ export function AdminVendors({ user, isAdmin }) {
 
   const filteredVendors = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return vendors;
-    return vendors.filter((v) => {
+    // Status filter first — cheaper than the text search and a common
+    // admin workflow ("show me just pending").
+    const byStatus = statusFilter === 'all'
+      ? vendors
+      : vendors.filter((v) => {
+          // Treat null status (pre-onboarding docs) as 'approved' so the
+          // 'approved' filter still shows DEFAULT_VENDORS + admin-created.
+          const s = v.status || 'approved';
+          return s === statusFilter;
+        });
+    if (!q) return byStatus;
+    return byStatus.filter((v) => {
       return (
         (v.name && v.name.toLowerCase().includes(q)) ||
         (v.email && v.email.toLowerCase().includes(q)) ||
@@ -138,18 +216,21 @@ export function AdminVendors({ user, isAdmin }) {
         v.vendorUid.toLowerCase().includes(q)
       );
     });
-  }, [vendors, searchQuery]);
+  }, [vendors, searchQuery, statusFilter]);
 
   const stats = useMemo(() => {
     const t = vendors.length;
     const categories = new Set(vendors.map((v) => v.category).filter(Boolean)).size;
     const ratedVendors = vendors.filter((v) => typeof v.rating === 'number');
     const avgRating =
-      ratedVendors.length > 0
-        ? (ratedVendors.reduce((s, v) => s + v.rating, 0) / ratedVendors.length).toFixed(2)
-        : '—';
+      ratedVendors.length === 0
+        ? '—'
+        : (ratedVendors.reduce((s, v) => s + v.rating, 0) / ratedVendors.length).toFixed(2);
     const withPortfolio = vendors.filter((v) => v.portfolio && v.portfolio.length > 0).length;
-    return { t, categories, avgRating, withPortfolio };
+    // 2026-07-11 — count vendors awaiting admin approval. Surfaces in a
+    // stat card so admin notices new applications without filtering.
+    const pendingCount = vendors.filter((v) => v.status === 'pending').length;
+    return { t, categories, avgRating, withPortfolio, pendingCount };
   }, [vendors]);
 
   function goNextPage() {
@@ -235,6 +316,71 @@ export function AdminVendors({ user, isAdmin }) {
           value={`${stats.withPortfolio}/${stats.t}`}
           icon={<ImageIcon className="w-5 h-5 text-emerald-600" />}
         />
+        {/*
+          2026-07-11 — pending approvals stat card. Clickable: clicking it
+          sets the status filter to 'pending' so admin can jump straight
+          to the approval queue. Highlights in amber when > 0 so it stands
+          out from the other neutral cards.
+        */}
+        <button
+          type="button"
+          onClick={() => setStatusFilter(stats.pendingCount > 0 ? 'pending' : 'all')}
+          className={`text-left rounded-xl border px-4 py-3 flex items-center gap-3 transition-colors ${
+            stats.pendingCount > 0
+              ? 'border-amber-300 bg-amber-50 hover:bg-amber-100'
+              : 'border-slate-100 bg-white hover:bg-slate-50'
+          } ${statusFilter === 'pending' ? 'ring-2 ring-amber-400' : ''}`}
+        >
+          <div className="w-10 h-10 rounded-lg bg-white flex items-center justify-center">
+            <Clock className={`w-5 h-5 ${stats.pendingCount > 0 ? 'text-amber-600' : 'text-slate-400'}`} />
+          </div>
+          <div>
+            <div className="text-xs text-slate-500">待審批</div>
+            <div className={`text-2xl font-bold ${stats.pendingCount > 0 ? 'text-amber-700' : 'text-slate-900'}`}>
+              {stats.pendingCount}
+            </div>
+          </div>
+        </button>
+      </div>
+
+      {/* Status filter chips — sits between stat cards and the search bar. */}
+      <div className="flex flex-wrap gap-2 mb-3">
+        <StatusChip
+          label="全部"
+          active={statusFilter === 'all'}
+          onClick={() => setStatusFilter('all')}
+          count={vendors.length}
+        />
+        <StatusChip
+          label="待審批"
+          active={statusFilter === 'pending'}
+          onClick={() => setStatusFilter('pending')}
+          count={stats.pendingCount}
+          tone="amber"
+        />
+        <StatusChip
+          label="已批准"
+          active={statusFilter === 'approved'}
+          onClick={() => setStatusFilter('approved')}
+          count={
+            vendors.filter((v) => (v.status || 'approved') === 'approved').length
+          }
+          tone="emerald"
+        />
+        <StatusChip
+          label="已拒絕"
+          active={statusFilter === 'rejected'}
+          onClick={() => setStatusFilter('rejected')}
+          count={vendors.filter((v) => v.status === 'rejected').length}
+          tone="rose"
+        />
+        <StatusChip
+          label="已停權"
+          active={statusFilter === 'suspended'}
+          onClick={() => setStatusFilter('suspended')}
+          count={vendors.filter((v) => v.status === 'suspended').length}
+          tone="slate"
+        />
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
@@ -298,6 +444,11 @@ export function AdminVendors({ user, isAdmin }) {
                 <th className="text-left px-4 py-3 font-semibold text-slate-700 hidden lg:table-cell">
                   作品
                 </th>
+                <th className="text-left px-4 py-3 font-semibold text-slate-700">
+                  {/* Always visible — admin needs to see approval status at
+                      a glance, especially for the pending queue. */}
+                  狀態
+                </th>
                 <th className="text-left px-4 py-3 font-semibold text-slate-700 hidden xl:table-cell">
                   更新
                 </th>
@@ -307,14 +458,14 @@ export function AdminVendors({ user, isAdmin }) {
             <tbody className="divide-y divide-slate-100">
               {loading && vendors.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
                     載入中...
                   </td>
                 </tr>
               )}
               {!loading && filteredVendors.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
                     {vendors.length === 0
                       ? '目前沒有任何商戶文件。請確認 Firestore /vendors/{uid} 集合下有資料。'
                       : '找不到符合的商戶。'}
@@ -378,6 +529,18 @@ export function AdminVendors({ user, isAdmin }) {
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell text-slate-600">
                       {v.portfolio ? v.portfolio.length : 0}
+                    </td>
+                    <td className="px-4 py-3">
+                      {/* Status badge — always visible. Click to filter
+                          to that status in the chip row above. */}
+                      <button
+                        type="button"
+                        onClick={() => setStatusFilter(v.status || 'approved')}
+                        title={`只睇${(v.status || 'approved') === 'pending' ? '待審批' : (v.status || 'approved') === 'approved' ? '已批准' : (v.status || 'approved') === 'rejected' ? '已拒絕' : '已停權'}嘅商戶`}
+                        className="hover:opacity-80 transition-opacity"
+                      >
+                        <StatusBadge status={v.status} />
+                      </button>
                     </td>
                     <td className="px-4 py-3 hidden xl:table-cell text-slate-600 whitespace-nowrap">
                       {fmtDate(v.updatedAt)}
@@ -483,6 +646,9 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
   const [description, setDescription] = useState(vendor.description || '');
   const [tags, setTags] = useState((vendor.tags || []).join(', '));
   const [portfolio, setPortfolio] = useState((vendor.portfolio || []).join('\n'));
+  // 2026-07-11 — vendor onboarding approval. Pre-onboarding docs (no
+  // status) display as 'approved' so the dropdown's initial value is sane.
+  const [status, setStatus] = useState(vendor.status || 'approved');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -495,6 +661,7 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
     if (category !== (vendor.category || '')) updates.category = category.trim();
     if (price !== (vendor.price || '')) updates.price = price.trim();
     if (description !== (vendor.description || '')) updates.description = description.trim();
+    if (status !== (vendor.status || 'approved')) updates.status = status;
 
     const newRating = rating === '' ? null : Number(rating);
     if (typeof newRating === 'number' && newRating !== vendor.rating) {
@@ -602,6 +769,24 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
                   onChange={(e) => setRating(e.target.value)}
                   className="w-full p-2.5 rounded-lg border border-slate-300 focus:border-emerald-500 outline-none"
                 />
+              </div>
+              {/*
+                2026-07-11 — approval status. Shown in the edit form so admin
+                can flip a pending vendor to approved (or vice versa)
+                without writing a separate approval screen.
+              */}
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">審批狀態</label>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border border-slate-300 focus:border-emerald-500 outline-none bg-white"
+                >
+                  <option value="approved">✅ 已批准 (公開展示)</option>
+                  <option value="pending">⏳ 待審批 (隱藏)</option>
+                  <option value="rejected">❌ 已拒絕 (隱藏)</option>
+                  <option value="suspended">⏸ 已停權 (隱藏)</option>
+                </select>
               </div>
               <div>
                 <label className="block text-sm font-bold text-slate-700 mb-1">參考價</label>
