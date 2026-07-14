@@ -132,6 +132,29 @@ export default function App() {
   const helperCtx = useHelperAuth();
   const [helperAccepting, setHelperAccepting] = useState(false);
 
+  // 2026-07-14 — post-login intent routing. If the user clicked the
+  // 'I'm a Vendor' CTA on the LoginScreen before signing up, the screen
+  // stashed 'vendor-onboarding' in sessionStorage. On login, we route
+  // them straight into the wizard. Cleared after consumption so they
+  // don't get auto-routed back to the wizard on subsequent visits.
+  useEffect(() => {
+    if (!user || user.isAnonymous) return;
+    let intent;
+    try {
+      intent = sessionStorage.getItem('postLoginIntent');
+    } catch {
+      return;
+    }
+    if (intent === 'vendor-onboarding') {
+      try {
+        sessionStorage.removeItem('postLoginIntent');
+      } catch {
+        // ignore
+      }
+      setCurrentView('vendor-onboarding');
+    }
+  }, [user]);
+
   // Hermes 2026-07-03: helperPerms is derived once currentEvent is declared
   // (below, around line 107). The declaration is placed there because
   // JavaScript's temporal dead zone forbids referencing consts before they

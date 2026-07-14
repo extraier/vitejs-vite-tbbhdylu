@@ -167,6 +167,20 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     setError(null);
   };
 
+  // 2026-07-14 — 'I\'m a Vendor' CTA. Sets a session flag so App.jsx
+  // routes the user straight into the wizard after they finish signing
+  // up or signing in. We use sessionStorage (cleared on tab close) so
+  // a vendor who comes back next week doesn't get auto-routed.
+  const handleVendorCta = () => {
+    try {
+      sessionStorage.setItem('postLoginIntent', 'vendor-onboarding');
+    } catch {
+      // sessionStorage can throw in private mode / disabled storage;
+      // fall back to just flipping the form to signup.
+    }
+    switchMode('signup');
+  };
+
   const handleGuest = async () => {
     if (!onContinueAsGuest) return;
     setError(null);
@@ -383,7 +397,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           </div>
           <a
             href="#signup-as-vendor"
-            onClick={(e) => { e.preventDefault(); switchMode('signup'); }}
+            onClick={(e) => { e.preventDefault(); handleVendorCta(); }}
             className="w-full inline-flex items-center justify-between gap-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold py-3 px-4 rounded-xl transition-colors text-sm"
           >
             <span className="flex items-center gap-2">
