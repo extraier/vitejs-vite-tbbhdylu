@@ -21,7 +21,7 @@ import { Heart, X, Mail, Lock, Loader2 } from 'lucide-react';
  *   onSignIn      — (email, password) => Promise<void>; throws on failure
  *   linkedAccountEmail — optional pre-fill (e.g. last attempted email)
  */
-export function SignUpPromptModal({ onClose, onLink, onSignIn, linkedAccountEmail = '' }) {
+export function SignUpPromptModal({ isOpen = true, onClose, onLink, onSignIn, linkedAccountEmail = '' }) {
   const [email, setEmail] = useState(linkedAccountEmail);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -34,6 +34,9 @@ export function SignUpPromptModal({ onClose, onLink, onSignIn, linkedAccountEmai
   // tabs sometimes find the X button unresponsive (cached state, race
   // conditions with Vercel mid-deploy). Escape is a global UX
   // expectation for dismissable modals and gives them a way out.
+  //
+  // Hook order matters — must come BEFORE any early return so React's
+  // hook counter stays consistent across renders.
   useEffect(() => {
     const handler = (e) => {
       if (e.key === 'Escape' && !busy) onClose();
@@ -41,6 +44,14 @@ export function SignUpPromptModal({ onClose, onLink, onSignIn, linkedAccountEmai
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [busy, onClose]);
+
+  // 2026-07-14 — the modal was rendering permanently after login because
+  // isOpen wasn't being checked. The parent always mounts the component
+  // (to avoid tearing down state on every toggle) but the child has to
+  // gate its own render on isOpen. Returning null keeps the component
+  // mounted (so useEffect listeners + state survive) while hiding the UI.
+  // MUST come after all hooks (useEffect) to satisfy the rules of hooks.
+  if (!isOpen) return null;
 
   const submit = async (e) => {
     e.preventDefault();
