@@ -1,25 +1,23 @@
 // App-wide constants. Kept in plain TS so screens can import what they need
 // without pulling the entire App.jsx in.
 
-// TASK_CATEGORIES — flat key → Chinese label map. Used by the
-// COUPLE-SIDE task picker (CoupleChecklist, CoupleJobBoard,
-// CoupleBudget) so couples can plan tasks that line up 1:1 with
-// the categories vendors can register under (see VENDOR_CATEGORIES
-// below for the hierarchical source of truth).
+// TASK_CATEGORIES — flat key → Chinese label map for LEGACY keys only.
+// The couple-side task picker (CoupleChecklist) now reads from
+// VENDOR_CATEGORIES directly to get the full 13 top-level categories
+// + 38 sub-services, with namespaced keys like 'venue.banquet_hall'.
+// This map only needs to cover the OLD flat keys ('ceremony_venue',
+// 'deco', etc.) so existing task docs in Firestore still resolve to
+// their Chinese label for display purposes.
 //
-// 2026-07-15 — expanded from 6 hand-picked categories to all 13
-// top-level vendor categories + sub-services, so couples searching
-// for any vendor type (e.g. 婚禮蛋糕, 過大禮物資, 蜜月旅遊) can
-// find it in the dropdown. Keys are namespaced as `${topKey}.${subKey}`
-// for sub-services (e.g. 'venue.banquet_hall') so they coexist with
-// the legacy flat keys ('ceremony_venue', 'deco', etc.) and don't
-// break existing task docs in Firestore.
-//
-// getTaskCategoryLabel() resolves a namespaced key back to its
-// Chinese label, with safe fallback to the flat map for legacy keys.
+// 2026-07-15 — the previous version of this file tried to spread
+// VENDOR_CATEGORIES into TASK_CATEGORIES inline. That broke because
+// VENDOR_CATEGORIES is defined further down in the file, so the
+// spread threw 'Cannot access VENDOR_CATEGORIES before initialization'
+// at module load — which crashes React on mount and renders a blank
+// page. Reverted to plain object literal. The new picker uses
+// VENDOR_CATEGORIES directly; this map is just for legacy doc
+// resolution.
 export const TASK_CATEGORIES: Record<string, string> = {
-  // ---- Legacy flat keys (kept for backward-compat with existing
-  //      task docs in Firestore) ----
   ceremony_venue: '證婚場地',
   banquet_venue: '出門及晚宴場地',
   deco: '場地佈置',
@@ -42,38 +40,7 @@ export const TASK_CATEGORIES: Record<string, string> = {
   invitation: '喜帖',
   honeymoon: '蜜月旅行',
   other: '自訂項目',
-
-  // ---- New keys namespaced as top.sub, derived from VENDOR_CATEGORIES.
-  //      Picker uses these directly. Existing tasks without a subcategory
-  //      still match their legacy key. ----
-  ...Object.fromEntries(
-    Object.entries(VENDOR_CATEGORIES).flatMap(([topKey, top]) => [
-      [topKey, top.label],
-      ...Object.entries(top.subs).map(([subKey, subLabel]) => [
-        `${topKey}.${subKey}`,
-        subLabel,
-      ]),
-    ]),
-  ),
 };
-
-// Lookup helper for the task picker. Resolves:
-//   'venue'                          → '婚宴場地'
-//   'venue.banquet_hall'             → '酒店宴會廳'
-//   'ceremony_venue' (legacy)        → '證婚場地' (via fallback)
-//   'something.weird' (unknown)      → 'something.weird' (raw)
-export function getTaskCategoryLabel(key: string): string {
-  if (!key) return '';
-  if (TASK_CATEGORIES[key]) return TASK_CATEGORIES[key];
-  // Sub-service key with no exact match — try splitting on '.' to
-  // fall back to just the top label (defensive: in case a task was
-  // saved with a sub-only key).
-  if (key.includes('.')) {
-    const [top] = key.split('.');
-    return TASK_CATEGORIES[top] || key;
-  }
-  return key;
-}
 
 // VENDOR_CATEGORIES — hierarchical (top-level category → sub-services).
 // Used by:
@@ -226,6 +193,39 @@ export function getVendorCategoryLabel(category: string, subcategory?: string): 
     return `${top.label} · ${top.subs[subcategory]}`;
   }
   return top.label;
+}
+
+// Lookup helper for the task picker. Resolves:
+//   'venue'                          → '婚宴場地'
+//   'venue.banquet_hall'             → '酒店宴會廳'
+//   'ceremony_venue' (legacy)        → '證婚場地' (via fallback)
+//   'something.weird' (unknown)      → 'something.weird' (raw)
+//
+// Defined AFTER VENDOR_CATEGORIES + getVendorCategoryLabel so it can
+// reference both TASK_CATEGORIES (legacy flat keys) and
+// VENDOR_CATEGORIES (new hierarchical keys). Putting this function
+// at the top of the file (where I tried first) caused a TDZ
+// ReferenceError because TASK_CATEGORIES was being initialized
+// before VENDOR_CATEGORIES was declared, which crashed React at
+// module load and rendered a blank page. So: helpers go BELOW
+// the data they reference.
+export function getTaskCategoryLabel(key: string): string {
+  if (!key) return '';
+  // Sub-service namespaced key (e.g. 'venue.banquet_hall') — look up
+  // in the new VENDOR_CATEGORIES structure first.
+  if (key.includes('.')) {
+    const [topKey, subKey] = key.split('.');
+    const top = VENDOR_CATEGORIES[topKey];
+    if (top && top.subs[subKey]) return top.subs[subKey];
+    if (top) return top.label; // fall back to top label if sub unknown
+  }
+  // Top-level new key (e.g. 'venue') — look up label in VENDOR_CATEGORIES.
+  if (VENDOR_CATEGORIES[key]) return VENDOR_CATEGORIES[key].label;
+  // Legacy flat key (e.g. 'ceremony_venue', 'deco', 'photography').
+  if (TASK_CATEGORIES[key]) return TASK_CATEGORIES[key];
+  // Unknown — return raw key so the UI can show something rather
+  // than blank.
+  return key;
 }
 
 export const FREE_TIER_LIMIT_MB = 100;
