@@ -975,7 +975,13 @@ export default function App() {
           const role = target;
           if (role === 'owner') {
             setUserRole('owner');
-            if (activeGuestPortal) setCurrentView('couple-guests');
+            // 2026-07-15 — always route to events-dashboard when switching
+            // to owner role. Previously the handler only updated
+            // currentView when there was an activeGuestPortal, leaving
+            // currentView stale (e.g. 'vendor-dashboard' after the user
+            // clicked 商戶 then 主理新人). The stale view would fail
+            // every render guard and the page would go blank.
+            setCurrentView('events-dashboard');
             setActiveGuestPortal(null);
           } else if (role === 'reception') {
             setUserRole('reception');
