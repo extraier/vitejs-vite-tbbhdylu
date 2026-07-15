@@ -47,13 +47,24 @@ export function RoleSimulator({
       >
         👩🏻‍❤️‍👨🏻 主理新人
       </button>
+      {/* 2026-07-15 — renamed for clarity. Previously this pill was
+          labelled "兄弟姊妹(接待)" which conflated two unrelated
+          features:
+            - 兄弟姊妹 (Helpers) — invited via HelperManager modal,
+              shown in HelperWaitingScreen until they accept an
+              invite.
+            - 接待處 (Reception desk) — the QR-code scanner used at
+              the wedding reception table for guest check-in.
+          This pill routes to the QR-scanner role, not the helper
+          flow, so the label now says "接待處掃描" (Reception scanner). */}
       <button
         onClick={() => onSwitch('reception')}
         className={`px-3 py-1 rounded-full ${
           userRole === 'reception' ? 'bg-indigo-500 font-bold' : 'bg-slate-800 hover:bg-slate-700'
         }`}
+        title="接待處 QR 掃碼 (Reception desk QR scanner)"
       >
-        👯‍♀️ 兄弟姊妹(接待)
+        🛂 接待處掃描
       </button>
       <button
         onClick={() => onSwitch('vendor')}
