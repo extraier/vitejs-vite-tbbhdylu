@@ -34,14 +34,22 @@
 // VENDOR:
 //   • Read /jobRequests (public listings)
 //   • Read/write /proposals for jobs they own
+//   • Read /vendors/{vendorUid} (any vendor profile, public for browsing)
+//   • Write /vendors/{vendorUid} ONLY if auth.uid == vendorUid (own profile)
 // EVERYONE ELSE:
 //   • No access. Period.
 //
 // NOTE on appId
-// -------------
+// ------------
 // We allow read/write under any /artifacts/{appId} segment so the same rules
 // work for production, Canvas, and StackBlitz preview environments. The appId
 // is not a security boundary — auth + guestLinks + helpers are.
+//
+// 2026-07-15 — the /vendors/{vendorUid} match block used to be nested
+// INSIDE /artifacts/{appId}, which was a bug: the actual Firestore path
+// is /vendors/{uid} (NOT under any /artifacts/* prefix), so the rule
+// never matched and reads fell through to the catch-all deny. Moved
+// the block out to the root level alongside /vendor_events.
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -54,6 +62,10 @@ service cloud.firestore {
 
     function isOwner(uid) {
       return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
     }
 
     // A guest has redeemed a QR-code link tying them to (owner, event).
@@ -249,26 +261,26 @@ service cloud.firestore {
           && (resource.data.vendorUid == request.auth.uid
               || resource.data.coupleUid == request.auth.uid);
       }
+    }
 
-      match /vendors/{vendorUid} {
-        allow read: if true;
-        allow write: if isSignedIn() && request.auth.uid == vendorUid;
-      }
-
-      // ---- Default deny everything else --------------------------------
-      match /{document=**} {
-        allow read, write: if false;
-      }
+    // ---- Vendor directory (root-level, NOT under /artifacts/{appId}) ----
+    //
+    // The vendor collection lives at /vendors/{uid} (NOT under any
+    // artifacts/* prefix) so couples, helpers, and other vendors can
+    // query it without knowing the deploy-time appId. This match MUST
+    // be outside the /artifacts/{appId} block (was a bug fixed
+    // 2026-07-15: previously nested inside, the rule never matched the
+    // actual path and reads returned PERMISSION_DENIED from the
+    // catch-all).
+    match /vendors/{vendorUid} {
+      allow read: if true;
+      allow write: if isSignedIn() && request.auth.uid == vendorUid;
     }
 
     // ---- Vendor analytics events (root-level collection) ----------------
     // NOT nested under /artifacts/{appId} because docs live at /vendor_events/*
     // Anyone signed in can write their own tracking events; admin reads
     // require the `admin` custom claim.
-    function isAdmin() {
-      return isSignedIn() && request.auth.token.admin == true;
-    }
-
     match /vendor_events/{eventId} {
       allow create: if isSignedIn()
         && request.resource.data.type in ['view', 'click']
@@ -277,6 +289,11 @@ service cloud.firestore {
         && request.resource.data.timestamp == request.time;
       allow read: if isAdmin();
       allow update, delete: if false;
+    }
+
+    // ---- Default deny everything else --------------------------------
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
