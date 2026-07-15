@@ -888,6 +888,12 @@ export default function App() {
   // waiting screen is only for the "signed in but no role assigned yet"
   // case (typically a couple's friend who got invited but hasn't accepted).
   //
+  // 2026-07-15 — admins also skip. Without the !isAdmin gate, an admin
+  // user who clicks the 兄弟姊妹 pill (which routes to userRole='reception')
+  // falls through to this screen and sees "尚未收到邀請", which is wrong
+  // — admins have full access via the role-switcher bar, they don't need
+  // a helper invite. The 兄弟姊妹 pill is a preview, not an assignment.
+  //
   // Skip for anonymous users: they'd loop forever waiting for invites that
   // can't exist (no email on file).
   if (
@@ -897,6 +903,7 @@ export default function App() {
     user.email &&
     !helperCtx.loading &&
     !helperCtx.isHelper &&
+    !isAdmin &&
     userRole !== 'owner' &&
     userRole !== 'vendor'
   ) {
@@ -1214,6 +1221,12 @@ export default function App() {
                 onSubmitProposal={submitProposal}
                 onManageProfile={() => setCurrentView('vendor-profile')}
                 onLogout={handleVendorLogout}
+                // 2026-07-15 — when an admin (no `vendor: true` claim)
+                // impersonates the vendor role via the role-switcher,
+                // show a "管理員預覽模式" banner so they understand why
+                // the dashboard looks empty (no vendor doc under their
+                // own uid).
+                isAdminPreview={isAdmin && !isVendor}
               />
             )}
 

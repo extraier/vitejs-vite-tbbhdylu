@@ -32,6 +32,7 @@ export function VendorDashboard({
   onSubmitProposal,
   onManageProfile,
   onLogout,
+  isAdminPreview = false,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
@@ -45,6 +46,24 @@ export function VendorDashboard({
 
   return (
     <div className="max-w-6xl mx-auto mt-8 animate-in slide-in-from-bottom-4 duration-500">
+      {/* 2026-07-15 — when an admin clicks the 商戶 pill to preview the
+          vendor UI but they themselves don't have a vendor profile, the
+          dashboard would otherwise look broken (warning banner + empty
+          state, no name, no category). Show a clear admin-preview
+          banner so the admin understands what's happening. */}
+      {isAdminPreview && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 mb-6 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-indigo-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="font-bold text-indigo-900 mb-1">
+              管理員預覽模式
+            </h3>
+            <p className="text-sm text-indigo-800">
+              你正以管理員身份預覽商戶控制台。你本身並非商戶，所以呢度唔會顯示真實商戶資料。要睇真實商戶 UI，請用商戶帳號登入。
+            </p>
+          </div>
+        </div>
+      )}
       <div className="bg-slate-900 rounded-2xl p-8 text-white mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold flex items-center gap-3">
