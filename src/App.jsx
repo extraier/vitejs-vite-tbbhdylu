@@ -87,6 +87,7 @@ export default function App() {
     user,
     authChecked,
     isAdmin,
+    isVendor,
     isAnonymous,
     loginWithGoogle,
     loginWithEmail,
@@ -138,6 +139,24 @@ export default function App() {
   // call unconditionally — it no-ops if no user.
   const helperCtx = useHelperAuth();
   const [helperAccepting, setHelperAccepting] = useState(false);
+
+  // 2026-07-15 — auto-route vendors to their dashboard. When the user
+  // signs in and has the `vendor: true` custom claim (set by
+  // applyAsVendor), we flip userRole to 'vendor' and route them to the
+  // vendor dashboard. Without this, returning vendors would land on
+  // the couple events-dashboard and see the "I'm a Vendor" CTA again.
+  //
+  // The role check also runs on every isVendor change, so when the
+  // claim flips true mid-session (after submitting the wizard) we
+  // auto-route instead of leaving the user stuck on a stale screen.
+  useEffect(() => {
+    if (!user || user.isAnonymous) return;
+    if (!isVendor) return;
+    setUserRole('vendor');
+    if (currentView !== 'vendor-dashboard') {
+      setCurrentView('vendor-dashboard');
+    }
+  }, [isVendor, user]);
 
   // 2026-07-14 — post-login intent routing. If the user clicked the
   // 'I'm a Vendor' CTA on the LoginScreen before signing up, the screen
@@ -1164,8 +1183,25 @@ export default function App() {
             {user && currentView === 'vendor-onboarding' && (
               <VendorOnboarding
                 user={user}
-                onComplete={() => setCurrentView('events-dashboard')}
-                onCancel={() => setCurrentView('events-dashboard')}
+                // 2026-07-15 — after the wizard submits, applyAsVendor sets the
+                              // `vendor: true` custom claim server-side. We refresh the
+                              // ID token so the local session picks it up, then route
+                              // to the vendor dashboard. Without the explicit refresh
+                              // here, the user sees the couple events-dashboard
+                              // (stale token, no vendor claim) and is confused.
+                              onComplete={async () => {
+                                try {
+                                  if (user?.getIdToken) {
+                                    await user.getIdToken(true);
+                                  }
+                                } catch (e) {
+                                  // eslint-disable-next-line no-console
+                                  console.warn('[App] token refresh after vendor apply failed:', e?.message);
+                                }
+                                setUserRole('vendor');
+                                setCurrentView('vendor-dashboard');
+                              }}
+                              onCancel={() => setCurrentView('events-dashboard')}
               />
             )}
           </main>

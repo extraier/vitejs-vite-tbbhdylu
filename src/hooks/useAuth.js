@@ -5,6 +5,7 @@
 // Returns:
 //   user / authChecked            — current Firebase user, ready flag
 //   isAdmin                       — true if user has the `admin` custom claim
+//   isVendor                      — true if user has the `vendor` custom claim
 //   isAnonymous                   — true for guest users (can browse, can't save)
 //   loginWithGoogle               — popup-based Google sign-in
 //   loginWithEmail / registerWithEmail — email/password sign-in / sign-up
@@ -34,6 +35,7 @@ import { auth } from '../lib/firebase';
 export function useAuth() {
   const [user, setUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isVendor, setIsVendor] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   // Session-only flag: when true, anonymous Firebase users are accepted
   // as the active user. Defaults false so restored anonymous sessions
@@ -69,16 +71,24 @@ export function useAuth() {
       if (currentUser && currentUser.isAnonymous && !allowAnonymous) {
         setUser(null);
         setIsAdmin(false);
+        setIsVendor(false);
       } else {
         setUser(currentUser);
         // Refresh the ID token to read fresh custom claims. Custom claims
         // are set server-side (Firebase Admin SDK) and only refresh on
         // sign-in or explicit token refresh.
         setIsAdmin(false);
+        setIsVendor(false);
         if (currentUser && !currentUser.isAnonymous) {
           try {
+            // 2026-07-15 — force-refresh the token so we get the latest
+            // claims. applyAsVendor sets `vendor: true` server-side; if
+            // we don't force-refresh, an existing signed-in user sees a
+            // stale token (no vendor claim) and gets routed to the
+            // couple events-dashboard instead of the vendor dashboard.
             const tokenResult = await currentUser.getIdTokenResult(true);
             setIsAdmin(Boolean(tokenResult.claims.admin));
+            setIsVendor(Boolean(tokenResult.claims.vendor));
           } catch (err) {
             // eslint-disable-next-line no-console
             console.warn('[useAuth] token refresh failed:', err?.message || err);
@@ -151,6 +161,7 @@ export function useAuth() {
     user,
     authChecked,
     isAdmin,
+    isVendor,
     isAnonymous: Boolean(user?.isAnonymous),
     loginWithGoogle,
     loginWithEmail,
