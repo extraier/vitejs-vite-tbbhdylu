@@ -14,7 +14,7 @@ import {
   Save,
   X,
 } from 'lucide-react';
-import { TASK_CATEGORIES } from '../lib/config';
+import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { budgetFitTier, budgetDistance, formatVendorPrice, formatMoney, parseFormattedNumber } from '../lib/format';
 
 export function CoupleChecklist({
@@ -123,16 +123,22 @@ export function CoupleChecklist({
               value={newTaskForm.categoryKey}
               onChange={(e) => onNewTaskFormChange({ ...newTaskForm, categoryKey: e.target.value })}
             >
-              <optgroup label="場地及佈置">
-                <option value="ceremony_venue">證婚場地</option>
-                <option value="banquet_venue">出門及晚宴場地</option>
-                <option value="deco">場地佈置</option>
-              </optgroup>
-              <optgroup label="團隊及統籌">
-                <option value="lawyer">證婚律師</option>
-                <option value="photography">攝影及錄影</option>
-                <option value="mua">新娘化妝師</option>
-              </optgroup>
+              {/* 2026-07-15 — render the dropdown as 13 grouped <optgroup>
+                  entries (one per top-level vendor category), each
+                  containing the top label as a default option + all
+                  sub-services. This mirrors the vendor-side
+                  VENDOR_CATEGORIES structure so couples can pick any
+                  task that has matching vendors. */}
+              {Object.entries(VENDOR_CATEGORIES).map(([topKey, top]) => (
+                <optgroup key={topKey} label={`${top.icon} ${top.label}`}>
+                  <option value={topKey}>{top.label} (全部)</option>
+                  {Object.entries(top.subs).map(([subKey, subLabel]) => (
+                    <option key={subKey} value={`${topKey}.${subKey}`}>
+                      ↳ {subLabel}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
               <option value="other">✏️ 自訂項目 (其他)...</option>
             </select>
             {newTaskForm.categoryKey === 'other' && (
@@ -467,7 +473,7 @@ function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGo
         <div>
           <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">智能配對推薦</h2>
           <p className="text-rose-600 font-medium text-sm mt-1">
-            正在尋找：{TASK_CATEGORIES[activeCategory] || '商戶'}{' '}
+            正在尋找：{getTaskCategoryLabel(activeCategory) || '商戶'}{' '}
             {activeVenue && <span className="text-slate-500"> @ {activeVenue}</span>}
           </p>
         </div>
