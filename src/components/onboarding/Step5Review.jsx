@@ -21,9 +21,18 @@ export function Step5Review({ form, update, user, errors, onSuccess, onBack }) {
       const result = await submitVendorApplication(form);
       onSuccess(result);
     } catch (e) {
-      // Firebase callable errors come wrapped in e.code / e.message.
+      // 2026-07-15 — surface more diagnostics. The original code only
+      // showed e.message, which hides the Firebase error code (and the
+      // function name) — so "internal" was the only thing users ever
+      // saw. Now we log the full error to the console for the dev's
+      // DevTools, AND show the code + message inline so users can
+      // copy-paste it for support.
+      // eslint-disable-next-line no-console
+      console.error('[Step5Review] submit failed:', e);
+      const code = e?.code || '';
+      const detail = e?.details ? ` — ${JSON.stringify(e.details)}` : '';
       const msg = e?.message || '提交失敗';
-      setSubmitError(msg);
+      setSubmitError(`${code ? `[${code}] ` : ''}${msg}${detail}`);
     } finally {
       setSubmitting(false);
     }
