@@ -849,6 +849,9 @@ export default function App() {
   // If the user is signed in (non-anonymous), NOT in guest-mode, and is NOT
   // an active helper anywhere — show the waiting screen. Owner sees the
   // normal app because they always have at least one event of their own.
+  // Vendors ALSO skip — they have their own dashboard route; the helper
+  // waiting screen is only for the "signed in but no role assigned yet"
+  // case (typically a couple's friend who got invited but hasn't accepted).
   //
   // Skip for anonymous users: they'd loop forever waiting for invites that
   // can't exist (no email on file).
@@ -859,7 +862,8 @@ export default function App() {
     user.email &&
     !helperCtx.loading &&
     !helperCtx.isHelper &&
-    userRole !== 'owner'
+    userRole !== 'owner' &&
+    userRole !== 'vendor'
   ) {
     return (
       <HelperWaitingScreen
