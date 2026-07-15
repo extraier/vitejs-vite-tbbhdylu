@@ -22,6 +22,7 @@ import {
   Settings,
   AlertCircle,
 } from 'lucide-react';
+import { TASK_CATEGORIES } from '../lib/config';
 
 export function VendorDashboard({
   vendor,
@@ -32,7 +33,13 @@ export function VendorDashboard({
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   const vendorCategory = vendor?.category || '';
-  const categoryLabel = vendorCategory ? ` · ${vendorCategory}` : '';
+  // 2026-07-15 — TASK_CATEGORIES maps the raw category key (e.g.
+  // 'deco', 'photography') to the Chinese display label (e.g. '場地
+  // 佈置', '婚禮攝影及錄影'). The dashboard pill used to render the
+  // raw key, which produced '· deco' instead of '· 場地佈置'.
+  const categoryLabel = vendorCategory
+    ? ` · ${TASK_CATEGORIES[vendorCategory] || vendorCategory}`
+    : '';
   const hasName = Boolean(vendor?.name && vendor.name.trim().length >= 2);
 
   return (
