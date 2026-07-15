@@ -34,6 +34,7 @@ import {
   INITIAL_JOB_REQUESTS,
   MOCK_PROPOSALS,
   TASK_CATEGORIES,
+  getTaskCategoryLabel,
 } from './lib/config';
 import { parseGuestParams } from './lib/guestMode';
 import { uploadPhotoToNas } from './lib/uploadToNas';
@@ -226,6 +227,15 @@ export default function App() {
   // Forms
   const [newEventName, setNewEventName] = useState('');
   const [newTaskForm, setNewTaskForm] = useState({
+    // 2026-07-15 — split category picker into two steps:
+    //   categoryTop = top-level vendor category key (e.g. 'venue')
+    //   categorySub = sub-service key (e.g. 'banquet_hall'), or '' for
+    //                 "all of the top category"
+    // The legacy `categoryKey` is still set on save for backwards
+    // compat with existing task docs (e.g. 'venue.banquet_hall' or
+    // 'venue' for the top-level match).
+    categoryTop: '',
+    categorySub: '',
     categoryKey: 'other',
     customTitle: '',
     venue: '',
@@ -528,14 +538,33 @@ export default function App() {
   const handleAddTask = async (e) => {
     e.preventDefault();
     if (!user || !currentEvent) return;
-    const title =
-      newTaskForm.categoryKey === 'other'
-        ? newTaskForm.customTitle
-        : TASK_CATEGORIES[newTaskForm.categoryKey] || newTaskForm.customTitle;
+    // 2026-07-15 — derive the stored category from the two-step
+    // picker. Priority:
+    //   1. customTitle  if user picked 'other'
+    //   2. {top}.{sub}  if user picked a sub-service
+    //   3. {top}        if user picked a top-level only (sub === '')
+    // The category field stays a single string for backwards compat
+    // with existing task docs and the activeCategory filter.
+    let categoryKey = 'other';
+    let title = '';
+    if (newTaskForm.categoryKey === 'other') {
+      categoryKey = 'other';
+      title = newTaskForm.customTitle;
+    } else if (newTaskForm.categoryTop) {
+      categoryKey = newTaskForm.categorySub
+        ? `${newTaskForm.categoryTop}.${newTaskForm.categorySub}`
+        : newTaskForm.categoryTop;
+      title = getTaskCategoryLabel(categoryKey);
+    } else {
+      // No category selected — keep the legacy 'other' fallback so
+      // the user can still submit a custom title.
+      categoryKey = 'other';
+      title = newTaskForm.customTitle;
+    }
     const newTask = {
       eventId: currentEvent.id,
       title,
-      category: newTaskForm.categoryKey,
+      category: categoryKey,
       isCompleted: false,
       venue: newTaskForm.venue,
       dueDate: newTaskForm.dueDate,
@@ -544,7 +573,7 @@ export default function App() {
       taskType: 'vendor',
     };
     await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), newTask);
-    setNewTaskForm({ categoryKey: 'other', customTitle: '', venue: '', dueDate: '2026-12-31', estimatedCost: '', taskType: 'vendor' });
+    setNewTaskForm({ categoryTop: '', categorySub: '', categoryKey: 'other', customTitle: '', venue: '', dueDate: '2026-12-31', estimatedCost: '', taskType: 'vendor' });
     showToast('✅ 任務已新增');
   };
 

@@ -118,29 +118,56 @@ export function CoupleChecklist({
             onSubmit={onAddTask}
             className="bg-slate-50 p-4 rounded-xl border border-slate-200 grid grid-cols-2 gap-2 mt-4"
           >
+            {/* 2026-07-15 — two-step category picker:
+                  1. Pick a top-level category (e.g. 婚宴場地)
+                  2. Pick a sub-service (e.g. 酒店宴會廳) — or leave
+                     blank to match the whole top category.
+                  Picking a different top clears the sub. */}
             <select
               className="col-span-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
-              value={newTaskForm.categoryKey}
-              onChange={(e) => onNewTaskFormChange({ ...newTaskForm, categoryKey: e.target.value })}
+              value={newTaskForm.categoryTop}
+              onChange={(e) => onNewTaskFormChange({
+                ...newTaskForm,
+                categoryTop: e.target.value,
+                categorySub: '', // reset sub when top changes
+                categoryKey: e.target.value === 'other' ? 'other' : '',
+              })}
             >
-              {/* 2026-07-15 — render the dropdown as 13 grouped <optgroup>
-                  entries (one per top-level vendor category), each
-                  containing the top label as a default option + all
-                  sub-services. This mirrors the vendor-side
-                  VENDOR_CATEGORIES structure so couples can pick any
-                  task that has matching vendors. */}
+              <option value="">請選擇主類別...</option>
               {Object.entries(VENDOR_CATEGORIES).map(([topKey, top]) => (
-                <optgroup key={topKey} label={`${top.icon} ${top.label}`}>
-                  <option value={topKey}>{top.label} (全部)</option>
-                  {Object.entries(top.subs).map(([subKey, subLabel]) => (
-                    <option key={subKey} value={`${topKey}.${subKey}`}>
-                      ↳ {subLabel}
-                    </option>
-                  ))}
-                </optgroup>
+                <option key={topKey} value={topKey}>
+                  {top.icon} {top.label}
+                </option>
               ))}
               <option value="other">✏️ 自訂項目 (其他)...</option>
             </select>
+
+            {newTaskForm.categoryTop &&
+              newTaskForm.categoryTop !== 'other' &&
+              VENDOR_CATEGORIES[newTaskForm.categoryTop] && (
+                <select
+                  className="col-span-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
+                  value={newTaskForm.categorySub}
+                  onChange={(e) => onNewTaskFormChange({
+                    ...newTaskForm,
+                    categorySub: e.target.value,
+                    categoryKey: e.target.value
+                      ? `${newTaskForm.categoryTop}.${e.target.value}`
+                      : newTaskForm.categoryTop,
+                  })}
+                >
+                  <option value="">
+                    {VENDOR_CATEGORIES[newTaskForm.categoryTop].label} (全部)
+                  </option>
+                  {Object.entries(
+                    VENDOR_CATEGORIES[newTaskForm.categoryTop].subs
+                  ).map(([subKey, subLabel]) => (
+                    <option key={subKey} value={subKey}>
+                      ↳ {subLabel}
+                    </option>
+                  ))}
+                </select>
+              )}
             {newTaskForm.categoryKey === 'other' && (
               <input
                 type="text"
