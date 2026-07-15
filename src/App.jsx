@@ -40,6 +40,7 @@ import { uploadPhotoToNas } from './lib/uploadToNas';
 import { useAuth } from './hooks/useAuth';
 import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
+import { useFirestoreDoc } from './hooks/useFirestoreDoc';
 import { useToast } from './hooks/useToast';
 import { signInAnonymously } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
@@ -354,6 +355,28 @@ export default function App() {
       ? collection(db, 'artifacts', appId, 'users', targetUid, 'tasks')
       : null,
     [targetUid, guest.isGuestMode],
+  );
+
+  // 2026-07-15 — VendorDashboard live data. Previously the dashboard
+  // hardcoded "Visionary Capture" as the vendor name and used the
+  // static INITIAL_JOB_REQUESTS array for listings. Now both come from
+  // Firestore:
+  //   • vendorProfile — live doc subscription to /vendors/{uid}
+  //   • liveJobRequests — live query of the public /jobRequests
+  //     collection (any signed-in user can read per firestore.rules).
+  // The vendorProfile hook is gated on userRole so we don't pay for
+  // the subscription unless the user is actually a vendor.
+  const vendorDocRef =
+    user && userRole === 'vendor' ? doc(db, 'vendors', user.uid) : null;
+  const { data: vendorProfile, loading: vendorProfileLoading } = useFirestoreDoc(
+    vendorDocRef,
+    [user?.uid, userRole],
+  );
+  const { data: liveJobRequests, loading: jobRequestsLoading } = useFirestoreCollection(
+    user && userRole === 'vendor'
+      ? query(collection(db, 'jobRequests'), where('status', '==', 'open'))
+      : null,
+    [user?.uid, userRole],
   );
 
   // Sync current event from URL params when in guest mode
@@ -1171,7 +1194,9 @@ export default function App() {
 
             {userRole === 'vendor' && currentView === 'vendor-dashboard' && (
               <VendorDashboard
-                jobRequests={jobRequests}
+                vendor={vendorProfile}
+                jobRequests={liveJobRequests || []}
+                loading={vendorProfileLoading || jobRequestsLoading}
                 onSubmitProposal={submitProposal}
               />
             )}
