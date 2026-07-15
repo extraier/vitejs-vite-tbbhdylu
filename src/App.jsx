@@ -5,7 +5,9 @@ import {
      collection,
      deleteDoc,
      doc,
+     limit,
      onSnapshot,
+     orderBy,
      query,
      updateDoc,
      where,
@@ -335,18 +337,34 @@ export default function App() {
   );
 
    const { data: allGuests } = useFirestoreCollection(
-     guestDataReady && targetUid
-       ? query(
-           collection(db, 'artifacts', appId, 'users', targetUid, 'guests'),
-           // Firestore rules reference resource.data.eventId — the query must
-           // include a where() filter matching that field or list queries are
-           // denied. In guest mode we use guest.qEvent, in owner mode we use
-           // the currently selected event ID.
-           where('eventId', '==', guest.isGuestMode ? guest.qEvent : (currentEvent?.id || '__no_event__'))
-         )
-       : null,
-     [targetUid, guestDataReady, guest.qEvent, currentEvent?.id],
-   );
+       guestDataReady && targetUid
+         ? query(
+             collection(db, 'artifacts', appId, 'users', targetUid, 'guests'),
+             // Firestore rules reference resource.data.eventId — the query must
+             // include a where() filter matching that field or list queries are
+             // denied. In guest mode we use guest.qEvent, in owner mode we use
+             // the currently selected event ID.
+             where('eventId', '==', guest.isGuestMode ? guest.qEvent : (currentEvent?.id || '__no_event__'))
+           )
+         : null,
+       [targetUid, guestDataReady, guest.qEvent, currentEvent?.id],
+     );
+
+     // 2026-07-15 — scanLog subscription for the reception scanner's
+     // "最近掃描" list. Bounded by eventId so we don't fetch scans from
+     // other events the owner might own. Limited to the last 50 (Firestore
+     // requires descending + limit for cost control).
+     const { data: recentScans } = useFirestoreCollection(
+       targetUid && !guest.isGuestMode && currentEvent
+         ? query(
+             collection(db, 'artifacts', appId, 'users', targetUid, 'scanLog'),
+             where('eventId', '==', currentEvent.id),
+             orderBy('scannedAt', 'desc'),
+             limit(50),
+           )
+         : null,
+       [targetUid, currentEvent?.id],
+     );
 
 
   const { data: allPhotos } = useFirestoreCollection(
@@ -1245,7 +1263,12 @@ export default function App() {
             )}
 
             {userRole === 'reception' && currentEvent && currentView === 'reception-scanner' && (
-              <ReceptionScanner onSimulateScan={simulateScanQrCode} />
+              <ReceptionScanner
+                eventGuests={eventGuests}
+                recentScans={recentScans || []}
+                onCheckIn={handleSimulateReceptionScan}
+                onManualCheckIn={handleSimulateReceptionScan}
+              />
             )}
 
             {userRole === 'vendor' && currentView === 'vendor-dashboard' && (
