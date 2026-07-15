@@ -1,94 +1,139 @@
-// portfolioUpload.js — uploads vendor portfolio images to NAS via public CDN.
+// portfolioUpload.js — uploads vendor portfolio images.
 //
-// Why a separate helper: keeps AdminVendors.jsx focused on UI. Same shape is
-// reusable for guest photo uploads later (same endpoint, same secret).
+// 2026-07-14 — switched from NAS upload to Firebase Storage. The NAS
+// endpoint (cdn.savetheday.io) was returning HTTP 530 (Cloudflare
+// origin-unreachable), making file uploads impossible. Firebase Storage
+// has its own CDN and works as long as the user has a Firebase Auth
+// session and the storage rules allow the write.
 //
-// Production endpoint: VITE_NAS_UPLOAD_URL (set in .env.local + Vercel)
-// Production token:    VITE_NAS_UPLOAD_SECRET (same).
+// Path scheme: /vendors/{vendorId}/portfolio/{ts}-{filename}
+// Storage rules require: request.auth.uid == vendorId
 //
-// Receiver protocol (matches /volume2/wedding/receiver/portfolio_upload.py):
-//   POST {url}            X-Upload-Token: <secret>
-//   Form fields:          vendorId, file
-//   Response (JSON):      { url: "https://cdn.savetheday.io/v/<vendor>/<file>" }
-//
-// Errors throw with the server message so the caller's error UI shows it.
+// The returned URLs are public download URLs (signed, time-limited but
+// effectively perpetual for our use case) that work anywhere — they're
+// stored in Firestore and rendered by the vendor directory, admin
+// review screen, and the vendor's own profile.
 
-const UPLOAD_URL = import.meta.env.VITE_NAS_UPLOAD_URL;
-const UPLOAD_SECRET = import.meta.env.VITE_NAS_UPLOAD_SECRET;
+import {
+  ref,
+  uploadBytesResumable,
+  getDownloadURL,
+} from 'firebase/storage';
+import { storage } from './firebase';
 
-export function portfolioUploadConfigured() {
-  return Boolean(UPLOAD_URL && UPLOAD_SECRET);
-}
+// Client-side guard: 8 MB matches the server-side rule.
+const MAX = 8 * 1024 * 1024;
+const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 /**
- * Upload one image to the NAS portfolio CDN.
- * @param {string} vendorId  sanitized vendor id (alphanum + dash only on receiver side)
+ * Upload one image to Firebase Storage under /vendors/{vendorId}/portfolio/.
+ * @param {string} vendorId  Firebase Auth UID of the vendor (the wizard
+ *                           routes this from useAuth().user.uid). The
+ *                           storage rule requires the auth UID to match
+ *                           this path segment.
  * @param {File}   file      browser File from <input type="file">
+ * @param {Function} onProgress  optional (pct: number) => void
  * @returns {Promise<string>}  public URL of the uploaded file
  */
-export async function uploadPortfolioImage(vendorId, file) {
-  if (!portfolioUploadConfigured()) {
-    throw new Error('上傳功能未設定（缺少 VITE_NAS_UPLOAD_URL/SECRET）');
+export async function uploadPortfolioImage(vendorId, file, onProgress) {
+  if (!vendorId) {
+    throw new Error('缺少 vendor ID');
   }
-  // Client-side guard: 8 MB matches the server cap.
-  const MAX = 8 * 1024 * 1024;
+  if (!file) {
+    throw new Error('未選擇檔案');
+  }
+  if (!ACCEPTED_TYPES.includes(file.type)) {
+    throw new Error(`不支援嘅格式：${file.type || '未知'}（只接受 JPG/PNG/WebP）`);
+  }
   if (file.size > MAX) {
     throw new Error(`檔案太大：${(file.size / 1024 / 1024).toFixed(1)} MB（上限 8 MB）`);
   }
-  const okTypes = ['image/jpeg', 'image/png', 'image/webp'];
-  if (!okTypes.includes(file.type)) {
-    throw new Error(`不支援嘅格式：${file.type || '未知'}（只接受 JPG/PNG/WebP）`);
-  }
 
-  const fd = new FormData();
-  fd.append('vendorId', vendorId);
-  fd.append('file', file);
+  // Path: /vendors/{vendorId}/portfolio/{ts}-{filename}
+  // The timestamp prefix prevents name collisions and gives a stable
+  // sort order when the directory is later listed in admin tools.
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const path = `vendors/${vendorId}/portfolio/${Date.now()}-${safeName}`;
+  const storageRef = ref(storage, path);
 
-  let res;
-  try {
-    res = await fetch(UPLOAD_URL, {
-      method: 'POST',
-      headers: { 'X-Upload-Token': UPLOAD_SECRET },
-      body: fd,
-    });
-  } catch (e) {
-    // Network-layer failure: CORS rejection, offline, DNS, etc. The browser
-    // collapses all of these to "Failed to fetch" / "NetworkError". Translate
-    // to something an admin can act on.
-    const hint = location.protocol === 'https:'
-      ? '（可能係 CORS、防火牆、或者無網絡）'
-      : '';
-    throw new Error(`上傳請求未能送達伺服器：${e?.message || e}${hint}`);
-  }
-
-  if (!res.ok) {
-    // Try to surface the server's JSON error; fall back to status text.
-    let detail = '';
+  return new Promise((resolve, reject) => {
     try {
-      const j = await res.json();
-      detail = j.error || j.detail || JSON.stringify(j);
-    } catch {
-      detail = await res.text().catch(() => '');
-    }
-    throw new Error(`上傳失敗 (${res.status}): ${detail || res.statusText}`);
-  }
+      const task = uploadBytesResumable(storageRef, file, {
+        contentType: file.type,
+        cacheControl: 'public, max-age=31536000',
+      });
 
-  const json = await res.json();
-  if (!json.url) throw new Error('伺服器回應缺少 url');
-  return json.url;
+      task.on(
+        'state_changed',
+        (snapshot) => {
+          if (typeof onProgress === 'function') {
+            const pct = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            onProgress(pct);
+          }
+        },
+        (err) => {
+          // Storage-layer failure: permission denied, offline, quota.
+          // The SDK gives us a code (storage/unauthorized, storage/canceled,
+          // storage/retry-limit-exceeded, etc.) but the user doesn't care —
+          // we surface a friendly message and the original error for the
+          // admin console.
+          let hint = '';
+          if (err?.code?.includes('unauthorized') || err?.code?.includes('permission')) {
+            hint = '（權限被拒，請確認已登入）';
+          } else if (err?.code?.includes('canceled')) {
+            hint = '（上傳已取消）';
+          } else if (err?.code?.includes('retry-limit-exceeded')) {
+            hint = '（網絡不穩，請稍後再試）';
+          } else {
+            hint = '（網絡錯誤、權限問題、或者配額已滿）';
+          }
+          reject(new Error(`上傳失敗：${err?.message || err}${hint}`));
+        },
+        async () => {
+          try {
+            const url = await getDownloadURL(task.snapshot.ref);
+            resolve(url);
+          } catch (err) {
+            reject(new Error(`上傳成功但無法取得連結：${err?.message || err}`));
+          }
+        },
+      );
+    } catch (err) {
+      reject(new Error(`上傳初始化失敗：${err?.message || err}`));
+    }
+  });
 }
 
 /**
- * Upload several files sequentially (so we don't hammer the receiver with N
- * parallel requests and confuse its per-vendor directory ordering). Returns
- * the URLs in input order. Failures stop the batch and the error is thrown.
+ * Upload several files sequentially (so progress events are easier to
+ * reason about and we don't hammer Storage with N parallel requests
+ * confusing its per-vendor directory ordering). Returns the URLs in
+ * input order. Failures stop the batch and the error is thrown.
  */
-export async function uploadPortfolioImages(vendorId, files) {
+export async function uploadPortfolioImages(vendorId, files, onProgress) {
   const urls = [];
-  for (const f of files) {
+  for (let i = 0; i < files.length; i += 1) {
+    const f = files[i];
     // eslint-disable-next-line no-await-in-loop
-    const u = await uploadPortfolioImage(vendorId, f);
+    const u = await uploadPortfolioImage(vendorId, f, (pct) => {
+      if (typeof onProgress === 'function') {
+        // Report overall progress: each file is one slice of the total.
+        const base = (i / files.length) * 100;
+        const slice = (pct / 100) * (100 / files.length);
+        onProgress(base + slice);
+      }
+    });
     urls.push(u);
   }
+  if (typeof onProgress === 'function') onProgress(100);
   return urls;
+}
+
+// Kept for back-compat — Step4Portfolio.jsx calls this to decide whether
+// to show the upload UI. With Firebase Storage the only requirement is
+// an auth session, which we always have on the wizard route. So this
+// is always true now, but kept as a function so the call site doesn't
+// need to change.
+export function portfolioUploadConfigured() {
+  return Boolean(storage);
 }

@@ -1,8 +1,11 @@
 // Wedding App — Firebase Storage Security Rules
 // =============================================================================
 // Public read for the 6 stock invitation templates so unauthenticated guests
-// can render the live preview tile in the InvitationEditor. Writes are gated
-// behind the `admin` custom claim (set via Firebase Auth → custom claims).
+// can render the live preview tile in the InvitationEditor. Vendor portfolio
+// uploads are scoped to the vendor's own UID so users can only write to
+// their own folder (and read their own files). Writes are gated behind
+// `request.auth.uid == vendorId` — the wizard routes the upload with the
+// signed-in user's UID, which matches the folder name.
 //
 // Deploy with:
 //   firebase deploy --only storage
@@ -15,7 +18,10 @@
 //    template. They do this via the `updateTemplate` Cloud Function, which
 //    runs as the service account and bypasses these rules. Direct client
 //    writes are denied even for admins — the function is the only writer.
-// 3. Everything else under this bucket is private (default-deny).
+// 3. Vendors upload portfolio images to /vendors/{uid}/portfolio/*. Each
+//    vendor can only write to their own folder, and only read their own
+//    files. Admins can read all vendor portfolios for review.
+// 4. Everything else under this bucket is private (default-deny).
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
@@ -34,6 +40,22 @@ service firebase.storage {
     match /invitation-templates/{fileName} {
       allow read: if true;
       allow write: if false;
+    }
+
+    // 2026-07-14 — vendor portfolio uploads. Each vendor can write to
+    // their own folder. The folder name MUST match the signed-in user's
+    // UID; if a vendor tries to upload to someone else's folder the
+    // request is rejected. Portfolio images are served as public via
+    // getDownloadURL (which signs a token) — we use the standard SDK
+    // pattern rather than `allow read: if true` to keep the bucket
+    // surface area minimal.
+    match /vendors/{vendorId}/portfolio/{fileName} {
+      allow read: if request.auth != null
+        && (request.auth.uid == vendorId || isAdmin());
+      allow write: if request.auth != null
+        && request.auth.uid == vendorId
+        && request.resource.size < 8 * 1024 * 1024  // matches client-side MAX
+        && request.resource.contentType.matches('image/.*');
     }
 
     // Default deny everything else (photos, vendor assets, etc. live
