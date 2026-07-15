@@ -33,7 +33,7 @@ import {
   formatMoney,
   parseFormattedNumber,
 } from '../lib/format';
-import { TASK_CATEGORIES } from '../lib/config';
+import { TASK_CATEGORIES, VENDOR_CATEGORIES, getVendorCategoryLabel } from '../lib/config';
 import { PortfolioEditor } from '../components/PortfolioEditor';
 
 const MAX_TAGS = 10;
@@ -44,6 +44,7 @@ export function VendorProfileEdit({ vendor, user, onBack, onSaved }) {
   const [name, setName] = useState(vendor?.name || '');
   const [description, setDescription] = useState(vendor?.description || '');
   const [category, setCategory] = useState(vendor?.category || '');
+  const [subcategory, setSubcategory] = useState(vendor?.subcategory || '');
   const [serviceArea, setServiceArea] = useState(vendor?.serviceArea || '香港');
   const [yearsInBusiness, setYearsInBusiness] = useState(
     vendor?.yearsInBusiness ?? 0,
@@ -73,6 +74,7 @@ export function VendorProfileEdit({ vendor, user, onBack, onSaved }) {
     setName((prev) => prev || vendor.name || '');
     setDescription((prev) => prev || vendor.description || '');
     setCategory((prev) => prev || vendor.category || '');
+    setSubcategory((prev) => prev || vendor.subcategory || '');
     setServiceArea((prev) => prev || vendor.serviceArea || '香港');
   }, [vendor]);
 
@@ -120,6 +122,10 @@ export function VendorProfileEdit({ vendor, user, onBack, onSaved }) {
       setError('請選擇分類');
       return;
     }
+    if (category && !subcategory) {
+      setError('請選擇子分類');
+      return;
+    }
     const min = parseFormattedNumber(priceMin);
     if (min === null || Number.isNaN(min) || min < 0) {
       setError('請輸入有效嘅起步價');
@@ -154,6 +160,7 @@ export function VendorProfileEdit({ vendor, user, onBack, onSaved }) {
           name: trimmedName,
           description: description.trim(),
           category,
+          subcategory,
           serviceArea: serviceArea.trim() || '香港',
           yearsInBusiness: Number(yearsInBusiness) || 0,
           portfolio,
@@ -227,18 +234,72 @@ export function VendorProfileEdit({ vendor, user, onBack, onSaved }) {
                 <label className="block text-sm font-bold text-slate-700 mb-1">
                   服務分類 <span className="text-rose-600">*</span>
                 </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full p-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-300 outline-none"
-                >
-                  <option value="">請選擇...</option>
-                  {Object.entries(TASK_CATEGORIES).map(([key, label]) => (
-                    <option key={key} value={key}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
+                {/* Two-column hierarchical picker — same UX as Step2Business in the
+                    wizard, so the post-onboarding edit flow stays consistent. */}
+                <div className="grid grid-cols-2 gap-2 border border-slate-200 rounded-xl overflow-hidden">
+                  {/* Left: top-level categories */}
+                  <div className="bg-slate-50 max-h-64 overflow-y-auto">
+                    {Object.entries(VENDOR_CATEGORIES).map(([key, top]) => {
+                      const isActive = category === key;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => {
+                            if (category !== key) {
+                              setCategory(key);
+                              setSubcategory('');
+                            }
+                          }}
+                          className={`w-full text-left px-3 py-2.5 flex items-center gap-2 text-sm transition-colors border-l-4 ${
+                            isActive
+                              ? 'bg-white border-emerald-500 text-emerald-700 font-bold'
+                              : 'border-transparent hover:bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          <span className="text-lg leading-none">{top.icon}</span>
+                          <span className="flex-1">{top.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Right: sub-services of the selected top */}
+                  <div className="bg-white max-h-64 overflow-y-auto">
+                    {!VENDOR_CATEGORIES[category] ? (
+                      <div className="px-3 py-6 text-xs text-slate-400 text-center">
+                        ← 先揀左邊嘅類別
+                      </div>
+                    ) : Object.entries(VENDOR_CATEGORIES[category].subs).length === 0 ? (
+                      <div className="px-3 py-6 text-xs text-slate-400 text-center">
+                        呢個類別未有細項
+                      </div>
+                    ) : (
+                      Object.entries(VENDOR_CATEGORIES[category].subs).map(([subKey, subLabel]) => {
+                        const isActive = subcategory === subKey;
+                        return (
+                          <button
+                            key={subKey}
+                            type="button"
+                            onClick={() => setSubcategory(subKey)}
+                            className={`w-full text-left px-3 py-2.5 text-sm transition-colors border-l-4 ${
+                              isActive
+                                ? 'bg-emerald-50 border-emerald-500 text-emerald-700 font-bold'
+                                : 'border-transparent hover:bg-slate-50 text-slate-700'
+                            }`}
+                          >
+                            {subLabel}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+                {category && subcategory && (
+                  <div className="mt-2 text-xs text-slate-600 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                    ✓ 已選擇：<strong>{getVendorCategoryLabel(category, subcategory)}</strong>
+                  </div>
+                )}
               </div>
 
               <div>

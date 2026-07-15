@@ -22,7 +22,7 @@ import {
   Settings,
   AlertCircle,
 } from 'lucide-react';
-import { TASK_CATEGORIES } from '../lib/config';
+import { getVendorCategoryLabel } from '../lib/config';
 
 export function VendorDashboard({
   vendor,
@@ -32,13 +32,12 @@ export function VendorDashboard({
   onManageProfile,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
-  const vendorCategory = vendor?.category || '';
-  // 2026-07-15 — TASK_CATEGORIES maps the raw category key (e.g.
-  // 'deco', 'photography') to the Chinese display label (e.g. '場地
-  // 佈置', '婚禮攝影及錄影'). The dashboard pill used to render the
-  // raw key, which produced '· deco' instead of '· 場地佈置'.
-  const categoryLabel = vendorCategory
-    ? ` · ${TASK_CATEGORIES[vendorCategory] || vendorCategory}`
+  // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
+  // (category, subcategory) to "婚宴場地 · 酒店宴會廳" etc. Falls back
+  // to the flat TASK_CATEGORIES label for legacy docs that have no
+  // subcategory yet.
+  const categoryLabel = vendor?.category
+    ? ` · ${getVendorCategoryLabel(vendor.category, vendor.subcategory)}`
     : '';
   const hasName = Boolean(vendor?.name && vendor.name.trim().length >= 2);
 

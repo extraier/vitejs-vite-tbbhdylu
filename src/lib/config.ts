@@ -1,6 +1,10 @@
 // App-wide constants. Kept in plain TS so screens can import what they need
 // without pulling the entire App.jsx in.
 
+// TASK_CATEGORIES — flat key → Chinese label map. Kept as-is for the
+// COUPLE-SIDE task picker (CoupleChecklist, CoupleJobBoard) so we don't
+// break existing data. The vendor-side picker uses VENDOR_CATEGORIES
+// below (hierarchical with sub-services).
 export const TASK_CATEGORIES: Record<string, string> = {
   ceremony_venue: '證婚場地',
   banquet_venue: '出門及晚宴場地',
@@ -25,6 +29,159 @@ export const TASK_CATEGORIES: Record<string, string> = {
   honeymoon: '蜜月旅行',
   other: '自訂項目',
 };
+
+// VENDOR_CATEGORIES — hierarchical (top-level category → sub-services).
+// Used by:
+//   - src/components/onboarding/Step2Business.jsx  (initial wizard picker)
+//   - src/screens/VendorProfileEdit.jsx           (post-onboarding edits)
+//   - src/screens/VendorDashboard.jsx             (pill display)
+//
+// Shape: { [topKey]: { label, icon, subs: { [subKey]: subLabel } } }
+//
+// Each vendor doc stores:
+//   category    = topKey  (e.g. 'venue', 'photo_video')
+//   subcategory = subKey  (e.g. 'banquet_hall', 'photographer')
+//
+// Backward-compat: existing vendor docs without subcategory still work;
+// the dashboard pill falls back to TASK_CATEGORIES[category] (the
+// original flat label) when subcategory is missing.
+export const VENDOR_CATEGORIES: Record<string, {
+  label: string;
+  icon: string; // emoji
+  subs: Record<string, string>;
+}> = {
+  venue: {
+    label: '婚宴場地',
+    icon: '🏛️',
+    subs: {
+      banquet_hall: '酒店宴會廳',
+      unique_venue: '特色場地 (工廈/戶外)',
+      chapel_registry: '教堂 / 登記處',
+      cruise_wedding: '遊艇 / 海上婚禮',
+    },
+  },
+  officiant: {
+    label: '統籌服務',
+    icon: '👰',
+    subs: {
+      planner: '婚禮統籌師',
+    },
+  },
+  ceremony_staff: {
+    label: '人員服務',
+    icon: '🎤',
+    subs: {
+      mc: '婚禮司儀 (MC)',
+      chaperone: '大妗姐',
+      celebrant: '證婚監禮人',
+    },
+  },
+  photo_video: {
+    label: '攝影攝錄',
+    icon: '🎥',
+    subs: {
+      photographer: '婚禮攝影師',
+      videographer: '婚禮攝錄師',
+      pre_wedding: 'Pre-wedding 攝影',
+      photobooth: '即影即有攝影 (Booth)',
+    },
+  },
+  styling: {
+    label: '造型服務',
+    icon: '💄',
+    subs: {
+      bride_mua: '新娘化妝師',
+      groom_styling: '新郎造型',
+      wedding_dress_buy: '裙褂婚紗晚裝禮服 (購買)',
+      wedding_dress_rent: '裙褂婚紗晚裝禮服 (租借)',
+      western_tailor: '西裝訂製/租借',
+    },
+  },
+  floral_deco: {
+    label: '佈置花藝',
+    icon: '🌸',
+    subs: {
+      wedding_floral: '婚禮花藝佈置',
+      venue_deco: '場地佈置設計',
+      bridal_bouquet: '新娘花球',
+    },
+  },
+  catering: {
+    label: '餐飲',
+    icon: '🍽️',
+    subs: {
+      wedding_wine: '婚宴酒席 (per table)',
+      wedding_cake: '婚禮蛋糕',
+      catering_service: '到會服務 (Catering)',
+      drinks_beverage: '酒水/飲品',
+    },
+  },
+  music: {
+    label: '音樂娛樂',
+    icon: '🎵',
+    subs: {
+      live_band: '婚禮樂隊/樂手',
+      dj: 'DJ 服務',
+      sound_light: '音響燈光設備',
+    },
+  },
+  print_design: {
+    label: '印刷設計',
+    icon: '📄',
+    subs: {
+      invitation_card: '喜帖設計及印刷',
+      table_card: '桌卡/場地指示牌',
+      wedding_favours: '婚禮小禮物 (Favour)',
+    },
+  },
+  ceremony_goods: {
+    label: '傳統禮儀',
+    icon: '🧧',
+    subs: {
+      betrothal_gifts: '過大禮物資',
+      bed_setting: '安床儀式',
+      hairpin_ritual: '上頭儀式物資',
+    },
+  },
+  transport: {
+    label: '交通',
+    icon: '🚗',
+    subs: {
+      bridal_car: '婚禮花車',
+      guest_bus: '賓客接駁巴士',
+    },
+  },
+  honeymoon: {
+    label: '蜜月旅行',
+    icon: '✈️',
+    subs: {
+      honeymoon_ticket: '蜜月旅遊套票',
+      hotel: '酒店住宿',
+    },
+  },
+  miscellaneous: {
+    label: '雜項',
+    icon: '💰',
+    subs: {
+      cash_buffer: '預備金 (Buffer 10%)',
+    },
+  },
+};
+
+// Lookup helpers — use these everywhere instead of indexing the raw
+// object. They handle missing keys (returns Chinese label or raw key)
+// and missing subcategory (returns just the parent label).
+export function getVendorCategoryLabel(category: string, subcategory?: string): string {
+  const top = VENDOR_CATEGORIES[category];
+  if (!top) {
+    // Fallback to flat TASK_CATEGORIES for legacy docs.
+    return TASK_CATEGORIES[category] || category || '';
+  }
+  if (subcategory && top.subs[subcategory]) {
+    return `${top.label} · ${top.subs[subcategory]}`;
+  }
+  return top.label;
+}
 
 export const FREE_TIER_LIMIT_MB = 100;
 

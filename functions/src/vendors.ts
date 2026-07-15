@@ -56,6 +56,7 @@ const ALLOWED_VENDOR_FIELDS = [
   // Identity
   'name',
   'category',
+  'subcategory',
   'description',
   // Pricing
   'priceMin',

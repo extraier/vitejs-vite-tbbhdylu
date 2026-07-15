@@ -26,7 +26,8 @@ export const EMPTY_FORM = {
   displayName: '',
   // Step 2 — Business
   name: '',
-  category: '',
+  category: '',       // top-level VENDOR_CATEGORIES key (e.g. 'photo_video')
+  subcategory: '',    // sub-service key (e.g. 'photographer')
   description: '',
   yearsInBusiness: 1,
   serviceArea: '香港',
@@ -63,6 +64,9 @@ export function validateStep(stepIndex, form) {
     }
     if (!form.category) {
       errors.category = '請選擇服務分類';
+    }
+    if (form.category && !form.subcategory) {
+      errors.subcategory = '請選擇子分類';
     }
     if (form.description && form.description.length > 500) {
       errors.description = '簡介太長（上限 500 字）';
@@ -136,6 +140,7 @@ export async function submitVendorApplication(form) {
   const payload = {
     name: form.name.trim(),
     category: form.category,
+    subcategory: form.subcategory,
     description: (form.description || '').trim(),
     yearsInBusiness: Number(form.yearsInBusiness) || 0,
     serviceArea: form.serviceArea || '香港',

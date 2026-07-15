@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { Loader2, Send, AlertCircle } from 'lucide-react';
-import { TASK_CATEGORIES } from '../../lib/config';
+import { getVendorCategoryLabel } from '../../lib/config';
 import { formatMoney } from '../../lib/format';
 import { submitVendorApplication } from '../../lib/vendorOnboarding';
 
@@ -38,7 +38,7 @@ export function Step5Review({ form, update, user, errors, onSuccess, onBack }) {
     }
   };
 
-  const categoryLabel = TASK_CATEGORIES[form.category] || form.category || '—';
+  const categoryLabel = getVendorCategoryLabel(form.category, form.subcategory) || '—';
 
   return (
     <div className="space-y-4">
