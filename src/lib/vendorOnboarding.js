@@ -153,12 +153,23 @@ export async function submitVendorApplication(form) {
 /**
  * Helper: pre-fill the form from a Firebase Auth user. Called when Step1
  * mounts so the user sees their email and displayName.
+ *
+ * Also pre-fills `name` (the actual business name written to Firestore)
+ * from `user.displayName` so users who signed up via VendorSignupCard
+ * don't have to retype their business name in Step 2. The user can
+ * still edit both fields independently if they want a different name
+ * in each context.
  */
 export function formFromUser(user) {
   if (!user) return EMPTY_FORM;
+  const displayName = user.displayName || '';
   return {
     ...EMPTY_FORM,
     email: user.email || '',
-    displayName: user.displayName || '',
+    displayName,
+    // 2026-07-14 — pre-fill name from displayName. Only do this when
+    // name is currently empty (don't overwrite a value the user has
+    // already started editing).
+    name: EMPTY_FORM.name || displayName,
   };
 }

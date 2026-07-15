@@ -4,10 +4,14 @@
 // /vendors/{uid}). If the user lands here without being signed in, we show
 // a "please sign in first" message with a button that opens the regular
 // login screen. Once signed in, this step is purely informational.
+//
+// The display name is editable so vendors can correct typos from the
+// signup form (the VendorSignupCard captures "商戶名稱 / 工作室名" but the
+// user may want a shorter/shorter display name shown elsewhere).
 
 import { Mail, User as UserIcon, CheckCircle2 } from 'lucide-react';
 
-export function Step1Account({ form, user, onSignInClick }) {
+export function Step1Account({ form, user, update, onSignInClick }) {
   if (!user) {
     return (
       <div className="space-y-4">
@@ -65,11 +69,15 @@ export function Step1Account({ form, user, onSignInClick }) {
           </label>
           <input
             type="text"
-            value={form.displayName}
-            readOnly
-            className="w-full px-4 py-3 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 outline-none"
-            placeholder="（未設定）"
+            value={form.displayName || ''}
+            onChange={(e) => update?.({ displayName: e.target.value })}
+            maxLength={80}
+            className="w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-700 outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400"
+            placeholder="例：ABC Wedding Studio"
           />
+          <div className="text-xs text-slate-500 mt-1">
+            會顯示喺商戶指南頁同新人搜尋結果。
+          </div>
         </div>
       </div>
     </div>

@@ -152,6 +152,7 @@ export function VendorOnboarding({ user, onComplete, onCancel }) {
           <Step1Account
             form={form}
             user={user}
+            update={update}
             onSignInClick={() => {
               // Re-route to login. The App.jsx handles the auth flow.
               window.location.hash = '#login';
