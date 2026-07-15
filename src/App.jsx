@@ -1198,11 +1198,21 @@ export default function App() {
                 jobRequests={liveJobRequests || []}
                 loading={vendorProfileLoading || jobRequestsLoading}
                 onSubmitProposal={submitProposal}
+                onManageProfile={() => setCurrentView('vendor-profile')}
               />
             )}
 
             {userRole === 'vendor' && currentView === 'vendor-profile' && (
-              <VendorProfileEdit vendor={vendors[0]} />
+              // 2026-07-15 — pass the LIVE vendorProfile doc (read via
+              // useFirestoreDoc on /vendors/{user.uid}) instead of the
+              // static DEFAULT_VENDORS constant. The profile form
+              // needs the user's actual UID to write back, and the
+              // current vendor's data to pre-fill the fields.
+              <VendorProfileEdit
+                vendor={vendorProfile}
+                user={user}
+                onBack={() => setCurrentView('vendor-dashboard')}
+              />
             )}
 
             {/* Vendor onboarding wizard — reachable from any signed-in user.

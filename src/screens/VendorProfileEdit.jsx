@@ -1,56 +1,135 @@
-import { useState } from 'react';
-import { Briefcase, Info, Save, DollarSign, AlertCircle } from 'lucide-react';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db, appId } from '../lib/firebase';
-import { formatVendorPrice, formatMoney, parseFormattedNumber } from '../lib/format';
+// VendorProfileEdit.jsx — vendor's own profile manager.
+//
+// 2026-07-15 — rebuilt so the form actually edits name, description,
+// category, service area, years in business, tags, pricing, AND the
+// portfolio images. Previously name/description/tags were read-only
+// stubs and the save handler wrote to the wrong path
+// (artifacts/{appId}/vendors instead of /vendors/{uid}).
+//
+// Now reads / writes live Firestore at /vendors/{user.uid} via the
+// updateMyVendorProfile Cloud Function (which has a strict allow-list
+// of editable fields and a vendor claim requirement).
+//
+// Routing: shown when currentView === 'vendor-profile'. Reachable
+// from VendorDashboard via the "管理專頁" CTA in the top-right corner.
 
-/**
- * Vendor self-edit screen.
- *
- * Editable: budget (priceMin, priceMax, currency) — the fields the AI
- * matching engine uses to rank vendors against couple task budgets.
- *
- * Read-only: name, description, tags, portfolio (managed elsewhere — full
- * vendor onboarding form is a future chunk of work).
- *
- * Save handler currently toasts only (no Firestore vendor collection exists
- * yet — vendors are loaded from `DEFAULT_VENDORS` constants). When the
- * vendor onboarding flow is built, the save call lands here.
- */
-export function VendorProfileEdit({ vendor, onSave }) {
-  const [priceMin, setPriceMin] = useState(
-    formatMoney(vendor.priceMin ?? 0),
+import { useEffect, useState } from 'react';
+import {
+  Briefcase,
+  Info,
+  Save,
+  DollarSign,
+  AlertCircle,
+  Tag,
+  X,
+  CheckCircle2,
+  ArrowLeft,
+  Image as ImageIcon,
+} from 'lucide-react';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from '../lib/firebase';
+import {
+  formatVendorPrice,
+  formatMoney,
+  parseFormattedNumber,
+} from '../lib/format';
+import { TASK_CATEGORIES } from '../lib/config';
+import { PortfolioEditor } from '../components/PortfolioEditor';
+
+const MAX_TAGS = 10;
+
+export function VendorProfileEdit({ vendor, user, onBack, onSaved }) {
+  // Local form state. Initialised from the live vendor doc, then
+  // mutated freely without re-fetching.
+  const [name, setName] = useState(vendor?.name || '');
+  const [description, setDescription] = useState(vendor?.description || '');
+  const [category, setCategory] = useState(vendor?.category || '');
+  const [serviceArea, setServiceArea] = useState(vendor?.serviceArea || '香港');
+  const [yearsInBusiness, setYearsInBusiness] = useState(
+    vendor?.yearsInBusiness ?? 0,
   );
+  const [portfolio, setPortfolio] = useState(
+    Array.isArray(vendor?.portfolio) ? vendor.portfolio : [],
+  );
+  const [tags, setTags] = useState(Array.isArray(vendor?.tags) ? vendor.tags : []);
+  const [tagInput, setTagInput] = useState('');
+  const [priceMin, setPriceMin] = useState(formatMoney(vendor?.priceMin ?? 0));
   const [priceMax, setPriceMax] = useState(
-    vendor.priceMax === null || vendor.priceMax === undefined
+    vendor?.priceMax === null || vendor?.priceMax === undefined
       ? ''
       : formatMoney(vendor.priceMax),
   );
-  const [isOpenEnded, setIsOpenEnded] = useState(vendor.priceMax === null);
-  const [currency, setCurrency] = useState(vendor.currency || 'HKD');
+  const [isOpenEnded, setIsOpenEnded] = useState(vendor?.priceMax === null);
+  const [currency, setCurrency] = useState(vendor?.currency || 'HKD');
   const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
   const [error, setError] = useState(null);
 
-  // Build the live preview vendor object so the "現時顯示" line reflects
-  // the form state, not the stale prop.
+  // Re-hydrate the form if the live vendor doc changes (e.g. uploaded
+  // a new photo and the snapshot fires). Only re-fill empty fields
+  // so we don't blow away in-progress edits.
+  useEffect(() => {
+    if (!vendor) return;
+    setName((prev) => prev || vendor.name || '');
+    setDescription((prev) => prev || vendor.description || '');
+    setCategory((prev) => prev || vendor.category || '');
+    setServiceArea((prev) => prev || vendor.serviceArea || '香港');
+  }, [vendor]);
+
   const livePreview = {
     priceMin: parseFormattedNumber(priceMin),
     priceMax: isOpenEnded ? null : parseFormattedNumber(priceMax),
     currency,
   };
 
+  const handleAddTag = () => {
+    const t = tagInput.trim();
+    if (!t) return;
+    if (tags.includes(t)) {
+      setTagInput('');
+      return;
+    }
+    if (tags.length >= MAX_TAGS) {
+      setError(`最多 ${MAX_TAGS} 個標籤`);
+      return;
+    }
+    setTags([...tags, t]);
+    setTagInput('');
+  };
+
+  const handleRemoveTag = (idx) => {
+    setTags(tags.filter((_, i) => i !== idx));
+  };
+
   const handleSave = async () => {
     setError(null);
+    setSavedAt(null);
+
+    // Client-side validation — keep server validation in mind but
+    // catch obvious errors here for fast feedback.
+    const trimmedName = name.trim();
+    if (trimmedName.length < 2) {
+      setError('商戶名稱至少要有 2 個字');
+      return;
+    }
+    if (trimmedName.length > 60) {
+      setError('商戶名稱最多 60 個字');
+      return;
+    }
+    if (!category) {
+      setError('請選擇分類');
+      return;
+    }
     const min = parseFormattedNumber(priceMin);
-    if (!min && min !== 0) {
-      setError('請輸入起步價');
+    if (min === null || Number.isNaN(min) || min < 0) {
+      setError('請輸入有效嘅起步價');
       return;
     }
     let max = null;
     if (!isOpenEnded) {
       max = parseFormattedNumber(priceMax);
-      if (!max) {
-        setError('請輸入最高價，或剔選「無上限」');
+      if (max === null || Number.isNaN(max)) {
+        setError('請輸入有效嘅最高價，或剔選「無上限」');
         return;
       }
       if (max < min) {
@@ -58,37 +137,60 @@ export function VendorProfileEdit({ vendor, onSave }) {
         return;
       }
     }
+    if (portfolio.length > 24) {
+      setError('作品集最多 24 張圖片');
+      return;
+    }
+
     setSaving(true);
     try {
-      if (onSave) {
-        await onSave({ priceMin: min, priceMax: max, currency });
-        return;
-      }
-      // Default behaviour: persist directly to Firestore under the vendor's
-      // own document id (`vendor.id` from the prop). The setDoc call merges
-      // into the existing doc rather than overwriting the whole record, so
-      // name/description/tags/portfolio (managed elsewhere) are preserved.
-      await setDoc(
-        doc(db, 'artifacts', appId, 'vendors', String(vendor.id)),
-        {
+      // updateMyVendorProfile (functions/src/vendors.ts) is a callable
+      // that requires the `vendor` custom claim and writes through an
+      // allow-list of fields. We pass EVERYTHING editable so the user
+      // gets atomic save semantics.
+      const fn = httpsCallable(functions, 'updateMyVendorProfile');
+      await fn({
+        updates: {
+          name: trimmedName,
+          description: description.trim(),
+          category,
+          serviceArea: serviceArea.trim() || '香港',
+          yearsInBusiness: Number(yearsInBusiness) || 0,
+          portfolio,
+          tags: tags.slice(0, MAX_TAGS),
           priceMin: min,
           priceMax: max,
           currency,
-          updatedAt: serverTimestamp(),
+          openEnded: Boolean(isOpenEnded),
         },
-        { merge: true },
-      );
+      });
+      setSavedAt(Date.now());
+      if (typeof onSaved === 'function') onSaved();
     } catch (e) {
-      setError(e?.message || '儲存失敗');
+      // eslint-disable-next-line no-console
+      console.error('[VendorProfileEdit] save failed:', e);
+      setError(`${e?.code ? `[${e.code}] ` : ''}${e?.message || '儲存失敗'}`);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto mt-8 animate-in slide-in-from-bottom-4 duration-500">
+    <div className="max-w-4xl mx-auto mt-8 mb-16 animate-in slide-in-from-bottom-4 duration-500">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="bg-emerald-900 p-8 text-white">
+          <div className="flex items-center gap-3 mb-2">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="text-emerald-100 hover:text-white inline-flex items-center gap-1 text-sm"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                返回接單大堂
+              </button>
+            )}
+          </div>
           <h2 className="text-2xl font-bold flex items-center gap-3">
             <Briefcase className="w-7 h-7 text-emerald-400" /> 商戶專頁管理 (Profile Builder)
           </h2>
@@ -98,35 +200,167 @@ export function VendorProfileEdit({ vendor, onSave }) {
         </div>
 
         <div className="p-8 space-y-8">
-          {/* Basic info — read-only for now (managed elsewhere) */}
-          <div>
+          {/* ----- Basic info ----- */}
+          <section>
             <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
               <Info className="w-5 h-5 text-emerald-600" /> 基本資料
             </h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">商戶名稱</label>
+                <label className="block text-sm font-bold text-slate-700 mb-1">
+                  商戶名稱 <span className="text-rose-600">*</span>
+                </label>
                 <input
                   type="text"
-                  className="w-full p-3 rounded-xl border border-slate-300 bg-slate-50 text-slate-600"
-                  value={vendor.name}
-                  readOnly
+                  maxLength={60}
+                  className="w-full p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-300 outline-none"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="例：Visionary Capture 婚紗攝影"
+                />
+                <div className="text-xs text-slate-400 mt-1 text-right">
+                  {name.length}/60
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">
+                  服務分類 <span className="text-rose-600">*</span>
+                </label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full p-3 rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-emerald-300 outline-none"
+                >
+                  <option value="">請選擇...</option>
+                  {Object.entries(TASK_CATEGORIES).map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">
+                  服務地區
+                </label>
+                <input
+                  type="text"
+                  className="w-full p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-300 outline-none"
+                  value={serviceArea}
+                  onChange={(e) => setServiceArea(e.target.value)}
+                  placeholder="例：香港 / 九龍 / 新界"
                 />
               </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">
+                  經營年資
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={99}
+                  className="w-full p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-300 outline-none"
+                  value={yearsInBusiness}
+                  onChange={(e) => setYearsInBusiness(e.target.value)}
+                />
+                <div className="text-xs text-slate-400 mt-1">年</div>
+              </div>
+
               <div className="md:col-span-2">
-                <label className="block text-sm font-bold text-slate-700 mb-1">商戶簡介</label>
+                <label className="block text-sm font-bold text-slate-700 mb-1">
+                  商戶簡介
+                </label>
                 <textarea
-                  rows="3"
-                  className="w-full p-3 rounded-xl border border-slate-300 bg-slate-50 text-slate-600 resize-none"
-                  value={vendor.description}
-                  readOnly
-                ></textarea>
+                  rows={4}
+                  maxLength={500}
+                  className="w-full p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-300 outline-none resize-none"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="介紹你嘅服務風格、過往作品、服務範圍..."
+                />
+                <div className="text-xs text-slate-400 mt-1 text-right">
+                  {description.length}/500
+                </div>
               </div>
             </div>
-          </div>
+          </section>
 
-          {/* Pricing — the editable section the matching engine uses */}
-          <div>
+          {/* ----- Tags ----- */}
+          <section>
+            <h3 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
+              <Tag className="w-5 h-5 text-emerald-600" /> 標籤
+            </h3>
+            <p className="text-sm text-slate-500 mb-3">
+              加入風格、地點、特色等關鍵字，方便新人搜尋到你。
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleAddTag();
+                  }
+                }}
+                placeholder="例：伯大尼、自然唯美"
+                className="flex-1 p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-emerald-300 outline-none"
+                disabled={tags.length >= MAX_TAGS}
+              />
+              <button
+                type="button"
+                onClick={handleAddTag}
+                disabled={tags.length >= MAX_TAGS || !tagInput.trim()}
+                className="px-4 py-3 rounded-xl bg-slate-800 text-white font-bold hover:bg-slate-700 disabled:opacity-50"
+              >
+                加入
+              </button>
+            </div>
+            {tags.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-3">
+                {tags.map((t, idx) => (
+                  <span
+                    key={t}
+                    className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-full px-3 py-1 text-sm"
+                  >
+                    #{t}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(idx)}
+                      className="text-emerald-600 hover:text-rose-600"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="text-xs text-slate-400 mt-1">
+              {tags.length}/{MAX_TAGS} 個標籤
+            </div>
+          </section>
+
+          {/* ----- Portfolio ----- */}
+          <section>
+            <h3 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
+              <ImageIcon className="w-5 h-5 text-emerald-600" /> 作品集圖片
+            </h3>
+            <p className="text-sm text-slate-500 mb-3">
+              上傳作品相片。建議 6-12 張展示最佳風格。最多 24 張。
+            </p>
+            <PortfolioEditor
+              value={portfolio}
+              onChange={setPortfolio}
+              user={user}
+            />
+          </section>
+
+          {/* ----- Pricing ----- */}
+          <section>
             <h3 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
               <DollarSign className="w-5 h-5 text-emerald-600" /> 價格範圍
               <span className="text-xs font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
@@ -138,7 +372,6 @@ export function VendorProfileEdit({ vendor, onSave }) {
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Currency */}
               <div>
                 <label className="block text-sm font-bold text-slate-700 mb-1">貨幣</label>
                 <select
@@ -151,7 +384,6 @@ export function VendorProfileEdit({ vendor, onSave }) {
                 </select>
               </div>
 
-              {/* Price min */}
               <div>
                 <label className="block text-sm font-bold text-slate-700 mb-1">起步價</label>
                 <input
@@ -167,7 +399,6 @@ export function VendorProfileEdit({ vendor, onSave }) {
                 />
               </div>
 
-              {/* Price max */}
               <div>
                 <label className="block text-sm font-bold text-slate-700 mb-1">
                   最高價{' '}
@@ -196,24 +427,35 @@ export function VendorProfileEdit({ vendor, onSave }) {
               </div>
             </div>
 
-            {/* Live preview */}
             <div className="mt-4 bg-emerald-50 border border-emerald-200 rounded-xl p-4 flex items-center gap-3">
               <DollarSign className="w-5 h-5 text-emerald-600 flex-shrink-0" />
               <div className="text-sm">
                 <span className="text-slate-500 mr-2">客人睇到：</span>
-                <span className="font-bold text-emerald-800">{formatVendorPrice(livePreview)}</span>
+                <span className="font-bold text-emerald-800">
+                  {formatVendorPrice(livePreview)}
+                </span>
               </div>
             </div>
+          </section>
 
-            {error && (
-              <div className="mt-3 bg-red-50 border border-red-200 rounded-xl p-3 flex items-center gap-2 text-sm text-red-700">
-                <AlertCircle className="w-4 h-4" />
+          {/* ----- Feedback ----- */}
+          {error && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2 text-sm text-rose-700">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
                 {error}
               </div>
-            )}
-          </div>
+            </div>
+          )}
+          {savedAt && !error && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center gap-2 text-sm text-emerald-700">
+              <CheckCircle2 className="w-4 h-4" />
+              已儲存成功
+            </div>
+          )}
 
           <button
+            type="button"
             onClick={handleSave}
             disabled={saving}
             className="w-full bg-emerald-600 text-white font-bold py-3.5 rounded-xl hover:bg-emerald-700 transition-colors shadow-sm flex items-center justify-center gap-2 disabled:opacity-60"

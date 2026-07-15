@@ -12,17 +12,28 @@
 // vendor name and used a hardcoded INITIAL_JOB_REQUESTS array as
 // the listing. Both now come from Firestore.
 
-import { Briefcase, Calendar, DollarSign, MessageSquare, Loader2, Inbox } from 'lucide-react';
+import {
+  Briefcase,
+  Calendar,
+  DollarSign,
+  MessageSquare,
+  Loader2,
+  Inbox,
+  Settings,
+  AlertCircle,
+} from 'lucide-react';
 
 export function VendorDashboard({
   vendor,
   jobRequests,
   loading,
   onSubmitProposal,
+  onManageProfile,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   const vendorCategory = vendor?.category || '';
   const categoryLabel = vendorCategory ? ` · ${vendorCategory}` : '';
+  const hasName = Boolean(vendor?.name && vendor.name.trim().length >= 2);
 
   return (
     <div className="max-w-6xl mx-auto mt-8 animate-in slide-in-from-bottom-4 duration-500">
@@ -35,16 +46,52 @@ export function VendorDashboard({
             瀏覽全港新人發佈的急切要求，主動發送報價單發掘潛在客源。
           </p>
         </div>
-        <div className="bg-slate-800/80 backdrop-blur px-5 py-3 rounded-xl border border-slate-700">
-          <div className="text-xs text-slate-400 mb-0.5">當前登入商戶：</div>
-          <div className="font-bold text-emerald-400 text-lg" data-testid="vendor-name">
-            {vendorName}
-          </div>
-          {categoryLabel && (
-            <div className="text-xs text-slate-400 mt-0.5">{categoryLabel}</div>
+        <div className="flex items-center gap-3">
+          {onManageProfile && (
+            <button
+              type="button"
+              onClick={onManageProfile}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl flex items-center gap-2 transition-colors"
+            >
+              <Settings className="w-4 h-4" /> 管理專頁
+            </button>
           )}
+          <div className="bg-slate-800/80 backdrop-blur px-5 py-3 rounded-xl border border-slate-700">
+            <div className="text-xs text-slate-400 mb-0.5">當前登入商戶：</div>
+            <div className="font-bold text-emerald-400 text-lg" data-testid="vendor-name">
+              {vendorName}
+            </div>
+            {categoryLabel && (
+              <div className="text-xs text-slate-400 mt-0.5">{categoryLabel}</div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Missing-name prompt — only shows when the vendor doc has no name,
+          which happens for users who completed the wizard with empty
+          form fields, or for stale docs from before the field was
+          mandatory. */}
+      {!loading && !hasName && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 mb-6 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="font-bold text-amber-900 mb-1">尚未設定商戶名稱</h3>
+            <p className="text-sm text-amber-800 mb-3">
+              你嘅商戶專頁缺少商戶名稱，新人搜唔到你。請到「管理專頁」補回資料。
+            </p>
+            {onManageProfile && (
+              <button
+                type="button"
+                onClick={onManageProfile}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-xl text-sm transition-colors"
+              >
+                去設定 →
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Loading / empty states */}
       {loading && (
