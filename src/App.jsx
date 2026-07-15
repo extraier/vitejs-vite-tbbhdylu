@@ -442,6 +442,18 @@ export default function App() {
     setCurrentView('events-dashboard');
   };
 
+  // Vendor logout — clears the user (the app falls back to LoginScreen
+  // when user === null) instead of routing to events-dashboard (which
+  // is owner-only).
+  const handleVendorLogout = async () => {
+    const ok = window.confirm('確定要登出嗎？');
+    if (!ok) return;
+    await logout();
+    setCurrentEvent(null);
+    // No currentView change needed — when user becomes null, App.jsx
+    // renders <LoginScreen> automatically (see line 854).
+  };
+
   const handleCreateEvent = async (e) => {
     e.preventDefault();
     if (!user || !newEventName) return;
@@ -1024,9 +1036,11 @@ export default function App() {
                     )}
                     <button
                       onClick={handleLogout}
-                      className="text-slate-400 hover:text-slate-600"
+                      className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 transition-colors"
+                      title="登出"
                     >
-                      <LogOut className="w-5 h-5" />
+                      <LogOut className="w-4 h-4" />
+                      <span className="hidden sm:inline">登出</span>
                     </button>
                   </div>
                 </div>
@@ -1199,6 +1213,7 @@ export default function App() {
                 loading={vendorProfileLoading || jobRequestsLoading}
                 onSubmitProposal={submitProposal}
                 onManageProfile={() => setCurrentView('vendor-profile')}
+                onLogout={handleVendorLogout}
               />
             )}
 

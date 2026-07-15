@@ -21,6 +21,7 @@ import {
   Inbox,
   Settings,
   AlertCircle,
+  LogOut,
 } from 'lucide-react';
 import { getVendorCategoryLabel } from '../lib/config';
 
@@ -30,6 +31,7 @@ export function VendorDashboard({
   loading,
   onSubmitProposal,
   onManageProfile,
+  onLogout,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
@@ -60,6 +62,16 @@ export function VendorDashboard({
               className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl flex items-center gap-2 transition-colors"
             >
               <Settings className="w-4 h-4" /> 管理專頁
+            </button>
+          )}
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="bg-slate-700 hover:bg-slate-800 text-white font-bold px-4 py-2 rounded-xl flex items-center gap-2 transition-colors border border-slate-600"
+              title="登出商戶帳號"
+            >
+              <LogOut className="w-4 h-4" /> 登出
             </button>
           )}
           <div className="bg-slate-800/80 backdrop-blur px-5 py-3 rounded-xl border border-slate-700">
