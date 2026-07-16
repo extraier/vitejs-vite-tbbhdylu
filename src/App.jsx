@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Heart, LogOut, Users } from 'lucide-react';
+import { Heart, LogOut, Users, MessageCircle } from 'lucide-react';
 import {
      addDoc,
      collection,
@@ -9,6 +9,7 @@ import {
      onSnapshot,
      orderBy,
      query,
+     serverTimestamp,
      updateDoc,
      where,
      writeBatch,
@@ -40,6 +41,12 @@ import {
 } from './lib/config';
 import { parseGuestParams } from './lib/guestMode';
 import { uploadPhotoToNas } from './lib/uploadToNas';
+import {
+  openInquiry,
+  subscribeToInquiries,
+  markInquiryRead,
+  inquiryIdFor,
+} from './lib/chat';
 import { useAuth } from './hooks/useAuth';
 import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
@@ -65,6 +72,8 @@ import { VendorOnboarding } from './screens/VendorOnboarding';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
 import { ReceptionScanner } from './screens/ReceptionScanner';
+import { ChatRoom } from './screens/ChatRoom';
+import { Inbox } from './screens/Inbox';
 import { PersonalGuestPortal } from './screens/PersonalGuestPortal';
 import { InvitationEditor } from './screens/InvitationEditor';
 
@@ -77,6 +86,7 @@ import { PaymentModal } from './components/modals/PaymentModal';
 import { QrCodeModal } from './components/modals/QrCodeModal';
 import { EditGuestModal } from './components/modals/EditGuestModal';
 import { VendorModal } from './components/modals/VendorModal';
+import { MyVendorsPanel } from './components/MyVendorsPanel';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { InviteModal } from './components/modals/InviteModal';
 import { HelperManager } from './components/modals/HelperManager';
@@ -205,6 +215,10 @@ export default function App() {
   const [currentView, setCurrentView] = useState(
     guest.isGuestMode ? 'guest-portal' : 'events-dashboard',
   );
+
+  // 2026-07-15 — chat state. selectedInquiry holds the conversation
+  // the user is currently viewing in ChatRoom; null when on the inbox.
+  const [selectedInquiry, setSelectedInquiry] = useState(null);
 
   // Current selection
   const [currentEvent, setCurrentEvent] = useState(null);
@@ -365,6 +379,99 @@ export default function App() {
          : null,
        [targetUid, currentEvent?.id],
      );
+
+   // 2026-07-15 — chat inquiries subscription. Couples and vendors
+   // both subscribe so the inbox is shared (each side sees the same
+   // top-level collection, filtered by their uid field). Vendor
+   // role needs the actual /vendors/{vendorUid} uid, not the
+   // owner's uid; for vendors, user.uid IS the vendor uid. So we
+   // re-use user?.uid with role-based field filtering.
+   const [inquiries, setInquiries] = useState([]);
+   useEffect(() => {
+     if (!user || user.isAnonymous) {
+       setInquiries([]);
+       return undefined;
+     }
+     const role = userRole === 'vendor' ? 'vendor' : 'couple';
+     const unsub = subscribeToInquiries(user.uid, role, setInquiries);
+     return unsub;
+   }, [user?.uid, userRole]);
+
+   // Aggregate unread count for the header inbox badge.
+   const totalUnread = inquiries.reduce((sum, inq) => {
+     return sum + (userRole === 'vendor' ? inq.vendorUnread || 0 : inq.coupleUnread || 0);
+   }, 0);
+
+   // 2026-07-15 — vendor contacts subscription (主理新人's personal
+   // address-book of vendors they know from Instagram / friends /
+   // etc.). Lives at /users/{userUid}/vendorContacts. Empty array
+   // for vendors / non-owners.
+   const [vendorContacts, setVendorContacts] = useState([]);
+   const [vendorContactsLoading, setVendorContactsLoading] = useState(true);
+   useEffect(() => {
+     if (!user || user.isAnonymous || guest.isGuestMode) {
+       setVendorContacts([]);
+       setVendorContactsLoading(false);
+       return undefined;
+     }
+     setVendorContactsLoading(true);
+     const q = query(
+       collection(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts'),
+       orderBy('addedAt', 'desc'),
+     );
+     const unsub = onSnapshot(
+       q,
+       (snap) => {
+         setVendorContacts(
+           snap.docs.map((d) => ({
+             id: d.id,
+             ...d.data(),
+             addedAt: d.data().addedAt?.toMillis?.() || 0,
+           })),
+         );
+         setVendorContactsLoading(false);
+       },
+       (err) => {
+         // Silent failure — empty state still renders fine
+         // eslint-disable-next-line no-console
+         console.warn('vendorContacts subscribe failed:', err?.message);
+         setVendorContactsLoading(false);
+       },
+     );
+     return unsub;
+   }, [user?.uid, guest.isGuestMode]);
+
+   // ---- Vendor contact CRUD (主理新人 personal address book) ----
+   const handleAddVendorContact = async (data) => {
+     if (!user) return;
+     await addDoc(
+       collection(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts'),
+       {
+         ...data,
+         addedAt: serverTimestamp(),
+         linkedVendorUid: null,
+         invitationSentAt: null,
+         invitationAccepted: false,
+       },
+     );
+     showToast('✅ 已新增商戶');
+   };
+   const handleUpdateVendorContact = async (contact) => {
+     if (!user || !contact?.id) return;
+     const { id, addedAt, ...rest } = contact;
+     await updateDoc(
+       doc(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts', id),
+       rest,
+     );
+     showToast('✅ 已更新');
+   };
+   const handleDeleteVendorContact = async (contactId) => {
+     if (!user || !contactId) return;
+     await deleteDoc(
+       doc(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts', contactId),
+     );
+     showToast('🗑️ 已刪除');
+   };
 
 
   const { data: allPhotos } = useFirestoreCollection(
@@ -792,6 +899,60 @@ export default function App() {
     handleSimulateReceptionScan(randomGuest);
   };
 
+  // 2026-07-15 — opens or fetches the conversation between the
+  // current user (must be a couple or vendor with a real account)
+  // and the other party, then routes to ChatRoom.
+  //   couple → vendor: vendorUid is the vendor's uid; coupleUid is the user's
+  //   vendor → couple: coupleUid is the couple's uid; vendorUid is the user's
+  const handleOpenChat = async ({ otherUid, otherName, eventId }) => {
+    if (!user || !otherUid) return;
+    const isVendor = userRole === 'vendor';
+    const vendorUid = isVendor ? user.uid : otherUid;
+    const coupleUid = isVendor ? otherUid : user.uid;
+    const vendorName = isVendor
+      ? vendorProfile?.name || user.displayName || user.email || '商戶'
+      : otherName || '商戶';
+    const coupleName = isVendor
+      ? otherName || currentEvent?.name || '新人'
+      : currentEvent?.name || user.displayName || user.email || '新人';
+    try {
+      const id = await openInquiry({
+        vendorUid,
+        coupleUid,
+        vendorName,
+        coupleName,
+        eventId: eventId || currentEvent?.id || '',
+      });
+      // Find the local copy of the inquiry (may already be in the
+      // subscription cache) so ChatRoom has the vendorName/coupleName.
+      const local = inquiries.find((i) => i.id === id) || {
+        id,
+        vendorUid,
+        coupleUid,
+        vendorName,
+        coupleName,
+        eventId: eventId || currentEvent?.id || '',
+      };
+      setSelectedInquiry(local);
+      setCurrentView('chat-room');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('openInquiry failed:', err);
+      showToast('✗ 開啟對話失敗');
+    }
+  };
+
+  const handleSelectInquiry = (inq) => {
+    setSelectedInquiry(inq);
+    setCurrentView('chat-room');
+    // Clear unread for the current side.
+    const role = userRole === 'vendor' ? 'vendor' : 'couple';
+    markInquiryRead(inq.id, role).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('markInquiryRead failed:', err?.message);
+    });
+  };
+
   const upgradeToPremium = async () => {
     if (!user || !currentEvent) return;
     const eventRef = doc(db, 'artifacts', appId, 'users', user.uid, 'events', currentEvent.id);
@@ -1082,6 +1243,26 @@ export default function App() {
                     </span>
                   </h1>
                   <div className="flex items-center gap-4">
+                    {/* 2026-07-15 — inbox icon with unread badge.
+                        Visible to owners + vendors (not reception/
+                        guest_portal). Click navigates to the inbox. */}
+                    {(userRole === 'owner' || userRole === 'vendor') && (
+                      <button
+                        onClick={() => {
+                          setSelectedInquiry(null);
+                          setCurrentView('inbox');
+                        }}
+                        className="relative text-slate-600 hover:text-slate-800 p-2 rounded-lg hover:bg-slate-100 transition-colors"
+                        title="訊息收件匣"
+                      >
+                        <MessageCircle className="w-5 h-5" />
+                        {totalUnread > 0 && (
+                          <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-tight ring-2 ring-white">
+                            {totalUnread > 9 ? '9+' : totalUnread}
+                          </span>
+                        )}
+                      </button>
+                    )}
                     <div className="text-sm font-bold text-slate-800 bg-rose-50 px-3 py-1 rounded-lg border border-rose-100">
                       {currentEvent.name}
                     </div>
@@ -1174,6 +1355,27 @@ export default function App() {
                   setCurrentView('couple-jobboard');
                   setActiveCategory(null);
                 }}
+                onOpenChat={(vendor) =>
+                  handleOpenChat({
+                    otherUid: vendor.id || vendor.uid,
+                    otherName: vendor.name,
+                  })
+                }
+                myVendorsPanel={
+                  <MyVendorsPanel
+                    contacts={vendorContacts}
+                    loading={vendorContactsLoading}
+                    onAddContact={handleAddVendorContact}
+                    onUpdateContact={handleUpdateVendorContact}
+                    onDeleteContact={handleDeleteVendorContact}
+                    onChatContact={(contact) =>
+                      handleOpenChat({
+                        otherUid: contact.linkedVendorUid,
+                        otherName: contact.vendorName,
+                      })
+                    }
+                  />
+                }
               />
             )}
 
@@ -1268,6 +1470,33 @@ export default function App() {
                 recentScans={recentScans || []}
                 onCheckIn={handleSimulateReceptionScan}
                 onManualCheckIn={handleSimulateReceptionScan}
+              />
+            )}
+
+            {/* 2026-07-15 — chat views. Inbox is shared between
+                couple + vendor; ChatRoom is shared too. Access
+                gated on userRole so admins don't accidentally
+                land here (they should use the inbox icon in the
+                header instead). */}
+            {currentView === 'inbox' && (userRole === 'couple' || userRole === 'owner' || userRole === 'vendor') && (
+              <Inbox
+                inquiries={inquiries}
+                loading={!user}
+                userUid={user?.uid}
+                userRole={userRole === 'vendor' ? 'vendor' : 'couple'}
+                onSelectInquiry={handleSelectInquiry}
+              />
+            )}
+
+            {currentView === 'chat-room' && selectedInquiry && (userRole === 'couple' || userRole === 'owner' || userRole === 'vendor') && (
+              <ChatRoom
+                inquiry={selectedInquiry}
+                userUid={user?.uid}
+                userRole={userRole === 'vendor' ? 'vendor' : 'couple'}
+                onBack={() => {
+                  setSelectedInquiry(null);
+                  setCurrentView('inbox');
+                }}
               />
             )}
 

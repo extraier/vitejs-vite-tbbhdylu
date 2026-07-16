@@ -13,6 +13,7 @@ import {
   Sparkles,
   Save,
   X,
+  MessageCircle,
 } from 'lucide-react';
 import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { budgetFitTier, budgetDistance, formatVendorPrice, formatMoney, parseFormattedNumber } from '../lib/format';
@@ -34,6 +35,8 @@ export function CoupleChecklist({
   onClearActiveCategory,
   onGoDiscover,
   onGoJobBoard,
+  onOpenChat,
+  myVendorsPanel,
 }) {
   const progressPercentage = Math.round(
     (tasks.filter((t) => t.isCompleted).length / (tasks.length || 1)) * 100,
@@ -82,9 +85,14 @@ export function CoupleChecklist({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mt-8 animate-in slide-in-from-bottom-4 duration-500">
       <section className="lg:col-span-6 flex flex-col gap-4">
-        <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold text-slate-800">我的任務清單</h2>
+            <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
+              {myVendorsPanel && (
+                <div className="mb-6 pb-6 border-b border-slate-200 -mx-2 px-2">
+                  {myVendorsPanel}
+                </div>
+              )}
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold text-slate-800">我的任務清單</h2>
             <div className="text-sm font-bold text-rose-600 bg-rose-50 px-3 py-1 rounded-full">
               進度 {progressPercentage}%
             </div>
@@ -220,6 +228,7 @@ export function CoupleChecklist({
               vendors={filteredVendors}
               onViewProfile={() => {}}
               onGoJobBoard={onGoJobBoard}
+              onOpenChat={onOpenChat}
             />
           )}
         </div>
@@ -493,7 +502,7 @@ function EmptyMatch({ onGoDiscover }) {
   );
 }
 
-function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGoJobBoard }) {
+function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGoJobBoard, onOpenChat }) {
   return (
     <div className="bg-transparent animate-in slide-in-from-right-4 duration-300">
       <div className="mb-5 flex items-end justify-between">
@@ -514,6 +523,7 @@ function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGo
               activeVenue={activeVenue}
               onViewProfile={onViewProfile}
               onGoJobBoard={onGoJobBoard}
+              onOpenChat={onOpenChat}
             />
           ))
         ) : (
@@ -532,7 +542,7 @@ function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGo
   );
 }
 
-function VendorCard({ vendor, activeVenue, onViewProfile, onGoJobBoard }) {
+function VendorCard({ vendor, activeVenue, onViewProfile, onGoJobBoard, onOpenChat }) {
   const isPerfectMatch =
     activeVenue && vendor.tags.some((tag) => activeVenue.includes(tag) || tag.includes(activeVenue));
   return (
@@ -572,6 +582,16 @@ function VendorCard({ vendor, activeVenue, onViewProfile, onGoJobBoard }) {
         >
           查看作品集
         </button>
+        {onOpenChat && (
+          <button
+            onClick={() => onOpenChat(vendor)}
+            className="bg-white text-rose-600 border border-rose-300 px-3 py-2 rounded-xl text-sm font-bold hover:bg-rose-50 flex items-center gap-1"
+            title="向商戶查詢詳情"
+          >
+            <MessageCircle className="w-4 h-4" />
+            訊息
+          </button>
+        )}
         <button
           onClick={onGoJobBoard}
           className="flex-1 bg-rose-50 text-rose-700 border border-rose-200 py-2 rounded-xl text-sm font-bold hover:bg-rose-100"

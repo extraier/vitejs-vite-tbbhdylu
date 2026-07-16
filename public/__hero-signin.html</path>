@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Hermes hero sign-in</title></head>
+<body>
+<p>Loading…</p>
+<script>
+// Embed the custom token directly as a literal to avoid CORS/fetch timing.
+const CUSTOM_TOKEN = "PLACEHOLDER";
+async function run() {
+  const fb = window.__fb || window.firebase;
+  if (!fb) { document.body.innerText = 'NO_FB'; return; }
+  const auth = fb.auth ? (fb.auth.getAuth ? fb.auth.getAuth() : fb.auth) : null;
+  if (!auth) { document.body.innerText = 'NO_AUTH'; return; }
+  try {
+    const cred = await auth.signInWithCustomToken(CUSTOM_TOKEN);
+    document.body.innerText = JSON.stringify({
+      ok: true,
+      uid: cred.user.uid,
+      email: cred.user.email,
+    });
+    setTimeout(() => { location.href = '/'; }, 1500);
+  } catch (e) {
+    document.body.innerText = 'ERROR: ' + (e.code || '') + ' ' + e.message;
+  }
+}
+run();
+</script>
+</body></html>
