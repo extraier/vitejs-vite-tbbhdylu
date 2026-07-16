@@ -9,13 +9,6 @@
       ]
     },
     {
-      "collectionGroup": "vendorContacts",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "vendorEmail", "order": "ASCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
