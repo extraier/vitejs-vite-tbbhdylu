@@ -3,6 +3,7 @@ import { Heart, LogOut, Users, MessageCircle } from 'lucide-react';
 import {
      addDoc,
      collection,
+     collectionGroup,
      deleteDoc,
      doc,
      limit,
@@ -253,6 +254,12 @@ export default function App() {
     categoryTop: '',
     categorySub: '',
     categoryKey: 'other',
+    // 2026-07-15 — assigned vendor contact (optional). References a
+    // doc in /users/{uid}/vendorContacts/{contactId}. When the
+    // contact signs up + auto-links, tasks get a derived
+    // assignedVendorUid so the vendor can see them in their
+    // vendor dashboard. Empty string = unassigned.
+    assignedContactId: '',
     customTitle: '',
     venue: '',
     dueDate: '2026-12-31',
@@ -395,6 +402,66 @@ export default function App() {
      const role = userRole === 'vendor' ? 'vendor' : 'couple';
      const unsub = subscribeToInquiries(user.uid, role, setInquiries);
      return unsub;
+   }, [user?.uid, userRole]);
+
+   // 2026-07-15 — assigned tasks for the current vendor. Uses a
+   // collectionGroup query on /tasks subcollections, filtered by
+   // assignedVendorUid == current user uid. Requires a Firestore
+   // composite index (will be auto-suggested in the console on
+   // first error). Owner-scoped rule lets vendors read only tasks
+   // assigned to them.
+   const [assignedTasks, setAssignedTasks] = useState([]);
+   useEffect(() => {
+     if (!user || userRole !== 'vendor' || user.isAnonymous) {
+       setAssignedTasks([]);
+       return undefined;
+     }
+     let cancelled = false;
+     (async () => {
+       try {
+         const tasksQuery = query(
+           collectionGroup(db, 'tasks'),
+           where('assignedVendorUid', '==', user.uid),
+         );
+         const unsub = onSnapshot(
+           tasksQuery,
+           (snap) => {
+             if (cancelled) return;
+             const list = snap.docs.map((d) => ({
+               id: d.id,
+               ...d.data(),
+               // The collectionGroup doc path looks like
+               // artifacts/{appId}/users/{ownerUid}/tasks/{taskId}
+               ownerUid: d.ref.parent.parent?.id,
+             }));
+             list.sort((a, b) => {
+               // Incomplete first, then by dueDate asc, then most-recent
+               if (!!a.isCompleted !== !!b.isCompleted) {
+                 return a.isCompleted ? 1 : -1;
+               }
+               return (a.dueDate || '').localeCompare(b.dueDate || '');
+             });
+             setAssignedTasks(list);
+           },
+           (err) => {
+             // eslint-disable-next-line no-console
+             console.warn(
+               'assignedTasks subscribe failed (likely missing index):',
+               err?.message,
+             );
+           },
+         );
+         if (cancelled) unsub();
+         return unsub;
+       } catch (err) {
+         // eslint-disable-next-line no-console
+         console.warn('assignedTasks setup failed:', err?.message);
+         return undefined;
+       }
+     })();
+     return () => {
+       cancelled = true;
+     };
    }, [user?.uid, userRole]);
 
    // Aggregate unread count for the header inbox badge.
@@ -686,6 +753,15 @@ export default function App() {
       categoryKey = 'other';
       title = newTaskForm.customTitle;
     }
+
+    // Resolve the chosen contact → uid (if already linked). For
+    // unlinked contacts, the task still gets assignedContactId but
+    // no assignedVendorUid until the vendor signs up; we back-fill
+    // that on link (handled by handleLinkContactToVendor below).
+    const chosenContact = vendorContacts.find(
+      (c) => c.id === newTaskForm.assignedContactId,
+    );
+
     const newTask = {
       eventId: currentEvent.id,
       title,
@@ -696,9 +772,24 @@ export default function App() {
       estimatedCost: Number(newTaskForm.estimatedCost) || 0,
       actualCost: Number(newTaskForm.estimatedCost) || 0,
       taskType: 'vendor',
+      // 2026-07-15 — vendor-assignment fields. Either or both may
+      // be empty; vendor reads use assignedVendorUid to filter.
+      assignedContactId: chosenContact?.id || '',
+      assignedVendorName: chosenContact?.vendorName || '',
+      assignedVendorUid: chosenContact?.linkedVendorUid || '',
     };
     await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), newTask);
-    setNewTaskForm({ categoryTop: '', categorySub: '', categoryKey: 'other', customTitle: '', venue: '', dueDate: '2026-12-31', estimatedCost: '', taskType: 'vendor' });
+    setNewTaskForm({
+      categoryTop: '',
+      categorySub: '',
+      categoryKey: 'other',
+      assignedContactId: '',
+      customTitle: '',
+      venue: '',
+      dueDate: '2026-12-31',
+      estimatedCost: '',
+      taskType: 'vendor',
+    });
     showToast('✅ 任務已新增');
   };
 
@@ -1376,6 +1467,7 @@ export default function App() {
                     }
                   />
                 }
+                vendorContacts={vendorContacts}
               />
             )}
 
@@ -1508,6 +1600,7 @@ export default function App() {
                 onSubmitProposal={submitProposal}
                 onManageProfile={() => setCurrentView('vendor-profile')}
                 onLogout={handleVendorLogout}
+                assignedTasks={assignedTasks}
                 // 2026-07-15 — when an admin (no `vendor: true` claim)
                 // impersonates the vendor role via the role-switcher,
                 // show a "管理員預覽模式" banner so they understand why

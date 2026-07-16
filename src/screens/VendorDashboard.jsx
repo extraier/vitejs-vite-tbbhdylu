@@ -22,6 +22,9 @@ import {
   Settings,
   AlertCircle,
   LogOut,
+  ClipboardList,
+  CheckCircle2,
+  Circle,
 } from 'lucide-react';
 import { getVendorCategoryLabel } from '../lib/config';
 
@@ -33,6 +36,7 @@ export function VendorDashboard({
   onManageProfile,
   onLogout,
   isAdminPreview = false,
+  assignedTasks = [],
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
@@ -127,6 +131,76 @@ export function VendorDashboard({
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* 2026-07-15 — assigned tasks from couple's to-do list.
+          Vendors see tasks here when a 主理新人 adds them in their
+          MyVendorsPanel and assigns them to a checklist task.
+          Tasks are filtered by assignedVendorUid == vendor.uid
+          (queried via collectionGroup in App.jsx). Lets vendors
+          see exactly what work is on their plate for each couple
+          they're connected to. */}
+      {!loading && assignedTasks && assignedTasks.length > 0 && (
+        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-6 border border-emerald-200 shadow-sm">
+          <div className="flex items-center gap-2 mb-4">
+            <ClipboardList className="w-6 h-6 text-emerald-600" />
+            <h2 className="text-xl font-black text-emerald-900">
+              📋 主理新人指派嘅任務
+            </h2>
+            <span className="ml-auto bg-emerald-500 text-white text-xs font-black px-2.5 py-0.5 rounded-full">
+              {assignedTasks.length} 個
+            </span>
+          </div>
+          <p className="text-sm text-emerald-800 mb-4">
+            以下係透過「囍程」被新人直接指派嘅工作項目。即時更新，按優先排序。
+          </p>
+          <ul className="space-y-2">
+            {assignedTasks.map((t) => (
+              <li
+                key={`${t.ownerUid}_${t.id}`}
+                className={`p-3 rounded-xl border bg-white ${
+                  t.isCompleted
+                    ? 'border-slate-200 opacity-70'
+                    : 'border-emerald-300'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  {t.isCompleted ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <Circle className="w-5 h-5 text-slate-400 flex-shrink-0 mt-0.5" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div
+                      className={`font-bold text-slate-800 ${
+                        t.isCompleted ? 'line-through' : ''
+                      }`}
+                    >
+                      {t.title || t.category || '未命名任務'}
+                    </div>
+                    <div className="flex flex-wrap gap-3 text-xs text-slate-500 mt-1">
+                      {t.category && (
+                        <span>
+                          📂{' '}
+                          {getVendorCategoryLabel(
+                            t.category.split('.')[0],
+                            t.category.split('.')[1],
+                          )}
+                        </span>
+                      )}
+                      {t.dueDate && <span>📅 {t.dueDate}</span>}
+                      {t.estimatedCost ? (
+                        <span>
+                          💰 預算 ${Number(t.estimatedCost).toLocaleString()}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 

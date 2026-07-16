@@ -16,6 +16,22 @@ import {
   MessageCircle,
 } from 'lucide-react';
 import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
+
+// 2026-07-15 — local helper for the vendor-contact dropdown in
+// the add-task form. Reads VENDOR_CATEGORIES and resolves
+// 'venue.banquet_hall' → '婚宴場地 · 酒店宴會廳', 'venue' → '婚宴場地',
+// etc. Falls back to the raw key.
+function categoryLabel(key) {
+  if (!key) return '';
+  if (key.includes('.')) {
+    const [top, sub] = key.split('.');
+    const t = VENDOR_CATEGORIES[top];
+    if (t?.subs?.[sub]) return `${t.label} · ${t.subs[sub]}`;
+    if (t) return t.label;
+    return key;
+  }
+  return VENDOR_CATEGORIES[key]?.label || key;
+}
 import { budgetFitTier, budgetDistance, formatVendorPrice, formatMoney, parseFormattedNumber } from '../lib/format';
 
 export function CoupleChecklist({
@@ -37,6 +53,7 @@ export function CoupleChecklist({
   onGoJobBoard,
   onOpenChat,
   myVendorsPanel,
+  vendorContacts = [],
 }) {
   const progressPercentage = Math.round(
     (tasks.filter((t) => t.isCompleted).length / (tasks.length || 1)) * 100,
@@ -207,6 +224,34 @@ export function CoupleChecklist({
               value={newTaskForm.estimatedCost}
               onChange={(e) => onNewTaskFormChange({ ...newTaskForm, estimatedCost: e.target.value })}
             />
+            {/*
+              2026-07-15 — vendor assignment dropdown. Lists every
+              contact in MyVendorsPanel. Empty value = "未指派".
+              Contacts that are already linked (linkedVendorUid set)
+              show a "✓ 已連結" badge; unlinked ones show
+              "未加入 (對方加入平台後商戶先睇到)" so the user
+              understands the limits.
+            */}
+            <select
+              value={newTaskForm.assignedContactId || ''}
+              onChange={(e) =>
+                onNewTaskFormChange({
+                  ...newTaskForm,
+                  assignedContactId: e.target.value,
+                })
+              }
+              className="col-span-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
+            >
+              <option value="">🏪 未指派商戶 (從下方「我嘅商戶」加入)</option>
+              {(vendorContacts || []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.linkedVendorUid ? '✓ ' : '⏳ '}
+                  {c.vendorName}
+                  {c.category ? ` · ${categoryLabel(c.category)}` : ''}
+                  {c.linkedVendorUid ? ' (已連結)' : ' (未加入)'}
+                </option>
+              ))}
+            </select>
             <button
               type="submit"
               className="col-span-2 bg-slate-900 text-white font-bold py-3 rounded-lg mt-1 hover:bg-slate-800 shadow-sm flex items-center justify-center gap-2"
@@ -307,6 +352,32 @@ function TaskRow({
               : `預算: ${formatMoney(task.estimatedCost)}`}
           </div>
         </div>
+        {/*
+          2026-07-15 — assigned-vendor badge on each task row. Shows
+          the contact name and a badge state: green (linked vendor,
+          vendor can see in their dashboard) or amber (unlinked,
+          pending vendor signup).
+        */}
+        {task.assignedVendorName && (
+          <div className="mt-1.5">
+            <span
+              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+                task.assignedVendorUid
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-amber-50 text-amber-700 border-amber-200'
+              }`}
+              title={
+                task.assignedVendorUid
+                  ? '已指派商戶，可於其儀表板睇到'
+                  : '已指派聯絡人，商戶加入平台後即可睇到'
+              }
+            >
+              {task.assignedVendorUid ? '✓ ' : '⏳ '}
+              {task.assignedVendorName}
+              {task.assignedVendorUid ? '' : ' (未加入)'}
+            </span>
+          </div>
+        )}
       </div>
       <button
         onClick={(e) => {

@@ -174,9 +174,15 @@ service cloud.firestore {
         }
 
         // Tasks: owner CRUD. Helpers may read IF canViewChecklist (no write).
+        // 2026-07-15 — vendors may also read tasks where they are
+        // the assigned vendor (assignedVendorUid == auth.uid). The
+        // collectionGroup query in App.jsx surfaces these to the
+        // vendor dashboard so 主理新人 can hand off work to a vendor
+        // they know from Instagram (post-onboarding flow).
         match /tasks/{taskId} {
           allow read: if isOwner(ownerUid)
-            || hasHelperPerm(ownerUid, 'canViewChecklist');
+            || hasHelperPerm(ownerUid, 'canViewChecklist')
+            || (isSignedIn() && request.auth.uid == resource.data.assignedVendorUid);
           allow write: if isOwner(ownerUid);
         }
 
