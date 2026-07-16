@@ -360,37 +360,59 @@ export default function App() {
 
   // 2026-07-15 — Auto-link any vendor contacts (across owners)
   // whose vendorEmail matches the currently signed-in user's email
-  // and which are unlinked. Sets linkedVendorUid on the contact and
-  // back-fills assignedVendorUid on any tasks pointing at that
-  // contact. The cross-owner write is gated by Firestore rules:
-  // the vendor's auth.uid does NOT have owner perms for someone
-  // else's /tasks/ — that path needs a Cloud Function. Until
-  // that's wired, the manual link (MyVendorsPanel edit) is the
-  // fallback for end-to-end demos.
+  // and which are unlinked.
+  //
+  // Primary path: call the `autoLinkVendorContacts` Cloud Function
+  // (functions/src/vendors.ts). It runs with admin credentials and
+  // can safely write to other owners' /tasks/ subcollections. This
+  // is the only path that actually persists when the vendor signs
+  // up — the couple's browser may not be online simultaneously.
+  //
+  // Fallback path: tryAutoLinkContacts (client-side, scans contacts
+  // the couple already has scoped perms for). Useful while
+  // developing without a deployed Cloud Function. Silent on failure
+  // once the Cloud Function succeeds.
   useEffect(() => {
-    if (!user || user.isAnonymous) return undefined;
-    let cancelled = false;
-    // Slight delay so this doesn't fight with the data-fetching
-    // subscriptions above on initial mount.
-    const t = setTimeout(() => {
-      if (cancelled) return;
-      tryAutoLinkContacts(
-        user.uid,
-        user.email,
-        (linked) => {
-          if (cancelled) return;
-          showToast?.(`🔗 已連結商戶：${linked.vendorName}`);
-        },
-      ).catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn('tryAutoLinkContacts failed:', err?.message);
-      });
-    }, 1500);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [user?.uid, user?.email]);
+      if (!user || user.isAnonymous) return undefined;
+      let cancelled = false;
+      const t = setTimeout(async () => {
+        if (cancelled) return;
+        // 1) Cloud Function — primary path.
+        try {
+          const autoLink = httpsCallable(functions, 'autoLinkVendorContacts');
+          const result = await autoLink();
+          const { linked, backfilled } = result?.data || {};
+          if (!cancelled && (linked || backfilled)) {
+            showToast?.(
+              `🔗 已連結 ${linked || 0} 個商戶、${backfilled || 0} 個任務`,
+            );
+          }
+        } catch (cfErr) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            'autoLinkVendorContacts (CF) failed, falling back to client-side:',
+            cfErr?.message,
+          );
+          // 2) Fallback — client-side. Best-effort, may not persist
+          // for cross-owner writes due to Firestore rules.
+          tryAutoLinkContacts(
+            user.uid,
+            user.email,
+            (linked) => {
+              if (cancelled) return;
+              showToast?.(`🔗 已連結商戶：${linked.vendorName}`);
+            },
+          ).catch((err) => {
+            // eslint-disable-next-line no-console
+            console.warn('tryAutoLinkContacts (client) failed:', err?.message);
+          });
+        }
+      }, 1500);
+      return () => {
+        cancelled = true;
+        clearTimeout(t);
+      };
+    }, [user?.uid, user?.email]);
 
    const { data: allGuests } = useFirestoreCollection(
        guestDataReady && targetUid

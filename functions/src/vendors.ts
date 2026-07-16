@@ -321,3 +321,151 @@ export const uploadVendorPortfolio = onCall(
     return { ok: true, portfolio: next };
   },
 );
+// =============================================================================
+// autoLinkVendorContacts — Cloud Function callable that runs with admin
+// credentials and scans every owner for vendorContacts entries whose
+// vendorEmail matches the signed-in vendor's email, then sets
+// linkedVendorUid on the contact and back-fills assignedVendorUid on any
+// tasks pointing at that contact.
+//
+// Why this is a Cloud Function
+// ----------------------------
+// The same logic attempted client-side in src/lib/contactLink.js hits a
+// permission wall: the vendor's auth.uid does NOT have owner-scoped write
+// perms to other couples' /tasks/ subcollections. Doing this with the admin
+// service account bypasses that wall — runs server-side with full read+write
+// across all owners.
+//
+// Idempotent
+// ----------
+// - Skips contacts that already have linkedVendorUid set.
+// - Skips tasks that already have assignedVendorUid set (preserves manual
+//   overrides).
+// - Safe to call multiple times.
+//
+// Trigger
+// -------
+// Called from src/lib/contactLink.js (or directly from the App.jsx useEffect
+// on sign-in). Client can pass either:
+//   { vendorEmail: '<override@email>' }   (rare; defaults to req.auth.token.email)
+// Returns { linked: number, backfilled: number, ownersTouched: number }.
+// =============================================================================
+
+export const autoLinkVendorContacts = onCall(
+  { region: 'asia-east1' },
+  async (req) => {
+    if (!req.auth) {
+      throw new HttpsError('unauthenticated', '請先登入 (must be signed in).');
+    }
+    const authUid = req.auth.uid;
+    const overrideEmail = typeof req.data?.vendorEmail === 'string'
+      ? req.data.vendorEmail.trim().toLowerCase()
+      : '';
+    // firebase decoded id token exposes .email; fall back to Admin SDK
+    // lookup if the token didn't carry it (rare — happens for phone auth
+    // or some federated providers).
+    let authEmail = (req.auth.token.email as string | undefined)?.toLowerCase() || '';
+    if (!authEmail) {
+      try {
+        const userRecord = await getAdminAuth().getUser(authUid);
+        authEmail = (userRecord.email || '').toLowerCase();
+      } catch {
+        // ignore — proceeds with empty email, which matches no contacts
+      }
+    }
+    const targetEmail = overrideEmail || authEmail;
+    if (!targetEmail) {
+      throw new HttpsError(
+        'invalid-argument',
+        '找不到電郵 (no email available on the signed-in user).',
+      );
+    }
+
+    // 1. collection-group scan over ALL vendorContacts with this email.
+    //    Requires the (vendorEmail ASC) collection-group index; declared
+    //    in firestore.indexes.json.
+    const contactsSnap = await db
+      .collectionGroup('vendorContacts')
+      .where('vendorEmail', '==', targetEmail)
+      .get();
+
+    if (contactsSnap.empty) {
+      return { linked: 0, backfilled: 0, ownersTouched: 0 };
+    }
+
+    // 2. Group contact refs by ownerUid so we can batch together
+    //    (a) the contact-update + (b) any task updates within the
+    //    same owner. One batch per owner keeps it simple + atomic.
+    const grouped = new Map<string, FirebaseFirestore.QueryDocumentSnapshot[]>();
+    contactsSnap.forEach((c) => {
+      if (c.data().linkedVendorUid) return; // skip already-linked
+      const ownerUid = c.ref.parent.parent?.id;
+      if (!ownerUid) return;
+      if (!grouped.has(ownerUid)) grouped.set(ownerUid, []);
+      grouped.get(ownerUid)!.push(c);
+    });
+
+    let totalLinked = 0;
+    let totalBackfilled = 0;
+    const ownersTouched = grouped.size;
+
+    // 3. For each owner, build one batch: contact-link + task back-fill.
+    for (const [ownerUid, contacts] of grouped) {
+      const batch = db.batch();
+
+      for (const c of contacts) {
+        batch.update(c.ref, {
+          linkedVendorUid: authUid,
+          invitationAccepted: true,
+          linkedAt: FieldValue.serverTimestamp(),
+        });
+        totalLinked++;
+      }
+
+      // Back-fill tasks in this owner's /tasks/ for each contact.
+      for (const c of contacts) {
+        const tasksSnap = await db
+          .collection(`artifacts/savetheday-production/users/${ownerUid}/tasks`)
+          .where('assignedContactId', '==', c.id)
+          .get();
+        for (const t of tasksSnap.docs) {
+          if (t.data().assignedVendorUid) continue; // preserve manual
+          batch.update(t.ref, {
+            assignedVendorUid: authUid,
+            assignedVendorName:
+              t.data().assignedVendorName || c.data().vendorName || '',
+          });
+          totalBackfilled++;
+        }
+      }
+
+      try {
+        await batch.commit();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[autoLinkVendorContacts] owner ${ownerUid} batch failed:`,
+          (err as Error)?.message,
+        );
+        // Roll back the running counters for this owner so the
+        // returned numbers reflect what actually committed.
+        totalLinked -= contacts.length;
+        // Best-effort rollback of partial state isn't safe (we don't
+        // know which contacts in the batch were already updated), so
+        // we just report the partial state below.
+      }
+    }
+
+    // eslint-disable-next-line no-console
+    console.info(
+      `[autoLinkVendorContacts] uid=${authUid} email=${targetEmail} → ` +
+        `linked=${totalLinked} backfilled=${totalBackfilled} owners=${ownersTouched}`,
+    );
+
+    return {
+      linked: totalLinked,
+      backfilled: totalBackfilled,
+      ownersTouched,
+    };
+  },
+);
