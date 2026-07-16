@@ -19,6 +19,7 @@ import {
   Edit3,
   Trash2,
   ExternalLink,
+  Link2,
 } from 'lucide-react';
 import { VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { VendorContactForm } from './modals/VendorContactForm';
@@ -30,6 +31,7 @@ export function MyVendorsPanel({
   onAddContact,
   onUpdateContact,
   onDeleteContact,
+  onLinkContact, // (contact) => void; manual uid-based link fallback
   onChatContact, // (contact) => void; called for contacts with linkedVendorUid
 }) {
   const [formOpen, setFormOpen] = useState(false);
@@ -96,6 +98,7 @@ export function MyVendorsPanel({
               key={contact.id}
               contact={contact}
               onChat={() => handleChat(contact)}
+              onLink={() => onLinkContact?.(contact)}
               onEdit={() => {
                 setEditing(contact);
                 setFormOpen(true);
@@ -131,7 +134,7 @@ export function MyVendorsPanel({
   );
 }
 
-function ContactCard({ contact, onChat, onEdit, onDelete }) {
+function ContactCard({ contact, onChat, onLink, onEdit, onDelete }) {
   const linked = Boolean(contact.linkedVendorUid);
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-3 hover:shadow-sm transition-shadow relative group">
@@ -218,6 +221,21 @@ function ContactCard({ contact, onChat, onEdit, onDelete }) {
           <MessageSquare className="w-4 h-4" />
         </button>
         <div className="flex-1" />
+        <button
+          onClick={onLink}
+          className={`p-1.5 rounded-lg transition-colors ${
+            linked
+              ? 'text-emerald-500 hover:bg-emerald-50'
+              : 'text-amber-500 hover:bg-amber-50 opacity-0 group-hover:opacity-100'
+          }`}
+          title={
+            linked
+              ? '已連結此商戶 (重新連結可覆蓋 uid)'
+              : '連結到已註冊商戶 (輸入 uid)'
+          }
+        >
+          <Link2 className="w-3.5 h-3.5" />
+        </button>
         <button
           onClick={onEdit}
           className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors opacity-0 group-hover:opacity-100"

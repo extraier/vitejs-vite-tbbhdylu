@@ -7,6 +7,20 @@
         { "fieldPath": "monthBucket", "order": "ASCENDING" },
         { "fieldPath": "vendorId", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "vendorContacts",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "vendorEmail", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tasks",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "assignedVendorUid", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

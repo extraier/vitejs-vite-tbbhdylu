@@ -48,6 +48,7 @@ import {
   markInquiryRead,
   inquiryIdFor,
 } from './lib/chat';
+import { tryAutoLinkContacts } from './lib/contactLink';
 import { useAuth } from './hooks/useAuth';
 import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
@@ -357,6 +358,40 @@ export default function App() {
     [targetUid, guest.isGuestMode, guestDataReady],
   );
 
+  // 2026-07-15 — Auto-link any vendor contacts (across owners)
+  // whose vendorEmail matches the currently signed-in user's email
+  // and which are unlinked. Sets linkedVendorUid on the contact and
+  // back-fills assignedVendorUid on any tasks pointing at that
+  // contact. The cross-owner write is gated by Firestore rules:
+  // the vendor's auth.uid does NOT have owner perms for someone
+  // else's /tasks/ — that path needs a Cloud Function. Until
+  // that's wired, the manual link (MyVendorsPanel edit) is the
+  // fallback for end-to-end demos.
+  useEffect(() => {
+    if (!user || user.isAnonymous) return undefined;
+    let cancelled = false;
+    // Slight delay so this doesn't fight with the data-fetching
+    // subscriptions above on initial mount.
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      tryAutoLinkContacts(
+        user.uid,
+        user.email,
+        (linked) => {
+          if (cancelled) return;
+          showToast?.(`🔗 已連結商戶：${linked.vendorName}`);
+        },
+      ).catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn('tryAutoLinkContacts failed:', err?.message);
+      });
+    }, 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [user?.uid, user?.email]);
+
    const { data: allGuests } = useFirestoreCollection(
        guestDataReady && targetUid
          ? query(
@@ -533,12 +568,73 @@ export default function App() {
      showToast('✅ 已更新');
    };
    const handleDeleteVendorContact = async (contactId) => {
-     if (!user || !contactId) return;
-     await deleteDoc(
-       doc(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts', contactId),
-     );
-     showToast('🗑️ 已刪除');
-   };
+       if (!user || !contactId) return;
+       await deleteDoc(
+         doc(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts', contactId),
+       );
+       showToast('🗑️ 已刪除');
+     };
+
+     // 2026-07-15 — Manually link a contact to a vendor uid (used
+     // when the vendor has signed up and we know their uid; or when
+     // a couple wants to correct an auto-link). Writes from the
+     // couple's owner-scoped account so perms are satisfied.
+     // After the link lands, also back-fills assignedVendorUid on
+     // every task in this owner's /tasks/ where assignedContactId
+     // matches — same logic the auto-linker applies cross-owner.
+     const handleLinkContact = async (contact) => {
+       if (!user || !contact?.id) return;
+       const raw = window.prompt(
+         `連結「${contact.vendorName}」到商戶 Firebase Auth UID：\n\n` +
+           `（商戶註冊後嘅 uid，例如 「abc123XYZ...」；\n` +
+           `聯絡商戶攞，或由商戶登入後查詢 /vendor-profile 嘅 URL）`,
+         contact.linkedVendorUid || '',
+       );
+       if (!raw) return;
+       const vendorUid = raw.trim();
+       if (!vendorUid) return;
+       try {
+         const { linkSingleContact } = await import('./lib/contactLink');
+         const result = await linkSingleContact(user.uid, contact.id, vendorUid);
+         if (!result.ok) {
+           showToast(`✗ 連結失敗：${result.reason}`);
+           return;
+         }
+         // Back-fill tasks for this contact in this owner scope.
+         try {
+           const { getDocs } = await import('firebase/firestore');
+           const tasksQ = query(
+             collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'),
+             where('assignedContactId', '==', contact.id),
+           );
+           const snap = await getDocs(tasksQ);
+           let count = 0;
+           for (const t of snap.docs) {
+             if (t.data().assignedVendorUid) continue;
+             await updateDoc(
+               doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', t.id),
+               {
+                 assignedVendorUid: vendorUid,
+                 assignedVendorName:
+                   t.data().assignedVendorName || contact.vendorName || '',
+               },
+             );
+             count++;
+           }
+           showToast(
+             `🔗 已連結！${count > 0 ? `同步咗 ${count} 個指派任務` : ''}`,
+           );
+         } catch (e) {
+           // eslint-disable-next-line no-console
+           console.warn('task back-fill failed:', e?.message);
+           showToast('🔗 已連結 (任務同步失敗)');
+         }
+       } catch (err) {
+         // eslint-disable-next-line no-console
+         console.warn('handleLinkContact failed:', err?.message);
+         showToast(`✗ 連結失敗：${err?.message || '未知錯誤'}`);
+       }
+     };
 
 
   const { data: allPhotos } = useFirestoreCollection(
@@ -1459,6 +1555,7 @@ export default function App() {
                     onAddContact={handleAddVendorContact}
                     onUpdateContact={handleUpdateVendorContact}
                     onDeleteContact={handleDeleteVendorContact}
+                    onLinkContact={handleLinkContact}
                     onChatContact={(contact) =>
                       handleOpenChat({
                         otherUid: contact.linkedVendorUid,
