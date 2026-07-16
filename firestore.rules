@@ -242,6 +242,17 @@ service cloud.firestore {
             && request.resource.data.helperUid == request.auth.uid;
           allow update, delete: if false;  // immutable
         }
+
+        // 2026-07-15 — VendorContacts: 主理新人 personal address book
+        // of vendors they know from outside the platform (Instagram,
+        // word of mouth, etc.). Owner-only CRUD; supports optional
+        // linkedVendorUid field for contacts whose vendor later signs
+        // up and gets auto-linked. Used by MyVendorsPanel + chat.
+        match /vendorContacts/{contactId} {
+          allow read: if isOwner(ownerUid);
+          allow create, update: if isOwner(ownerUid);
+          allow delete: if isOwner(ownerUid);
+        }
       }
 
       // ---- Public marketplace (vendor discovery) -----------------------
