@@ -60,6 +60,7 @@ import {
 import { parseFormattedNumber } from '../lib/format';
 import { CompareModal } from '../components/CompareModal';
 import { shareOrCopyShortlist } from '../lib/vendorShare';
+import { useLongPressRegistry } from '../lib/useLongPress';
 
 function isSubMatch(filter) {
   return filter && filter.includes('.');
@@ -464,10 +465,20 @@ export function DiscoverDirectory({
             counts={counts}
             subCounts={counts.subCounts}
             onCardClick={(topKey) => toggleCat(topKey)}
+            onCardDrilldown={(topKey) => setFilterWithSearchReset(topKey)}
             selectedCats={selectedCats}
           />
           {search && visibleCount === 0 && (
             <SearchEmpty onClear={() => setSearch('')} query={search} />
+          )}
+          {/* Tip line under the grid so users discover the long-press
+              gesture. Hidden once they've favorited any vendors (no
+              need to remind). */}
+          {counts.favorites === 0 && (
+            <p className="text-center text-xs text-slate-400 mt-6">
+              💡 <span className="hidden md:inline">右撳 / </span>
+              長按商戶分類卡片直接進入（短撳係加入選擇）
+            </p>
           )}
         </>
       )}
@@ -631,10 +642,26 @@ function ActionTray({ children }) {
 
 // Default-view category grid. Multi-select: clicking a card toggles it.
 // Cards stay in-place; selected cards get an emerald ring + check mark.
-function CategoryGrid({ counts, subCounts, onCardClick, selectedCats }) {
+function CategoryGrid({
+  counts,
+  subCounts,
+  onCardClick,
+  onCardDrilldown,
+  selectedCats,
+}) {
+  // Single registry hook generates handlers for any number of cards
+  // without violating the Rules of Hooks (no per-element hooks).
+  const getPressHandlers = useLongPressRegistry({
+    delayMs: 600,
+    disableContextMenu: true,
+    onLongPress: (topKey) => onCardDrilldown?.(topKey),
+  });
+  const allTopKeys = Object.keys(VENDOR_CATEGORIES);
+
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-      {Object.entries(VENDOR_CATEGORIES).map(([topKey, cfg]) => {
+      {allTopKeys.map((topKey) => {
+        const cfg = VENDOR_CATEGORIES[topKey];
         const count = counts.topCounts[topKey] || 0;
         const subs = Object.entries(cfg.subs);
         const subItems = subCounts[topKey] || {};
@@ -643,13 +670,21 @@ function CategoryGrid({ counts, subCounts, onCardClick, selectedCats }) {
           .slice(0, 3);
         const remainingSubs = subs.length - visibleSubs.length;
         const isSelected = selectedCats.has(topKey);
+        // Long-press: hold ≥600ms to drill directly (skip multi-select).
+        // Suppresses the synthetic click that fires on pointerup via
+        // onClickCapture so the gesture doesn't accidentally toggle the
+        // selection in addition to drilling down.
+        const pressHandlers = onCardDrilldown
+          ? getPressHandlers(topKey)
+          : null;
         return (
           <button
             key={topKey}
             type="button"
             onClick={() => onCardClick(topKey)}
             disabled={count === 0}
-            className={`group relative rounded-2xl p-5 text-left transition-all border ${
+            {...(pressHandlers || {})}
+            className={`group relative rounded-2xl p-5 text-left transition-all border select-none ${
               count === 0
                 ? 'bg-slate-50 border-slate-100 opacity-50 cursor-not-allowed'
                 : isSelected

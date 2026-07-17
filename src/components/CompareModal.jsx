@@ -1,28 +1,45 @@
 // CompareModal — side-by-side comparison of up to 3 favorited vendors.
 //
 // Appears as a full-screen modal when the user has selected 2-3
-// vendors in the favorites view's compare mode. Renders a 3-column
-// grid (or 2 if only 2 picked; 1 if only 1 — but the UI gates to
-// ≥ 2 before opening).
+// vendors in the favorites view's compare mode. Renders a 1-3 column
+// grid (auto-fits: 1 col for 1 vendor, 2 for 2, 3 for 3).
 //
 // Columns:
-//   - Header (name + heart to unfavorite)
-//   - Portfolio (single image, lg, square crops acceptable)
-//   - Price range (uses formatVendorPrice if available else legacy .price)
-//   - Category + sub-category pills
-//   - Rating (star + number)
-//   - Description (verbatim)
-//   - Tags (chips)
+//   - Image (+ featured badge + heart to unfavorite)
+//   - Name + rating
+//   - Price range
+//   - Category + sub-category
+//   - Description
+//   - Tags
 //
-// Closing: × top-right + ESC + click backdrop.
+// Action bar (header right):
+//   - 📄 儲存為圖片  — exports the columns grid as a PNG via
+//                       html2canvas-pro. CORS-friendly (proxies
+//                       portfolio images, no proxy required for
+//                       unsplash and similar public CDNs that send
+//                       CORS headers).
+//   - × close
+//
+// Closing: × + ESC + click backdrop.
 
-import { useEffect } from 'react';
-import { X, Star, Heart } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { X, Star, Heart, Download, Loader2 } from 'lucide-react';
 import { VENDOR_CATEGORIES } from '../lib/config';
 import { formatVendorPrice } from '../lib/format';
 
+// Lazy-import html2canvas-pro so the heavy bundle is not in the
+// initial chunk unless the user opens compare. The library is
+// named 'html2canvas-pro' on npm.
+async function loadHtml2Canvas() {
+  const mod = await import('html2canvas-pro');
+  return mod.default || mod;
+}
+
 export function CompareModal({ vendors, onClose, onToggleFavorite, favoriteIds }) {
-  // Esc-to-close. Single-purpose effect for an ephemeral modal.
+  const exportRef = useRef(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
+
   useEffect(() => {
     function onKey(e) {
       if (e.key === 'Escape') onClose();
@@ -32,6 +49,74 @@ export function CompareModal({ vendors, onClose, onToggleFavorite, favoriteIds }
   }, [onClose]);
 
   const cols = Math.max(2, Math.min(3, vendors.length));
+
+  async function handleExport() {
+    if (!exportRef.current || exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const html2canvas = await loadHtml2Canvas();
+      const node = exportRef.current;
+      const canvas = await html2canvas(node, {
+        // Render at 2x for crisp output on retina + better print quality.
+        scale: 2,
+        // Use the actual node background; falls back to white if unset.
+        backgroundColor: '#ffffff',
+        // CORS-friendly: html2canvas-pro sets `crossOrigin="anonymous"`
+        // on the relevant elements so cross-origin images don't taint
+        // the canvas.
+        useCORS: true,
+        // Allow the bitmap to be larger than the viewport (we typically
+        // only render up to 3 columns which fits, but this is a safety
+        // net).
+        windowWidth: Math.max(node.offsetWidth, 1024),
+        // Lower the chance of image flickering in the captured frame.
+        logging: false,
+      });
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, 'image/png', 0.95),
+      );
+      if (!blob) {
+        throw new Error('toBlob produced null — try a smaller scale');
+      }
+      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const filename = `SaveTheDay-compare-${ts}.png`;
+      // Mobile-friendly path: Web Share API can handoff the file.
+      const file = new File([blob], filename, { type: 'image/png' });
+      if (
+        typeof navigator !== 'undefined' &&
+        navigator.share &&
+        navigator.canShare &&
+        navigator.canShare({ files: [file] })
+      ) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'Save The Day — 商戶比較',
+            text: '商戶比較結果 🛍️',
+          });
+          return;
+        } catch (_) {
+          // User cancelled or share failed — fall back to download.
+        }
+      }
+      // Desktop path: anchor.click() to trigger download.
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('PNG export failed:', e?.message || e);
+      setExportError(e?.message || '匯出失敗');
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <div
@@ -50,35 +135,87 @@ export function CompareModal({ vendors, onClose, onToggleFavorite, favoriteIds }
               ({vendors.length}/{cols})
             </span>
           </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors"
-            aria-label="關閉比較"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={exporting}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-bold transition-all border ${
+                exporting
+                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-wait'
+                  : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-400 hover:text-emerald-600'
+              }`}
+              title="將商戶比較結果儲存為 PNG 圖片"
+            >
+              {exporting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+              {exporting ? '匯出中...' : '儲存為圖片'}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors"
+              aria-label="關閉比較"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        {/* Columns */}
+        {/* Inline export-error toast — non-blocking, dismissable */}
+        {exportError && (
+          <div className="bg-rose-50 text-rose-700 text-sm px-6 py-2 border-b border-rose-100 flex items-center justify-between gap-2">
+            <span>⚠ {exportError}</span>
+            <button
+              type="button"
+              onClick={() => setExportError(null)}
+              className="text-rose-400 hover:text-rose-700"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Columns — `exportRef` wraps the renderable content so the
+            PNG export only includes the columns (not the modal close
+            button), with no truncation. */}
         <div className="flex-1 overflow-auto p-6">
-          <div
-            className={`grid gap-6 ${
-              vendors.length === 1
-                ? 'grid-cols-1'
-                : vendors.length === 2
-                ? 'grid-cols-1 md:grid-cols-2'
-                : 'grid-cols-1 md:grid-cols-3'
-            }`}
-          >
-            {vendors.map((v) => (
-              <VendorColumn
-                key={v.id}
-                vendor={v}
-                onToggleFavorite={onToggleFavorite}
-                isFavorited={favoriteIds?.has(v.id) || false}
-              />
-            ))}
+          <div ref={exportRef} className="bg-white">
+            <div className="px-2 pb-3 text-center border-b border-slate-100 mb-4">
+              <div className="inline-flex items-center gap-2 text-slate-800">
+                <span className="text-base font-black">📍 Save The Day</span>
+                <span className="text-xs text-slate-400">商戶比較結果</span>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                {new Date().toLocaleDateString('zh-HK', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                })}
+              </div>
+            </div>
+            <div
+              className={`grid gap-6 ${
+                vendors.length === 1
+                  ? 'grid-cols-1'
+                  : vendors.length === 2
+                  ? 'grid-cols-1 md:grid-cols-2'
+                  : 'grid-cols-1 md:grid-cols-3'
+              }`}
+            >
+              {vendors.map((v) => (
+                <VendorColumn
+                  key={v.id}
+                  vendor={v}
+                  onToggleFavorite={onToggleFavorite}
+                  isFavorited={favoriteIds?.has(v.id) || false}
+                  exportMode
+                />
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -86,7 +223,7 @@ export function CompareModal({ vendors, onClose, onToggleFavorite, favoriteIds }
   );
 }
 
-function VendorColumn({ vendor, onToggleFavorite, isFavorited }) {
+function VendorColumn({ vendor, onToggleFavorite, isFavorited, exportMode }) {
   const catConfig = VENDOR_CATEGORIES[vendor.category];
   const subLabel = vendor.subcategory
     ? catConfig?.subs?.[vendor.subcategory]
@@ -97,9 +234,15 @@ function VendorColumn({ vendor, onToggleFavorite, isFavorited }) {
       {/* Image */}
       <div className="h-48 w-full overflow-hidden bg-slate-100 relative">
         {vendor.portfolio?.[0] && (
+          // crossOrigin=anonymous helps html2canvas-pro read the
+          // pixels of cross-origin portraits without tainting the
+          // canvas (e.g. images.unsplash.com).
+          // eslint-disable-next-line jsx-a11y/alt-text
           <img
             src={vendor.portfolio[0]}
             alt={vendor.name}
+            crossOrigin="anonymous"
+            referrerPolicy="no-referrer"
             className="w-full h-full object-cover"
           />
         )}
@@ -109,7 +252,10 @@ function VendorColumn({ vendor, onToggleFavorite, isFavorited }) {
             推薦
           </div>
         )}
-        {onToggleFavorite && (
+        {/* The heart inside the column is hidden during export so the
+            final PNG looks clean. We let the bottom-of-modal CTA on
+            the favorites view toggle hearts instead. */}
+        {!exportMode && onToggleFavorite && (
           <button
             type="button"
             onClick={() => onToggleFavorite(vendor)}
@@ -126,7 +272,7 @@ function VendorColumn({ vendor, onToggleFavorite, isFavorited }) {
       </div>
 
       <div className="p-5 space-y-4">
-        {/* Name + close-remove */}
+        {/* Name + rating */}
         <div>
           <h4 className="text-lg font-black text-slate-800 leading-tight">
             {vendor.name}
@@ -139,14 +285,12 @@ function VendorColumn({ vendor, onToggleFavorite, isFavorited }) {
           ) : null}
         </div>
 
-        {/* Price */}
         <CompareRow label="價錢">
           <span className="font-black text-rose-600 text-base">
             {formatVendorPrice(vendor)}
           </span>
         </CompareRow>
 
-        {/* Category + subcategory */}
         <CompareRow label="分類">
           {catConfig ? (
             <div className="space-y-1">
@@ -162,14 +306,12 @@ function VendorColumn({ vendor, onToggleFavorite, isFavorited }) {
           )}
         </CompareRow>
 
-        {/* Description */}
         <CompareRow label="簡介">
           <p className="text-sm text-slate-600 leading-relaxed line-clamp-6">
             {vendor.description || '—'}
           </p>
         </CompareRow>
 
-        {/* Tags */}
         {Array.isArray(vendor.tags) && vendor.tags.length > 0 && (
           <CompareRow label="標籤">
             <div className="flex flex-wrap gap-1">
