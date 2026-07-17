@@ -195,6 +195,34 @@ service cloud.firestore {
               && request.resource.data.diff(resource.data).affectedKeys()
                   .hasOnly(['status', 'statusUpdatedAt', 'statusNote'])
             );
+          // 2026-07-17: 對話串 (comments) on a task. Same access model as
+          // the parent task: owner / canViewChecklist helper / assigned
+          // vendor can read. Owner + assigned vendor can write — helpers
+          // never post to keep the thread attributable to
+          // decision-makers.
+          match /comments/{commentId} {
+            allow read: if isOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewChecklist')
+              || (isSignedIn() && request.auth.uid == resource.data.authorUid)
+              || (
+                isSignedIn()
+                && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId))
+                && get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedVendorUid == request.auth.uid
+              );
+            allow create: if isOwner(ownerUid)
+              || (
+                isSignedIn()
+                && request.resource.data.authorUid == request.auth.uid
+                && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                && request.resource.data.text is string
+                && request.resource.data.text.size() > 0
+                && request.resource.data.text.size() <= 2000
+                && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId))
+                && get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedVendorUid == request.auth.uid
+              );
+            allow update, delete: if isOwner(ownerUid)
+              || (isSignedIn() && request.auth.uid == resource.data.authorUid);
+          }
         }
 
         // Invitations: owner full CRUD. These are the electronic-invitation

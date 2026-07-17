@@ -15,6 +15,7 @@ import {
   X,
   MessageCircle,
 } from 'lucide-react';
+import { TaskComments } from '../components/TaskComments';
 import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 
 // 2026-07-15 — local helper for the vendor-contact dropdown in
@@ -163,6 +164,7 @@ export function CoupleChecklist({
   onOpenChat,
   myVendorsPanel,
   vendorContacts = [],
+  currentUser,
 }) {
   const progressPercentage = Math.round(
     (tasks.filter((t) => t.isCompleted).length / (tasks.length || 1)) * 100,
@@ -229,6 +231,7 @@ export function CoupleChecklist({
               <TaskRow
                 key={task.id}
                 task={task}
+                currentUser={currentUser}
                 isActive={activeCategory === task.category}
                 isEditing={editingTaskId === task.id}
                 onSelect={() => {
@@ -393,6 +396,7 @@ export function CoupleChecklist({
 
 function TaskRow({
   task,
+  currentUser,
   isActive,
   isEditing,
   onSelect,
@@ -403,6 +407,7 @@ function TaskRow({
   onClearEditing,
 }) {
   const rowRef = useRef(null);
+  const [showComments, setShowComments] = useState(false);
 
   useEffect(() => {
     if (isEditing && rowRef.current) {
@@ -421,10 +426,11 @@ function TaskRow({
   }
 
   return (
+    <>
     <div
       ref={rowRef}
       onClick={onSelect}
-      className={`flex items-start p-3.5 rounded-xl cursor-pointer border transition-all ${
+      className={`flex items-start p-3.5 rounded-xl border transition-all ${
         task.isCompleted
           ? 'bg-slate-50 border-transparent opacity-75'
           : isActive
@@ -525,7 +531,32 @@ function TaskRow({
           <ArrowRight className="w-3 h-3" />
         </button>
       )}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowComments((s) => !s);
+        }}
+        className={`ml-2 p-1.5 rounded-lg border ${
+          showComments
+            ? 'bg-rose-50 text-rose-700 border-rose-200'
+            : 'bg-white text-slate-300 hover:text-rose-600 hover:border-rose-200 border-slate-200'
+        }`}
+        title="留言"
+        aria-label="留言"
+      >
+        <MessageCircle className="w-4 h-4" />
+      </button>
     </div>
+    {showComments && (
+      <div className="mt-2">
+        <TaskComments
+          task={task}
+          currentUser={currentUser}
+          currentRole="owner"
+        />
+      </div>
+    )}
+    </>
   );
 }
 

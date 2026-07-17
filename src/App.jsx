@@ -1728,6 +1728,7 @@ export default function App() {
                 activeVenue={activeVenue}
                 editingTaskId={editingTaskId}
                 onClearEditingTask={() => setEditingTaskId(null)}
+                currentUser={user}
                 onSelectCategory={(cat, venue) => {
                   setActiveCategory(cat);
                   setActiveVenue(venue);

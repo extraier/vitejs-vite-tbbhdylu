@@ -32,6 +32,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { getVendorCategoryLabel } from '../lib/config';
+import { TaskComments } from '../components/TaskComments';
 
 // 2026-07-17 — task-status config. Five states. Stored on
 // /tasks/{taskId}.status. Vendor-side writable per firestore.rules
@@ -212,6 +213,7 @@ export function VendorDashboard({
                 key={`${t.ownerUid}_${t.id}`}
                 task={t}
                 onUpdateStatus={onUpdateTaskStatus}
+                currentUser={vendor}
               />
             ))}
           </ul>
@@ -331,13 +333,14 @@ function formatPostedAt(postedAt) {
  *     so the couple's checklist stays the single source of truth for
  *     completion. The couple can still uncheck to override.
  */
-function VendorTaskCard({ task, onUpdateStatus }) {
+function VendorTaskCard({ task, onUpdateStatus, currentUser }) {
   const statusId = task.status || 'pending';
   const status = STATUS_BY_ID[statusId] || STATUS_BY_ID.pending;
   const StatusIcon = status.Icon;
   const [saving, setSaving] = useState(false);
   const [picking, setPicking] = useState(false);
   const [note, setNote] = useState(task.statusNote || '');
+  const [expanded, setExpanded] = useState(false);
 
   // Color palette maps to vendor's emerald theme + amber for blocked.
   const palette = {
@@ -417,7 +420,21 @@ function VendorTaskCard({ task, onUpdateStatus }) {
             </div>
           )}
         </div>
-        <div className="relative flex-shrink-0">
+        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className={`p-1.5 rounded-lg border ${
+              expanded
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-300 hover:text-emerald-600'
+            }`}
+            title="留言溝通"
+            aria-label="留言溝通"
+          >
+            <MessageCircle className="w-4 h-4" />
+          </button>
+        <div className="relative">
           <button
             type="button"
             onClick={() => setPicking((p) => !p)}
@@ -459,6 +476,7 @@ function VendorTaskCard({ task, onUpdateStatus }) {
             </div>
           )}
         </div>
+        </div>
       </div>
       {/* Note field — only meaningful for `blocked`. For other statuses
           we hide it but the value still persists if previously set. */}
@@ -472,6 +490,16 @@ function VendorTaskCard({ task, onUpdateStatus }) {
             onBlur={() => note !== (task.statusNote || '') && onUpdateStatus && onUpdateStatus(task, 'blocked', note)}
             className="w-full px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-xs"
             maxLength={120}
+          />
+        </div>
+      )}
+      {expanded && (
+        <div className="px-3 pb-3">
+          <TaskComments
+            task={task}
+            currentUser={{ uid: currentUser?.uid || '', displayName: currentUser?.name || '商戶' }}
+            currentRole="vendor"
+            compact
           />
         </div>
       )}
