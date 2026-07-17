@@ -7,11 +7,12 @@ import { tabsForRole } from './tabs';
 import { defaultHelperPerms } from './helpers';
 
 describe('tabsForRole', () => {
-  it('owner sees exactly 6 tabs in the canonical order', () => {
+  it('owner sees exactly 7 tabs in the canonical order', () => {
     const tabs = tabsForRole('owner', null, false);
-    expect(tabs.length).toBe(6);
+    expect(tabs.length).toBe(7);
     expect(tabs.map(([v]) => v)).toEqual([
       'couple-checklist',
+      'wedding-day',
       'couple-budget',
       'discover-vendors',
       'couple-jobboard',
@@ -23,9 +24,10 @@ describe('tabsForRole', () => {
   it('isAdmin no longer adds admin tabs to the bottom nav', () => {
     // 2026-07-01: admin prefix moved to RoleSimulator pills.
     const tabs = tabsForRole('owner', null, true);
-    expect(tabs.length).toBe(6);
+    expect(tabs.length).toBe(7);
     expect(tabs.map(([v]) => v)).toEqual([
       'couple-checklist',
+      'wedding-day',
       'couple-budget',
       'discover-vendors',
       'couple-jobboard',

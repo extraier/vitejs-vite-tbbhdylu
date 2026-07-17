@@ -74,6 +74,7 @@ import { VendorOnboarding } from './screens/VendorOnboarding';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
 import { ReceptionScanner } from './screens/ReceptionScanner';
+import { WeddingDay } from './screens/WeddingDay';
 import { ChatRoom } from './screens/ChatRoom';
 import { Inbox } from './screens/Inbox';
 import { PersonalGuestPortal } from './screens/PersonalGuestPortal';
@@ -751,6 +752,35 @@ export default function App() {
     [targetUid, guest.isGuestMode],
   );
 
+  // ---- 2026-07-17: 大日統籌 suite (rundown / resources / teaCeremony / playlist).
+  // All four collections live under /users/{ownerUid}/{name}. Read-only here;
+  // writes go through the parent via callback props. Helper users do NOT see
+  // these (rules allow owner-only).
+  const { data: rundown } = useFirestoreCollection(
+    targetUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', targetUid, 'rundown')
+      : null,
+    [targetUid, guest.isGuestMode],
+  );
+  const { data: resources } = useFirestoreCollection(
+    targetUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', targetUid, 'resources')
+      : null,
+    [targetUid, guest.isGuestMode],
+  );
+  const { data: teaCeremony } = useFirestoreCollection(
+    targetUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', targetUid, 'teaCeremony')
+      : null,
+    [targetUid, guest.isGuestMode],
+  );
+  const { data: playlist } = useFirestoreCollection(
+    targetUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', targetUid, 'playlist')
+      : null,
+    [targetUid, guest.isGuestMode],
+  );
+
   // 2026-07-15 — VendorDashboard live data. Previously the dashboard
   // hardcoded "Visionary Capture" as the vendor name and used the
   // static INITIAL_JOB_REQUESTS array for listings. Now both come from
@@ -1025,6 +1055,62 @@ export default function App() {
     await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id));
     setActiveCategory(null);
   };
+
+  // ---- 2026-07-17: 大日統籌 (WeddingDay suite) CRUD handlers.
+  // Each handler owns one of the four collections:
+  //   rundown / resources / teaCeremony / playlist
+  // Writes are direct against Firestore — owner-only rules gate the
+  // writes client-side, so no Cloud Function is required. The screen
+  // passes an `id`; on create the id is prefixed with the collection
+  // so re-builds from CSV / seed scripts don't collide.
+  const weddingCol = (name) => collection(db, 'artifacts', appId, 'users', user?.uid || '_', name);
+
+  const upsertWeddingDoc = async (name, doc) => {
+    if (!user || !doc?.id) return;
+    const ref = doc(db, 'artifacts', appId, 'users', user.uid, name, doc.id);
+    // Strip the id itself — Firestore stores it as the doc key
+    const { id: _id, ...rest } = doc;
+    await setDoc(ref, { ...rest, eventId: currentEvent?.id || null, updatedAt: Date.now() }, { merge: true });
+  };
+  const deleteWeddingDoc = async (name, id) => {
+    if (!user || !id) return;
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, name, id));
+  };
+
+  // Per-collection wrappers — pass these to <WeddingDay/>:
+  const handleUpsertRundown = (d) => upsertWeddingDoc('rundown', d);
+  const handleDeleteRundown = (id) => deleteWeddingDoc('rundown', id);
+  const handleReorderRundown = async (id, direction) => {
+    // Lightweight re-order: shift the moved doc's startTime by ±15min
+    // so the natural startTime-based sort in the screen changes.
+    // Avoids a heavy "order" int field while still letting users
+    // nudge conflicting slots. Not perfect but good enough for
+    // event-day planning.
+    if (!user || !id) return;
+    const snap = (rundown || []).find((e) => e.id === id);
+    if (!snap) return;
+    const cur = snap.startTime || '12:00';
+    const [h, m] = cur.split(':').map((n) => parseInt(n, 10));
+    const delta = direction === 'up' ? -15 : 15;
+    let total = h * 60 + m + delta;
+    if (total < 0) total = 0;
+    if (total > 24 * 60 - 1) total = 24 * 60 - 1;
+    const nh = Math.floor(total / 60);
+    const nm = total % 60;
+    const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'rundown', id);
+    await setDoc(ref, { startTime: `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}` }, { merge: true });
+  };
+  const handleUpsertResource = (d) => upsertWeddingDoc('resources', d);
+  const handleDeleteResource = (id) => deleteWeddingDoc('resources', id);
+  const handleToggleResource = async (id, checked) => {
+    if (!user) return;
+    const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'resources', id);
+    await setDoc(ref, { checked }, { merge: true });
+  };
+  const handleUpsertTeaCeremony = (d) => upsertWeddingDoc('teaCeremony', d);
+  const handleDeleteTeaCeremony = (id) => deleteWeddingDoc('teaCeremony', id);
+  const handleUpsertPlaylist = (d) => upsertWeddingDoc('playlist', d);
+  const handleDeletePlaylist = (id) => deleteWeddingDoc('playlist', id);
 
   const handleAddGuest = async (e) => {
     e.preventDefault();
@@ -1738,6 +1824,26 @@ export default function App() {
                 isPremium={isPremium}
                 onPlaySlideshow={() => setIsFullscreen(true)}
                 onUpgrade={() => setShowUpgradeModal(true)}
+              />
+            )}
+
+            {userRole === 'owner' && currentEvent && currentView === 'wedding-day' && (
+              <WeddingDay
+                rundown={rundown}
+                resources={resources}
+                teaCeremony={teaCeremony}
+                playlist={playlist}
+                onUpsertRundown={handleUpsertRundown}
+                onDeleteRundown={handleDeleteRundown}
+                onReorderRundown={handleReorderRundown}
+                onUpsertResource={handleUpsertResource}
+                onDeleteResource={handleDeleteResource}
+                onToggleResource={handleToggleResource}
+                onUpsertTeaCeremony={handleUpsertTeaCeremony}
+                onDeleteTeaCeremony={handleDeleteTeaCeremony}
+                onUpsertPlaylist={handleUpsertPlaylist}
+                onDeletePlaylist={handleDeletePlaylist}
+                currentUser={user}
               />
             )}
 

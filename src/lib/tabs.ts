@@ -32,6 +32,7 @@ export function tabsForRole(
   if (userRole === 'owner') {
     return [
       ['couple-checklist', '📋 籌備清單'],
+      ['wedding-day', '📅 大日統籌'],
       ['couple-budget', '💰 預算管理'],
       ['discover-vendors', '🔍 商戶指南'],
       ['couple-jobboard', '🆘 出Post求救'],
