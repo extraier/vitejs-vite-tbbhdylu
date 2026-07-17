@@ -62,7 +62,7 @@ export function verifyGuestLink(
  * Client then embeds ?t=<token> in the QR-code URL.
  */
 export const issueGuestLink = onCall(
-  { secrets: [HMAC_KEY] },
+  { secrets: [HMAC_KEY], cors: true, region: "us-central1" },
   async (req) => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const { eventId, guestId, ttlHours = 72 } = req.data as {
@@ -110,7 +110,7 @@ export const issueGuestLink = onCall(
  * every subsequent read/write uses auth.uid == redeemedByUid.
  */
 export const redeemGuestLink = onCall(
-  { secrets: [HMAC_KEY] },
+  { secrets: [HMAC_KEY], cors: true, region: "us-central1" },
   async (req) => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const { linkId, token } = req.data as { linkId: string; token: string };
@@ -171,7 +171,7 @@ export const redeemGuestLink = onCall(
 /**
  * revokeGuestLink — owner can kill a leaked link before redemption.
  */
-export const revokeGuestLink = onCall(async (req) => {
+export const revokeGuestLink = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
   const { linkId } = req.data as { linkId: string };
   if (!linkId) throw new HttpsError('invalid-argument', 'linkId required.');
@@ -248,7 +248,7 @@ function defaultHelperPerms(): HelperPerms {
  * by email (not uid) — when the user later signs up with that email, the
  * client detects the placeholder and migrates it to a uid-keyed doc.
  */
-export const inviteHelper = onCall(async (req) => {
+export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
 
   const { email, displayName, perms, phone } = req.data as {
@@ -320,7 +320,7 @@ export const inviteHelper = onCall(async (req) => {
  * If the helper signed up using an email that has a pendingInvite, this
  * migrates it to helpers/{uid} and sets status='active'.
  */
-export const acceptHelperInvite = onCall(async (req) => {
+export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
 
   const authUid = req.auth.uid;
@@ -370,7 +370,7 @@ export const acceptHelperInvite = onCall(async (req) => {
  * revokeHelper — owner-only. Marks a helper's status as 'revoked'.
  * The helper can no longer access the owner's data (rules check status == 'active').
  */
-export const revokeHelper = onCall(async (req) => {
+export const revokeHelper = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
 
   const { helperUid } = req.data as { helperUid: string };
@@ -395,7 +395,7 @@ export const revokeHelper = onCall(async (req) => {
  * updateHelperPerms — owner-only. Updates the perms on a helper's doc.
  * The helper sees the new perms on their next page refresh.
  */
-export const updateHelperPerms = onCall(async (req) => {
+export const updateHelperPerms = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
 
   const { helperUid, perms } = req.data as {
@@ -465,7 +465,7 @@ export * from './vendors';
 // listVendorRatings). Lives in ./ratings.ts.
 export * from './ratings';
 
-export const grantAdmin = onCall(async (req) => {
+export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
@@ -492,7 +492,7 @@ export const grantAdmin = onCall(async (req) => {
 // selfPromoteAdmin — bootstrap call when NO admin exists yet.
 // Hard-gated: only works if there are currently zero admins in the
 // project. Once any admin exists, this function refuses (use grantAdmin).
-export const selfPromoteAdmin = onCall(async (req) => {
+export const selfPromoteAdmin = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
@@ -514,7 +514,7 @@ export const selfPromoteAdmin = onCall(async (req) => {
 // custom claims. Used by the Admin Users panel to show a master list and
 // toggle admin/disabled state. Paginated via `pageToken` (Firestore
 // listUsers returns up to 1000 per page; default 50 for snappy UI).
-export const admin_listUsers = onCall(async (req) => {
+export const admin_listUsers = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
@@ -556,7 +556,7 @@ export const admin_listUsers = onCall(async (req) => {
 
 // admin_setDisabled — admin-only enable/disable toggle for a user account.
 // Mirrors `auth.updateUser(uid, { disabled })`. Does not delete the account.
-export const admin_setDisabled = onCall(async (req) => {
+export const admin_setDisabled = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
@@ -677,7 +677,7 @@ function validateVendorEditable(payload: Record<string, unknown>): void {
  * as an auth user; returns null otherwise (the vendor may have been
  * deleted from auth while their vendor doc lingers).
  */
-export const admin_listVendors = onCall(async (req) => {
+export const admin_listVendors = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
@@ -750,10 +750,18 @@ export const admin_listVendors = onCall(async (req) => {
 });
 
 /**
- * admin_updateVendor — admin-only. Patches whitelisted fields on a vendor doc.
+ * adminUpdateVendor — admin-only. Patches whitelisted fields on a vendor doc.
  * Rejects unknown keys so the frontend can't widen the surface.
+ *
+ * 2026-07-17 — Renamed from `admin_updateVendor` because the original
+ * Cloud Functions gen2 function entry got stuck in a stale Cloud Run
+ * service that wouldn't pick up the cors: true option we added. The
+ * fresh name avoids every cached binding. The front-end now calls
+ * `adminUpdateVendor` (camelCase). The old function name continues
+ * to exist in the cloud (until we delete it cleanly) but is no
+ * longer referenced from code.
  */
-export const admin_updateVendor = onCall(async (req) => {
+export const adminUpdateVendor = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
@@ -791,7 +799,7 @@ export const admin_updateVendor = onCall(async (req) => {
  * The vendor's Firebase Auth account is NOT touched (use admin_setDisabled
  * to also kill their login ability — a separate action by design).
  */
-export const admin_deleteVendor = onCall(async (req) => {
+export const admin_deleteVendor = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }

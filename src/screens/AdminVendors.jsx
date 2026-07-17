@@ -744,7 +744,11 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
       // path so we can see in DevTools if the function call never
       // starts, never resolves, or rejects. Leave these in for now;
       // we'll trim once the root cause is fixed.
-      const fn = httpsCallable(getFunctions(), 'admin_updateVendor');
+      // 2026-07-17 — call the camelCase function name (adminUpdateVendor)
+      // because the legacy underscore-name is stuck in a deploy-cache
+      // state and CORS preflights get rejected. The replacement function
+      // has identical semantics; we're only changing the wire name.
+      const fn = httpsCallable(getFunctions(), 'adminUpdateVendor');
       console.log('[VendorEdit] calling admin_updateVendor', { vendorUid: vendor.vendorUid, updates });
       const t0 = Date.now();
       const result = await fn({ vendorUid: vendor.vendorUid, updates });
