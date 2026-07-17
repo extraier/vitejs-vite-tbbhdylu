@@ -727,7 +727,13 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
     }
 
     if (Object.keys(updates).length === 0) {
-      onClose();
+      // 2026-07-17 — UX fix. Previously this silently closed the
+      // modal, which made "I clicked save and nothing happened" feel
+      // like a bug. Now: surface a no-op message inline in the
+      // existing error banner + keep the modal open so the admin
+      // can keep editing. We repurpose setError with the (info)
+      // prefix so the banner styling stays consistent.
+      setError('(資料無變更, 唔需要儲存)');
       return;
     }
 
