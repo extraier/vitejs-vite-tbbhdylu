@@ -14,7 +14,10 @@
 //
 // Idempotent: re-running will overwrite the same 4 docs.
 
-import admin from 'firebase-admin';
+// firebase-admin lives in the Cloud Functions workspace at
+// functions/node_modules. Use an absolute path so the script is
+// runnable from the project root without symlinking.
+import admin from '../functions/node_modules/firebase-admin/lib/index.js';
 import fs from 'fs';
 
 const saPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -35,7 +38,8 @@ const EXAMPLES = [
   {
     placeholderUid: 'v0001_visionary_capture',
     name: 'Visionary Capture',
-    category: 'photography',
+    category: 'photo_video',
+    subcategory: 'photographer',
     rating: 4.9,
     price: '$18,000+',
     tags: ['伯大尼', 'Ritz Carlton', '紀實唯美'],
@@ -48,7 +52,8 @@ const EXAMPLES = [
   {
     placeholderUid: 'v0002_light_and_shadow',
     name: 'Light & Shadow Studio',
-    category: 'photography',
+    category: 'photo_video',
+    subcategory: 'photographer',
     rating: 4.7,
     price: '$15,000+',
     tags: ['伯大尼', '自然唯美'],
@@ -60,7 +65,8 @@ const EXAMPLES = [
   {
     placeholderUid: 'v0003_fairytale_floral',
     name: 'FairyTale Floral',
-    category: 'deco',
+    category: 'floral_deco',
+    subcategory: 'wedding_floral',
     rating: 4.8,
     price: '$25,000+',
     tags: ['Ritz Carlton', '奢華花藝'],
@@ -72,7 +78,8 @@ const EXAMPLES = [
   {
     placeholderUid: 'v0004_bethanie_charm',
     name: 'Bethanie Charm Deco',
-    category: 'deco',
+    category: 'floral_deco',
+    subcategory: 'venue_deco',
     rating: 4.6,
     price: '$8,000+',
     tags: ['伯大尼', '小清新'],
@@ -93,11 +100,13 @@ async function main() {
       {
         name: v.name,
         category: v.category,
+        subcategory: v.subcategory || null,
         rating: v.rating,
         price: v.price,
         tags: v.tags,
         description: v.description,
         portfolio: v.portfolio,
+        status: 'approved',
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedBy: 'seed-script',
