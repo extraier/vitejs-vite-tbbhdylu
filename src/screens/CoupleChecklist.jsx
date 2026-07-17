@@ -52,7 +52,7 @@ function categoryLabel(key) {
  * end of the day (instead of "0 日 3 小時"). This matches what
  * couples actually want to know: "is today THE day".
  */
-function TaskDeadline({ dueDate }) {
+function TaskDeadline({ dueDate, dueTime }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 60_000);
@@ -77,7 +77,18 @@ function TaskDeadline({ dueDate }) {
       </div>
     );
   }
-  const deadlineMs = new Date(y, m - 1, d, 23, 59, 59).getTime();
+  // 2026-07-17 — accept an optional HH:MM time. When present, the
+  // deadline is anchored to that exact minute (not end-of-day). When
+  // absent, fall back to end-of-day (23:59:59) — same as before, so
+  // existing date-only tasks behave identically.
+  let hour = 23, min = 59;
+  if (dueTime && /^\d{2}:\d{2}$/.test(dueTime)) {
+    const [hh, mm] = dueTime.split(':').map((n) => parseInt(n, 10));
+    if (!Number.isNaN(hh) && !Number.isNaN(mm) && hh >= 0 && hh < 24 && mm >= 0 && mm < 60) {
+      hour = hh; min = mm;
+    }
+  }
+  const deadlineMs = new Date(y, m - 1, d, hour, min, 0).getTime();
   const msRemaining = deadlineMs - now;
   const overdueMs = -msRemaining;
 
@@ -91,7 +102,10 @@ function TaskDeadline({ dueDate }) {
     const days = Math.floor(msRemaining / 86_400_000);
     const hours = Math.floor((msRemaining % 86_400_000) / 3_600_000);
     if (days === 0 && hours === 0) {
-      label = '今天到期';
+      // 2026-07-17 — when a task has both date + time, show the
+      // actual time on the badge so couples see when the deadline
+      // truly ticks. Otherwise keep the legacy "今天到期" wording.
+      label = dueTime ? `今天 ${dueTime} 到期` : '今天到期';
       style = 'bg-rose-50 text-rose-700 border-rose-200';
     } else if (days === 0) {
       label = `今天仲有 ${hours} 小時`;
@@ -108,7 +122,7 @@ function TaskDeadline({ dueDate }) {
   return (
     <span
       className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${style}`}
-      title={`期限：${dueDate}（剩下時間即時更新）`}
+      title={`期限：${dueDate}${dueTime ? ` ${dueTime}` : ''}（剩下時間即時更新）`}
     >
       <Clock className="w-3 h-3" />
       {label}
@@ -329,6 +343,18 @@ export function CoupleChecklist({
               value={newTaskForm.dueDate}
               onChange={(e) => onNewTaskFormChange({ ...newTaskForm, dueDate: e.target.value })}
             />
+            {/* 2026-07-17 — optional time-of-day picker. Sits to the
+                right of the date input and is fully optional. Empty
+                value preserves the existing date-only display
+                behavior. We don't `required` this — many tasks don't
+                have a meaningful hour. */}
+            <input
+              type="time"
+              aria-label="任務時間 (選填)"
+              className="p-2.5 border border-slate-300 rounded-lg text-sm outline-none text-slate-600"
+              value={newTaskForm.dueTime}
+              onChange={(e) => onNewTaskFormChange({ ...newTaskForm, dueTime: e.target.value })}
+            />
             <input
               type="number"
               placeholder="大約預算 $"
@@ -457,7 +483,7 @@ function TaskRow({
           )}
         </div>
         <div className="flex items-center gap-3 text-xs text-slate-500">
-          <TaskDeadline dueDate={task.dueDate} />
+          <TaskDeadline dueDate={task.dueDate} dueTime={task.dueTime} />
           <div className="flex items-center gap-1">
             <DollarSign className="w-3.5 h-3.5" />{' '}
             {task.isCompleted

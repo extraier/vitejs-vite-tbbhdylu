@@ -404,7 +404,9 @@ function VendorTaskCard({ task, onUpdateStatus, currentUser }) {
                 )}
               </span>
             )}
-            {task.dueDate && <span>📅 {task.dueDate}</span>}
+            {task.dueDate && (
+              <span>📅 {task.dueDate}{task.dueTime ? ` ${task.dueTime}` : ''}</span>
+            )}
             {task.estimatedCost ? (
               <span>💰 預算 ${Number(task.estimatedCost).toLocaleString()}</span>
             ) : null}

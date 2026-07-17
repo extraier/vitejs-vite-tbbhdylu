@@ -265,6 +265,10 @@ export default function App() {
     customTitle: '',
     venue: '',
     dueDate: '2026-12-31',
+    // 2026-07-17 — optional HH:MM for finer-grained deadlines (e.g.
+    // "下午茶 14:30"). Empty string = date-only (existing behavior).
+    // Format will match <input type="time"> emission: "HH:MM".
+    dueTime: '',
     estimatedCost: '',
     taskType: 'vendor',
   });
@@ -1011,6 +1015,9 @@ export default function App() {
       isCompleted: false,
       venue: newTaskForm.venue,
       dueDate: newTaskForm.dueDate,
+      // 2026-07-17 — pass through optional time. Empty string is
+      // fine; the display layer (TaskDeadline) treats empty = date-only.
+      dueTime: newTaskForm.dueTime || '',
       estimatedCost: Number(newTaskForm.estimatedCost) || 0,
       actualCost: Number(newTaskForm.estimatedCost) || 0,
       taskType: 'vendor',
@@ -1029,6 +1036,7 @@ export default function App() {
       customTitle: '',
       venue: '',
       dueDate: '2026-12-31',
+      dueTime: '',
       estimatedCost: '',
       taskType: 'vendor',
     });
