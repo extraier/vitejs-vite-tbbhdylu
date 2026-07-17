@@ -32,6 +32,88 @@ function categoryLabel(key) {
   }
   return VENDOR_CATEGORIES[key]?.label || key;
 }
+
+/**
+ * TaskDeadline — countdown badge for the checklist.
+ *
+ * Renders a live-updating label relative to a YYYY-MM-DD deadline.
+ * Three visual states:
+ *   overdue  : red-50 / red-700, "已過 X 日"             (negative)
+ *   urgent   : amber-50 / amber-700, "<= 7 日"          (small remainder)
+ *   upcoming : slate-100 / slate-600, "X 日 Y 個鐘"     (> 7 日)
+ *
+ * Ticks once per minute (not per second) to avoid rAF churn on
+ * long task lists. Only re-renders THIS badge when its own ms
+ * elapsed crosses a fresh minute boundary — siblings stay quiet.
+ *
+ * The badge is calendar-day aware — partial days round down to 0
+ * once we cross into "today", we still show "今天到期" until the
+ * end of the day (instead of "0 日 3 小時"). This matches what
+ * couples actually want to know: "is today THE day".
+ */
+function TaskDeadline({ dueDate }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!dueDate) {
+    return (
+      <div className="flex items-center gap-1">
+        <Clock className="w-3.5 h-3.5" /> 沒有期限
+      </div>
+    );
+  }
+
+  // dueDate is a 'YYYY-MM-DD' string. Treat it as midnight LOCAL on
+  // that date — that's how the form's <input type="date"> emits it.
+  const [y, m, d] = dueDate.split('-').map((n) => parseInt(n, 10));
+  if (!y || !m || !d) {
+    return (
+      <div className="flex items-center gap-1">
+        <Clock className="w-3.5 h-3.5" /> {dueDate}
+      </div>
+    );
+  }
+  const deadlineMs = new Date(y, m - 1, d, 23, 59, 59).getTime();
+  const msRemaining = deadlineMs - now;
+  const overdueMs = -msRemaining;
+
+  // Format the human label.
+  let label, style;
+  if (msRemaining < 0) {
+    const days = Math.floor(overdueMs / 86_400_000);
+    label = days === 1 ? '已過 1 日' : `已過 ${days} 日`;
+    style = 'bg-rose-50 text-rose-700 border-rose-200';
+  } else {
+    const days = Math.floor(msRemaining / 86_400_000);
+    const hours = Math.floor((msRemaining % 86_400_000) / 3_600_000);
+    if (days === 0 && hours === 0) {
+      label = '今天到期';
+      style = 'bg-rose-50 text-rose-700 border-rose-200';
+    } else if (days === 0) {
+      label = `今天仲有 ${hours} 小時`;
+      style = 'bg-amber-50 text-amber-700 border-amber-200';
+    } else if (days <= 7) {
+      label = `${days} 日 ${hours} 小時`;
+      style = 'bg-amber-50 text-amber-700 border-amber-200';
+    } else {
+      label = `${days} 日 ${hours} 小時`;
+      style = 'bg-slate-100 text-slate-600 border-slate-200';
+    }
+  }
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${style}`}
+      title={`期限：${dueDate}（剩下時間即時更新）`}
+    >
+      <Clock className="w-3 h-3" />
+      {label}
+    </span>
+  );
+}
 import { budgetFitTier, budgetDistance, formatVendorPrice, formatMoney, parseFormattedNumber } from '../lib/format';
 
 export function CoupleChecklist({
@@ -341,10 +423,8 @@ function TaskRow({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-4 text-xs text-slate-500">
-          <div className="flex items-center gap-1">
-            <Clock className="w-3.5 h-3.5" /> {task.dueDate}
-          </div>
+        <div className="flex items-center gap-3 text-xs text-slate-500">
+          <TaskDeadline dueDate={task.dueDate} />
           <div className="flex items-center gap-1">
             <DollarSign className="w-3.5 h-3.5" />{' '}
             {task.isCompleted
