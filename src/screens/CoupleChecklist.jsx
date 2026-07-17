@@ -14,9 +14,12 @@ import {
   Save,
   X,
   MessageCircle,
+  Calendar as CalendarIcon,
+  CalendarDays,
 } from 'lucide-react';
 import { TaskComments } from '../components/TaskComments';
 import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
+import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 
 // 2026-07-15 — local helper for the vendor-contact dropdown in
 // the add-task form. Reads VENDOR_CATEGORIES and resolves
@@ -32,6 +35,167 @@ function categoryLabel(key) {
     return key;
   }
   return VENDOR_CATEGORIES[key]?.label || key;
+}
+
+/**
+ * DateTimePicker — chip-style combined date+time picker for the
+ * new-task form. Reads as one unit (`📅 12月31日 14:30`) and opens a
+ * popover with date <input type="date">, time <input type="time">,
+ * quick presets ('今天' / '明天' / '後天' / '+1 週'), and an
+ * "整天" toggle that clears the time (date-only mode).
+ *
+ * 2026-07-17 — replaces the two side-by-side inputs from the
+ * previous turn. Click-outside closes the popover. We do not
+ * auto-close on input change — couples often type the date and
+ * then immediately the time without clicking away, so a premature
+ * close is more disruptive than helpful.
+ */
+function DateTimePicker({ dueDate, dueTime, onChange }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e) => {
+      if (rootRef.current && !rootRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const quickSet = (daysFromNow) => {
+    const target = new Date();
+    target.setDate(target.getDate() + daysFromNow);
+    const yyyy = target.getFullYear();
+    const mm = String(target.getMonth() + 1).padStart(2, '0');
+    const dd = String(target.getDate()).padStart(2, '0');
+    onChange({ ...{ dueDate: dueDate, dueTime: dueTime }, dueDate: `${yyyy}-${mm}-${dd}` });
+  };
+
+  const absolute = formatAbsoluteDue(dueDate, dueTime);
+  const allDay = !dueTime;
+
+  return (
+    <div className="relative col-span-1" ref={rootRef}>
+      {/* The chip — single visual unit, full width of its slot. */}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        className={`w-full flex items-center gap-2 p-2.5 border rounded-lg text-sm outline-none text-slate-700 bg-white hover:border-rose-300 transition-colors ${
+          open ? 'border-rose-400 ring-1 ring-rose-100' : 'border-slate-300'
+        }`}
+      >
+        <CalendarIcon className="w-4 h-4 text-slate-400 shrink-0" />
+        <span className="font-medium truncate">
+          {absolute || '揀日子...'}
+        </span>
+        {allDay && dueDate && (
+          <span className="ml-auto text-[10px] text-slate-400 font-normal">整天</span>
+        )}
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label="任務到期日 / 時間"
+          className="absolute z-30 left-0 right-0 top-full mt-2 rounded-xl bg-white shadow-xl border border-slate-200 p-3 w-[260px]"
+        >
+          {/* Quick presets row */}
+          <div className="grid grid-cols-4 gap-1 mb-2">
+            <button
+              type="button"
+              className="px-2 py-1.5 rounded-md text-[11px] font-medium bg-slate-100 hover:bg-rose-50 hover:text-rose-700"
+              onClick={() => quickSet(0)}
+            >
+              今天
+            </button>
+            <button
+              type="button"
+              className="px-2 py-1.5 rounded-md text-[11px] font-medium bg-slate-100 hover:bg-rose-50 hover:text-rose-700"
+              onClick={() => quickSet(1)}
+            >
+              明天
+            </button>
+            <button
+              type="button"
+              className="px-2 py-1.5 rounded-md text-[11px] font-medium bg-slate-100 hover:bg-rose-50 hover:text-rose-700"
+              onClick={() => quickSet(2)}
+            >
+              後天
+            </button>
+            <button
+              type="button"
+              className="px-2 py-1.5 rounded-md text-[11px] font-medium bg-slate-100 hover:bg-rose-50 hover:text-rose-700"
+              onClick={() => quickSet(7)}
+            >
+              +1 週
+            </button>
+          </div>
+
+          {/* Date + time inputs */}
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                日期
+              </span>
+              <input
+                type="date"
+                required
+                className="p-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-rose-300"
+                value={dueDate}
+                onChange={(e) => onChange({ dueDate: e.target.value, dueTime })}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+                時間
+              </span>
+              <input
+                type="time"
+                className="p-2 border border-slate-300 rounded-lg text-sm outline-none focus:border-rose-300"
+                value={dueTime}
+                onChange={(e) => onChange({ dueDate, dueTime: e.target.value })}
+              />
+            </label>
+          </div>
+
+          {/* All-day toggle + close */}
+          <div className="flex items-center justify-between mt-1 pt-2 border-t border-slate-100">
+            <label className="flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allDay}
+                onChange={(e) => {
+                  // Toggle: clearing time => date-only mode.
+                  onChange({ dueDate, dueTime: e.target.checked ? '' : dueTime || '09:00' });
+                }}
+                className="w-3.5 h-3.5 accent-rose-600"
+              />
+              整天（全日）
+            </label>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-xs font-bold text-rose-600 hover:text-rose-700"
+            >
+              完成
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -336,24 +500,22 @@ export function CoupleChecklist({
               value={newTaskForm.venue}
               onChange={(e) => onNewTaskFormChange({ ...newTaskForm, venue: e.target.value })}
             />
-            <input
-              type="date"
-              required
-              className="p-2.5 border border-slate-300 rounded-lg text-sm outline-none text-slate-600"
-              value={newTaskForm.dueDate}
-              onChange={(e) => onNewTaskFormChange({ ...newTaskForm, dueDate: e.target.value })}
-            />
-            {/* 2026-07-17 — optional time-of-day picker. Sits to the
-                right of the date input and is fully optional. Empty
-                value preserves the existing date-only display
-                behavior. We don't `required` this — many tasks don't
-                have a meaningful hour. */}
-            <input
-              type="time"
-              aria-label="任務時間 (選填)"
-              className="p-2.5 border border-slate-300 rounded-lg text-sm outline-none text-slate-600"
-              value={newTaskForm.dueTime}
-              onChange={(e) => onNewTaskFormChange({ ...newTaskForm, dueTime: e.target.value })}
+            {/* 2026-07-17 — replaced the previous two-input row with a
+                single chip-style combined date+time picker. Reads as
+                one unit (e.g. "12月31日 · 14:30") and pops a small
+                dialog with quick presets + date/time inputs. The
+                existing dueDate/dueTime fields on newTaskForm are
+                unchanged, so saved tasks work the same. */}
+            <DateTimePicker
+              dueDate={newTaskForm.dueDate}
+              dueTime={newTaskForm.dueTime}
+              onChange={(next) =>
+                onNewTaskFormChange({
+                  ...newTaskForm,
+                  dueDate: next.dueDate,
+                  dueTime: next.dueTime,
+                })
+              }
             />
             <input
               type="number"
@@ -482,9 +644,24 @@ function TaskRow({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-3 text-xs text-slate-500">
+        <div className="flex items-center gap-2 text-xs text-slate-500 flex-wrap">
           <TaskDeadline dueDate={task.dueDate} dueTime={task.dueTime} />
-          <div className="flex items-center gap-1">
+          {/* 2026-07-17 — absolute-due-date chip. Sits right next to
+              the countdown so couples see BOTH at a glance: the
+              "live" relative label AND the actual calendar stamp.
+              Hover the chip for the full ISO date+time. monday-style
+              paired pattern (countdown + date chip). */}
+          {task.dueDate && (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-full"
+              title={formatLongAbsoluteDue(task.dueDate, task.dueTime)}
+            >
+              <CalendarDays className="w-3 h-3 text-slate-400" />
+              {formatAbsoluteDue(task.dueDate, task.dueTime)}
+              {task.dueTime ? '' : <span className="text-[10px] text-slate-400 ml-1">整天</span>}
+            </span>
+          )}
+          <div className="flex items-center gap-1 ml-auto">
             <DollarSign className="w-3.5 h-3.5" />{' '}
             {task.isCompleted
               ? `實際: ${formatMoney(task.actualCost)}`

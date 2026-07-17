@@ -30,8 +30,10 @@ import {
   Hourglass,
   PlayCircle,
   AlertTriangle,
+  CalendarDays,
 } from 'lucide-react';
 import { getVendorCategoryLabel } from '../lib/config';
+import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 import { TaskComments } from '../components/TaskComments';
 
 // 2026-07-17 — task-status config. Five states. Stored on
@@ -405,7 +407,16 @@ function VendorTaskCard({ task, onUpdateStatus, currentUser }) {
               </span>
             )}
             {task.dueDate && (
-              <span>📅 {task.dueDate}{task.dueTime ? ` ${task.dueTime}` : ''}</span>
+              <span
+                className="inline-flex items-center gap-1 bg-white border border-slate-200 px-2 py-0.5 rounded-full text-[11px] text-slate-600"
+                title={formatLongAbsoluteDue(task.dueDate, task.dueTime)}
+              >
+                <CalendarDays className="w-3 h-3 text-slate-400" />
+                {formatAbsoluteDue(task.dueDate, task.dueTime)}
+                {!task.dueTime && (
+                  <span className="text-[10px] text-slate-400 ml-1">整天</span>
+                )}
+              </span>
             )}
             {task.estimatedCost ? (
               <span>💰 預算 ${Number(task.estimatedCost).toLocaleString()}</span>
