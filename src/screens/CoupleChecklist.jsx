@@ -114,6 +114,33 @@ function TaskDeadline({ dueDate }) {
     </span>
   );
 }
+
+// 2026-07-17 — mirrors the status the assigned vendor picked on their
+// VendorDashboard. Pure display — couple can't change vendor status.
+// Same five-state taxonomy as on the vendor side. Rendered as a small
+// chip next to the assigned-vendor badge on each task row.
+//
+// Note field is shown as italic prefix in the badge title (hover) so
+// the couple can see e.g. "卡住：等緊場地回覆" without us crowding the
+// row.
+function VendorStatusChip({ status, note }) {
+  const map = {
+    pending:    { label: '商戶：待接',     color: 'bg-slate-100 text-slate-600 border-slate-200' },
+    accepted:   { label: '商戶：已接',     color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    in_progress:{ label: '商戶：進行中',   color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    blocked:    { label: '商戶：卡住',     color: 'bg-amber-50 text-amber-700 border-amber-200' },
+    done:       { label: '商戶：已完成',   color: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
+  };
+  const m = map[status] || map.pending;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${m.color}`}
+      title={note ? `${m.label} — ${note}` : m.label}
+    >
+      {m.label}
+    </span>
+  );
+}
 import { budgetFitTier, budgetDistance, formatVendorPrice, formatMoney, parseFormattedNumber } from '../lib/format';
 
 export function CoupleChecklist({
@@ -439,7 +466,7 @@ function TaskRow({
           pending vendor signup).
         */}
         {task.assignedVendorName && (
-          <div className="mt-1.5">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             <span
               className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${
                 task.assignedVendorUid
@@ -456,6 +483,13 @@ function TaskRow({
               {task.assignedVendorName}
               {task.assignedVendorUid ? '' : ' (未加入)'}
             </span>
+            {task.status && task.assignedVendorUid && (
+              // 2026-07-17 — vendor status chip mirrors what the
+              // vendor selected on their dashboard. Hidden for tasks
+              // assigned to a contact who hasn't joined yet (no
+              // vendor-side status to mirror).
+              <VendorStatusChip status={task.status} note={task.statusNote} />
+            )}
           </div>
         )}
       </div>

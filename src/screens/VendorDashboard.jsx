@@ -12,6 +12,7 @@
 // vendor name and used a hardcoded INITIAL_JOB_REQUESTS array as
 // the listing. Both now come from Firestore.
 
+import { useState } from 'react';
 import {
   Briefcase,
   Calendar,
@@ -25,8 +26,57 @@ import {
   ClipboardList,
   CheckCircle2,
   Circle,
+  ChevronDown,
+  Hourglass,
+  PlayCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { getVendorCategoryLabel } from '../lib/config';
+
+// 2026-07-17 — task-status config. Five states. Stored on
+// /tasks/{taskId}.status. Vendor-side writable per firestore.rules
+// (allow-update with hasOnly(['status','statusUpdatedAt','statusNote'])).
+// Owner-side shows a chip in their checklist. Vendors change status
+// from this dashboard.
+const TASK_STATUSES = [
+  {
+    id: 'pending',
+    label: '待接 (仲未睇)',
+    shortLabel: '待接',
+    color: 'slate',
+    Icon: Hourglass,
+  },
+  {
+    id: 'accepted',
+    label: '已接工作',
+    shortLabel: '已接',
+    color: 'emerald',
+    Icon: CheckCircle2,
+  },
+  {
+    id: 'in_progress',
+    label: '進行中',
+    shortLabel: '進行中',
+    color: 'emerald',
+    Icon: PlayCircle,
+  },
+  {
+    id: 'blocked',
+    label: '需要新人協助',
+    shortLabel: '卡住',
+    color: 'amber',
+    Icon: AlertTriangle,
+  },
+  {
+    id: 'done',
+    label: '已完成',
+    shortLabel: '完成',
+    color: 'emerald',
+    Icon: CheckCircle2,
+  },
+];
+
+const STATUS_BY_ID = Object.fromEntries(TASK_STATUSES.map((s) => [s.id, s]));
 
 export function VendorDashboard({
   vendor,
@@ -37,6 +87,7 @@ export function VendorDashboard({
   onLogout,
   isAdminPreview = false,
   assignedTasks = [],
+  onUpdateTaskStatus,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
@@ -157,48 +208,11 @@ export function VendorDashboard({
           </p>
           <ul className="space-y-2">
             {assignedTasks.map((t) => (
-              <li
+              <VendorTaskCard
                 key={`${t.ownerUid}_${t.id}`}
-                className={`p-3 rounded-xl border bg-white ${
-                  t.isCompleted
-                    ? 'border-slate-200 opacity-70'
-                    : 'border-emerald-300'
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  {t.isCompleted ? (
-                    <CheckCircle2 className="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" />
-                  ) : (
-                    <Circle className="w-5 h-5 text-slate-400 flex-shrink-0 mt-0.5" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <div
-                      className={`font-bold text-slate-800 ${
-                        t.isCompleted ? 'line-through' : ''
-                      }`}
-                    >
-                      {t.title || t.category || '未命名任務'}
-                    </div>
-                    <div className="flex flex-wrap gap-3 text-xs text-slate-500 mt-1">
-                      {t.category && (
-                        <span>
-                          📂{' '}
-                          {getVendorCategoryLabel(
-                            t.category.split('.')[0],
-                            t.category.split('.')[1],
-                          )}
-                        </span>
-                      )}
-                      {t.dueDate && <span>📅 {t.dueDate}</span>}
-                      {t.estimatedCost ? (
-                        <span>
-                          💰 預算 ${Number(t.estimatedCost).toLocaleString()}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              </li>
+                task={t}
+                onUpdateStatus={onUpdateTaskStatus}
+              />
             ))}
           </ul>
         </div>
@@ -295,4 +309,172 @@ function formatPostedAt(postedAt) {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}日前`;
   return date.toLocaleDateString('zh-HK');
+}
+
+/**
+ * VendorTaskCard
+ *
+ * Single assigned-task row in the vendor's "主理新人指派嘅工作" panel.
+ * Lets the vendor pick a status (pending / accepted / in_progress /
+ * blocked / done) without leaving the dashboard. Writes go through
+ * the parent callback which directly update the Firestore doc — the
+ * rules allow only those three fields in this update path.
+ *
+ * The vendor can attach a short `statusNote` (one-line clarification,
+ * e.g. "等緊場地回覆"). Optional + only shown when status === blocked.
+ *
+ * 2026-07-17:
+ *   • Status defaults to `pending` for tasks created before this date
+ *     (no status field) — backwards-compat with existing task docs.
+ *   • Done status syncs with the couple's "已完成" checkbox semantics:
+ *     flipping to "done" also flips `isCompleted = true` on the task
+ *     so the couple's checklist stays the single source of truth for
+ *     completion. The couple can still uncheck to override.
+ */
+function VendorTaskCard({ task, onUpdateStatus }) {
+  const statusId = task.status || 'pending';
+  const status = STATUS_BY_ID[statusId] || STATUS_BY_ID.pending;
+  const StatusIcon = status.Icon;
+  const [saving, setSaving] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [note, setNote] = useState(task.statusNote || '');
+
+  // Color palette maps to vendor's emerald theme + amber for blocked.
+  const palette = {
+    slate: { chip: 'bg-slate-100 text-slate-700 border-slate-200' },
+    emerald: { chip: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+    amber: { chip: 'bg-amber-100 text-amber-700 border-amber-200' },
+  }[status.color];
+
+  const handleSelect = async (newStatusId) => {
+    if (!onUpdateStatus) return;
+    if (newStatusId === statusId) {
+      setPicking(false);
+      return;
+    }
+    setSaving(true);
+    try {
+      await onUpdateStatus(task, newStatusId, note);
+      setPicking(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <li
+      className={`rounded-xl border bg-white overflow-hidden ${
+        statusId === 'done' || task.isCompleted
+          ? 'border-slate-200 opacity-75'
+          : statusId === 'blocked'
+            ? 'border-amber-300 ring-1 ring-amber-100'
+            : 'border-emerald-300'
+      }`}
+    >
+      <div className="p-3 flex items-start gap-3">
+        <div className="flex-shrink-0 mt-0.5">
+          <StatusIcon
+            className={`w-5 h-5 ${
+              status.color === 'amber'
+                ? 'text-amber-500'
+                : status.color === 'emerald'
+                  ? 'text-emerald-500'
+                  : 'text-slate-400'
+            }`}
+          />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div
+            className={`font-bold text-slate-800 ${
+              statusId === 'done' || task.isCompleted ? 'line-through' : ''
+            }`}
+          >
+            {task.title || task.category || '未命名任務'}
+          </div>
+          <div className="flex flex-wrap gap-3 text-xs text-slate-500 mt-1">
+            {task.category && (
+              <span>
+                📂{' '}
+                {getVendorCategoryLabel(
+                  task.category.split('.')[0],
+                  task.category.split('.')[1],
+                )}
+              </span>
+            )}
+            {task.dueDate && <span>📅 {task.dueDate}</span>}
+            {task.estimatedCost ? (
+              <span>💰 預算 ${Number(task.estimatedCost).toLocaleString()}</span>
+            ) : null}
+            {task.ownerUid && (
+              <span className="text-xs text-slate-400">
+                · {task.ownerName || '主理新人'}
+              </span>
+            )}
+          </div>
+          {task.statusNote && (
+            <div className="mt-1.5 text-xs text-slate-600 italic bg-slate-50 border-l-2 border-slate-300 pl-2 py-1">
+              「{task.statusNote}」
+            </div>
+          )}
+        </div>
+        <div className="relative flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setPicking((p) => !p)}
+            disabled={saving}
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border ${palette.chip} ${
+              saving ? 'opacity-50' : ''
+            }`}
+            title="更新工作狀態"
+          >
+            {saving ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <ChevronDown className="w-3 h-3" />
+            )}
+            {status.shortLabel}
+          </button>
+          {picking && (
+            <div className="absolute right-0 mt-1 z-20 bg-white rounded-lg shadow-xl border border-slate-200 py-1 min-w-[160px]">
+              {TASK_STATUSES.map((s) => {
+                const SIcon = s.Icon;
+                const isCurrent = s.id === statusId;
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => handleSelect(s.id)}
+                    disabled={saving}
+                    className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-slate-50 ${
+                      isCurrent ? 'bg-slate-50 font-bold' : ''
+                    } ${saving ? 'opacity-50' : ''}`}
+                  >
+                    <SIcon className="w-3.5 h-3.5 text-slate-500" />
+                    {s.label}
+                    {isCurrent && (
+                      <CheckCircle2 className="w-3 h-3 ml-auto text-emerald-500" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+      {/* Note field — only meaningful for `blocked`. For other statuses
+          we hide it but the value still persists if previously set. */}
+      {statusId === 'blocked' && (
+        <div className="px-3 pb-3">
+          <input
+            type="text"
+            placeholder="一句講低卡喺邊度（例：等緊場地回覆）..."
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={() => note !== (task.statusNote || '') && onUpdateStatus && onUpdateStatus(task, 'blocked', note)}
+            className="w-full px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50 text-xs"
+            maxLength={120}
+          />
+        </div>
+      )}
+    </li>
+  );
 }

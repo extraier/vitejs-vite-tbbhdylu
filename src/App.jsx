@@ -522,6 +522,26 @@ export default function App() {
      };
    }, [user?.uid, userRole]);
 
+  // 2026-07-17 — vendor updates the status of a task the couple assigned
+  // to them. Writes are restricted by firestore.rules to ONLY the three
+  // status keys (status / statusUpdatedAt / statusNote). When the vendor
+  // marks a task done, we also flip `isCompleted = true` so the couple's
+  // checklist checkbox stays the single source of truth (the couple can
+  // still override by un-checking).
+  const handleUpdateAssignedTaskStatus = async (task, newStatusId, statusNote) => {
+    if (!user || !task?.ownerUid || !task?.id) return;
+    const ref = doc(db, 'artifacts', appId, 'users', task.ownerUid, 'tasks', task.id);
+    const update = {
+      status: newStatusId,
+      statusUpdatedAt: Date.now(),
+      statusNote: statusNote || null,
+    };
+    if (newStatusId === 'done') {
+      update.isCompleted = true;
+    }
+    await setDoc(ref, update, { merge: true });
+  };
+
    // Aggregate unread count for the header inbox badge.
    const totalUnread = inquiries.reduce((sum, inq) => {
      return sum + (userRole === 'vendor' ? inq.vendorUnread || 0 : inq.coupleUnread || 0);
@@ -1908,6 +1928,11 @@ export default function App() {
                 // the dashboard looks empty (no vendor doc under their
                 // own uid).
                 isAdminPreview={isAdmin && !isVendor}
+                // 2026-07-17 — vendor updates the status of a task the
+                // couple assigned to them. Only the three status fields
+                // are write-permitted by firestore.rules — defense-in-
+                // depth even though the SDK is client-side.
+                onUpdateTaskStatus={handleUpdateAssignedTaskStatus}
               />
             )}
 

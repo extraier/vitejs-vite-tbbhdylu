@@ -183,7 +183,18 @@ service cloud.firestore {
           allow read: if isOwner(ownerUid)
             || hasHelperPerm(ownerUid, 'canViewChecklist')
             || (isSignedIn() && request.auth.uid == resource.data.assignedVendorUid);
-          allow write: if isOwner(ownerUid);
+          allow create, delete: if isOwner(ownerUid);
+          // 2026-07-17: vendors can write — but ONLY the three status
+          // fields, never title/dueDate/cost/etc. Enforced by checking
+          // every key in the request is one of those three, OR the
+          // caller's uid matches the owner (full-control path).
+          allow update: if isOwner(ownerUid)
+            || (
+              isSignedIn()
+              && request.auth.uid == resource.data.assignedVendorUid
+              && request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['status', 'statusUpdatedAt', 'statusNote'])
+            );
         }
 
         // Invitations: owner full CRUD. These are the electronic-invitation
