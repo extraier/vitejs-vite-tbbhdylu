@@ -565,6 +565,80 @@ export default function App() {
      return unsub;
    }, [user?.uid, guest.isGuestMode]);
 
+   // 2026-07-17 — Couple's favorited vendors (🔍 商戶指南 ❤️ 我的最愛).
+   // Lives at /users/{userUid}/favorites/{vendorId}. Each doc body
+   // stores a tiny snapshot so the favorites list survives Firestore
+   // outages on the public vendors collection.
+   const [favorites, setFavorites] = useState([]);
+   useEffect(() => {
+     if (!user || user.isAnonymous || guest.isGuestMode) {
+       setFavorites([]);
+       return undefined;
+     }
+     const q = query(
+       collection(db, 'artifacts', appId, 'users', user.uid, 'favorites'),
+     );
+     const unsub = onSnapshot(
+       q,
+       (snap) => {
+         setFavorites(
+           snap.docs.map((d) => ({
+             id: d.id,
+             ...d.data(),
+             createdAt: d.data().createdAt?.toMillis?.() || 0,
+           })),
+         );
+       },
+       (err) => {
+         // eslint-disable-next-line no-console
+         console.warn('favorites subscribe failed:', err?.message);
+       },
+     );
+     return unsub;
+   }, [user?.uid, guest.isGuestMode]);
+
+   const favoriteIds = useMemo(
+     () => new Set(favorites.map((f) => Number(f.vendorId) || f.id)),
+     [favorites],
+   );
+
+   const handleToggleFavorite = async (vendor) => {
+     if (!user || !vendor) return;
+     const vid = String(vendor.id);
+     const favRef = doc(
+       db,
+       'artifacts',
+       appId,
+       'users',
+       user.uid,
+       'favorites',
+       vid,
+     );
+     const already = favoriteIds.has(vendor.id);
+     try {
+       if (already) {
+         await deleteDoc(favRef);
+       } else {
+         await setDoc(favRef, {
+           vendorId: vid,
+           vendorName: vendor.name || '',
+           vendorCategory: vendor.category || '',
+           vendorSubcategory: vendor.subcategory || '',
+           vendorSnapshot: {
+             price: vendor.price || '',
+             rating: vendor.rating || 0,
+             portfolio: (vendor.portfolio || []).slice(0, 2),
+           },
+           createdAt: serverTimestamp(),
+         });
+       }
+     } catch (err) {
+       // eslint-disable-next-line no-console
+       console.warn('toggleFavorite failed:', err?.message);
+       showToast(`✗ 最愛切換失敗：${err?.message || '未知錯誤'}`);
+     }
+   };
+
    // ---- Vendor contact CRUD (主理新人 personal address book) ----
    const handleAddVendorContact = async (data) => {
      if (!user) return;
@@ -1610,6 +1684,8 @@ export default function App() {
                 onFilterChange={setDiscoverFilter}
                 onViewProfile={setViewingVendorProfile}
                 user={user}
+                favoriteIds={favoriteIds}
+                onToggleFavorite={handleToggleFavorite}
               />
             )}
 

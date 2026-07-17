@@ -239,6 +239,14 @@ export type Vendor = {
   tags: string[];
   description: string;
   portfolio: string[];
+  // Optional, 2026-07-17 — featured surfaces a vendor to the top of the
+  // ⭐ 推薦 sort. Real firestore vendors store it on the doc; DEFAULT_VENDORS
+  // entries that don't have it just fall through to rating-sort.
+  featured?: boolean;
+  // Optional ISO string or epoch millis. Real firestore docs are populated
+  // from applyAsVendor with FieldValue.serverTimestamp(); DEFAULT_VENDORS
+  // entries that don't have it fall back to `id` for newer-first sort.
+  createdAt?: number;
 };
 
 // Default vendors for the Discover and Smart Match tabs.
@@ -251,6 +259,8 @@ export const DEFAULT_VENDORS: Vendor[] = [
     price: '$18,000+',
     tags: ['伯大尼', 'Ritz Carlton', '紀實唯美'],
     description: '超過10年頂級酒店及教堂拍攝經驗，擅長捕捉自然流露的情感與光影。',
+    featured: true,
+    createdAt: Date.parse('2026-01-15T10:00:00Z'),
     portfolio: [
       'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=400&q=80',
       'https://images.unsplash.com/photo-1606800052052-a08af7148866?auto=format&fit=crop&w=400&q=80',

@@ -259,6 +259,19 @@ service cloud.firestore {
           allow create, update: if isOwner(ownerUid);
           allow delete: if isOwner(ownerUid);
         }
+
+        // ---- Couple's vendor favorites (private) -------------------------
+        // A couple pins vendors they're considering into a shortlist at
+        // /users/{ownerUid}/favorites/{vendorId}. The doc body is minimal:
+        // { vendorId, vendorName, vendorCategory, vendorSnapshot,
+        //   createdAt }. Reads + writes owner-only — these never leak to
+        // a vendor or to another couple. Used by DiscoverDirectory's
+        // heart icon + '❤️ 我的最愛' filter chip.
+        match /favorites/{favoriteId} {
+          allow read: if isOwner(ownerUid);
+          allow create, update: if isOwner(ownerUid);
+          allow delete: if isOwner(ownerUid);
+        }
       }
 
       // ---- Public marketplace (vendor discovery) -----------------------

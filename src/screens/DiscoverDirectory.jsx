@@ -1,36 +1,104 @@
 // DiscoverDirectory — the 🔍 商戶指南 page.
 //
-// 2026-07-17 — Brought on parity with the canonical VENDOR_CATEGORIES
-// hierarchical taxonomy in src/lib/config.ts. Two-tier UX:
+// 2026-07-17 — Two-tier UX with the canonical VENDOR_CATEGORIES
+// hierarchical taxonomy from src/lib/config.ts:
 //
 //   1. Default view (filter === 'all'): 13 top-level category cards
-//      with sub-category breakdown text + a search box across vendor
+//      with sub-category breakdown + a search box across vendor
 //      names + descriptions + tags.
 //
 //   2. Drilldown (filter === '<topKey>' OR '<topKey>.<subKey>'):
 //      sub-category chips across the top + filtered vendor grid.
 //
-// 2026-07-17 — Search + sub-category labels on category cards.
-//   Search state is local (useState) so navigation between filter
-//   states doesn't carry stale queries. To clear search: clear the
-//   input AND set the filter back to 'all' (handled in the empty-state
-//   button below).
+// 2026-07-17 — Round 2 enhancements:
+//   - Sort dropdown (5 modes: ⭐ 推薦, 最高評分, 價格低到高,
+//     價格高到低, 最新加入). Sort + search + filter compose.
+//   - Featured vendors (vendor.featured === true) get a ⭐ 推薦 badge
+//     and float to the top under the default ⭐ 推薦 sort.
+//   - ❤️ Favorites — couples can heart any vendor card. Favorites
+//     persist in /users/{uid}/favorites/{vendorId} so they survive
+//     page reloads + multi-device. A '❤️ 我的最愛' filter chip
+//     narrows the grid to favorites only.
 //
 // Filter encoding (sent up to App.jsx via onFilterChange):
-//   'all'                                  → all vendors
-//   '<topKey>'                             → top-level match
-//   '<topKey>.<subKey>'                    → top-level + sub match
+//   'all'                       → all vendors in scope
+//   'favorites'                 → only favorites (overrides category
+//                                 and is mutually exclusive; uses a
+//                                 separate path in the drilldown)
+//   '<topKey>'                  → top-level match
+//   '<topKey>.<subKey>'         → top-level + sub
+//
+// Sort encoding (this component only, useState):
+//   'recommended'               → featured first, then rating desc
+//   'rating'                    → rating desc
+//   'price_asc'                 → priceMin asc
+//   'price_desc'                → priceMin desc
+//   'newest'                    → createdAt desc (falls back to id)
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, ChevronLeft, Search, X } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronLeft,
+  Heart,
+  Search,
+  Star,
+  X,
+} from 'lucide-react';
 import { trackVendorView, trackVendorClick } from '../lib/vendorAnalytics';
 import {
   VENDOR_CATEGORIES,
   getVendorCategoryLabel,
 } from '../lib/config';
+import { parseFormattedNumber } from '../lib/format';
 
 function isSubMatch(filter) {
   return filter && filter.includes('.');
+}
+
+// Sort modes. Stable comparator chain — featured vendors always
+// rank above non-featured, regardless of the chosen sort.
+const SORT_MODES = [
+  { value: 'recommended', label: '⭐ 推薦' },
+  { value: 'rating', label: '最高評分' },
+  { value: 'price_asc', label: '價格由低至高' },
+  { value: 'price_desc', label: '價格由高至低' },
+  { value: 'newest', label: '最新加入' },
+];
+
+function getCreatedAtMs(v) {
+  if (typeof v.createdAt === 'number') return v.createdAt;
+  if (v.createdAt && typeof v.createdAt.toMillis === 'function') {
+    return v.createdAt.toMillis();
+  }
+  if (typeof v.createdAt === 'string') {
+    const parsed = Date.parse(v.createdAt);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+// Builds a comparator from a sort mode. Featured vendors always come
+// first (a stable boost across all sorts), then mode-specific.
+function buildSorter(mode) {
+  const primary =
+    mode === 'rating'
+      ? (v) => -1 * (v.rating || 0)
+      : mode === 'price_asc'
+      ? (v) => parseFormattedNumber(v.price) || Infinity
+      : mode === 'price_desc'
+      ? (v) => -1 * (parseFormattedNumber(v.price) || 0)
+      : mode === 'newest'
+      ? (v) => -1 * getCreatedAtMs(v)
+      : mode === 'recommended'
+      ? (v) => -1 * (v.rating || 0)
+      : () => 0;
+  return (a, b) => {
+    // Feature boost: featured vendors always rank above non-featured.
+    const aFeat = a.featured ? 1 : 0;
+    const bFeat = b.featured ? 1 : 0;
+    if (aFeat !== bFeat) return bFeat - aFeat;
+    return primary(a) - primary(b);
+  };
 }
 
 // Lowercase + trim a free-text value; tolerant of undefined.
@@ -51,20 +119,31 @@ export function DiscoverDirectory({
   onFilterChange,
   onViewProfile,
   user,
+  // Set of vendor IDs the current couple has favorited. Comes from
+  // App.jsx's onSnapshot on /users/<uid>/favorites.
+  favoriteIds,
+  // Toggle handler passed from App.jsx (writes/clears a doc in
+  // /users/<uid>/favorites/<vendorId>). Vendor obj passed in so the
+  // caller can snapshot vendorName + category for the doc body.
+  onToggleFavorite,
 }) {
-  // Local search state. Reset whenever the user enters a drilldown
-  // or returns to the default view — controlled by a key prop on
-  // the input we re-mount via filter-change handler.
   const [search, setSearch] = useState('');
+  const [sortMode, setSortMode] = useState('recommended');
 
-  // Compute filtered + search-narrowed vendor list.
+  const favoriteSet = useMemo(
+    () => favoriteIds || new Set(),
+    [favoriteIds],
+  );
+
+  // Compute filtered + search-narrowed + sorted vendor list.
   const filtered = useMemo(() => {
     // Hide pending vendors from the public directory.
     const visible = vendors.filter((v) => v.status !== 'pending');
 
-    // First narrow by category/subcategory if filter is set.
+    // 1) Category / subcategory narrowing (except the 'favorites'
+    //    pseudo-filter which is a separate path below).
     let narrowed = visible;
-    if (filter && filter !== 'all') {
+    if (filter && filter !== 'all' && filter !== 'favorites') {
       if (isSubMatch(filter)) {
         const [top, sub] = filter.split('.');
         narrowed = narrowed.filter(
@@ -75,15 +154,24 @@ export function DiscoverDirectory({
       }
     }
 
-    // Then narrow by search. Match against name + description + tags,
-    // case-insensitive. Empty search passes everything through.
+    // 2) Favorites pseudo-filter: only keep vendors the couple has
+    //    hearted. This composes with category filtering (e.g. showing
+    //    favorites inside 'photo_video').
+    if (filter === 'favorites') {
+      narrowed = narrowed.filter((v) => favoriteSet.has(v.id));
+    }
+
+    // 3) Text search across name + description + tags.
     const q = norm(search);
     if (q) {
       narrowed = narrowed.filter((v) => searchText(v).includes(q));
     }
 
-    return narrowed;
-  }, [filter, vendors, search]);
+    // 4) Sort. Stable across re-renders since the comparator is
+    //    pure given (mode, featured, rating, price, createdAt, id).
+    const sorter = buildSorter(sortMode);
+    return [...narrowed].sort(sorter);
+  }, [filter, vendors, search, sortMode, favoriteSet]);
 
   // Per-category + per-subcategory counts for the pill labels and the
   // default-view category cards.
@@ -100,11 +188,15 @@ export function DiscoverDirectory({
           (subCounts[top][v.subcategory] || 0) + 1;
       }
     });
-    return { topCounts, subCounts, total: visible.length };
-  }, [vendors]);
+    return {
+      topCounts,
+      subCounts,
+      total: visible.length,
+      favorites: visible.filter((v) => favoriteSet.has(v.id)).length,
+    };
+  }, [vendors, favoriteSet]);
 
-  // Track one view per (vendor, filter, session). Dedupe by a string key
-  // so a vendor seen in two filters fires two events (analytics-correct).
+  // Track one view per (vendor, filter, search, session).
   const viewedRef = useRef(new Set());
   useEffect(() => {
     const newlyViewed = filtered.filter((v) => {
@@ -123,19 +215,17 @@ export function DiscoverDirectory({
     onViewProfile(vendor);
   };
 
-  const inCategory = filter && filter !== 'all' && !isSubMatch(filter);
+  const inCategory = filter && !['all', 'favorites'].includes(filter) && !isSubMatch(filter);
   const inSub = isSubMatch(filter);
-  const isDrilldown = inCategory || inSub;
-  const totalCategories = Object.keys(VENDOR_CATEGORIES).length;
-  const visibleCount = filtered.length;
+  const isDrilldown = !!filter && filter !== 'all'; // includes 'favorites'
 
-  // Reset search when navigating between filter states so the user
-  // doesn't carry over a stale query (e.g. when they go back via the
-  // "← 全部類別" link). Caller-driven via onFilterChange wrapping.
   function setFilterWithSearchReset(next) {
     setSearch('');
     onFilterChange(next);
   }
+
+  const totalCategories = Object.keys(VENDOR_CATEGORIES).length;
+  const visibleCount = filtered.length;
 
   return (
     <div className="max-w-7xl mx-auto mt-8 animate-in slide-in-from-bottom-4 duration-500">
@@ -156,55 +246,139 @@ export function DiscoverDirectory({
           )}
         </h2>
         <p className="text-sm text-slate-500">
-          {isDrilldown
+          {filter === 'favorites'
+            ? '我哋嘅心水商戶'
+            : inSub
             ? filter.replace('.', ' › ')
+            : inCategory
+            ? VENDOR_CATEGORIES[filter]?.label || ''
             : `${counts.total} 個認證商戶，分 ${totalCategories} 大類`}
         </p>
       </div>
 
-      {/* Default view: 13 category cards */}
-      {!isDrilldown && (
-        <>
-          <SearchBar
+      {/* Toolbar — search + sort row */}
+      <div className="flex flex-col md:flex-row md:items-center gap-3 mb-8 max-w-3xl mx-auto">
+        <div className="relative flex-1">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
             value={search}
-            onChange={setSearch}
-            placeholder="搜尋商戶名稱、描述或標籤..."
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={
+              filter === 'favorites'
+                ? '搜尋我嘅最愛商戶...'
+                : '搜尋商戶名稱、描述或標籤...'
+            }
+            className="w-full pl-11 pr-10 py-3 rounded-full border border-slate-200 bg-white text-sm font-medium focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 outline-none transition-shadow"
           />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors"
+              aria-label="清除搜尋"
+              title="清除搜尋"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2 md:flex-shrink-0">
+          <label
+            htmlFor="dd-sort"
+            className="text-xs font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap"
+          >
+            排序
+          </label>
+          <select
+            id="dd-sort"
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value)}
+            className="px-3 py-2 rounded-full border border-slate-200 bg-white text-sm font-bold text-slate-700 focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 outline-none cursor-pointer"
+          >
+            {SORT_MODES.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Favorites filter chip (always visible) */}
+      <div className="flex flex-wrap justify-center gap-2 mb-6">
+        <button
+          type="button"
+          onClick={() =>
+            filter === 'favorites'
+              ? setFilterWithSearchReset('all')
+              : onFilterChange('favorites')
+          }
+          className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full font-bold text-sm transition-all ${
+            filter === 'favorites'
+              ? 'bg-rose-100 text-rose-600 border border-rose-300 shadow-sm'
+              : 'bg-white text-slate-600 border border-slate-200 hover:border-rose-300 hover:text-rose-600'
+          }`}
+        >
+          <Heart
+            className={`w-4 h-4 ${
+              filter === 'favorites' ? 'fill-rose-500 text-rose-500' : ''
+            }`}
+          />
+          我的最愛
+          {counts.favorites > 0 && (
+            <span className="ml-1 text-xs opacity-70">
+              ({counts.favorites})
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Default view: 13 category cards */}
+      {filter === 'all' && (
+        <>
           <CategoryGrid
             counts={counts}
             subCounts={counts.subCounts}
             onCardClick={(topKey) => setFilterWithSearchReset(topKey)}
           />
-          {/* If a search returned no rows in 'all' mode, surface that
-              clearly so the user knows to clear it. */}
           {search && visibleCount === 0 && (
             <SearchEmpty onClear={() => setSearch('')} query={search} />
           )}
         </>
       )}
 
-      {/* Drilldown view: sub-category chips + filtered vendor grid */}
-      {isDrilldown && (
+      {/* Favorites view */}
+      {filter === 'favorites' && (
         <>
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="搜尋此類別商戶..."
+          <VendorGrid
+            vendors={filtered}
+            onSelect={handleClick}
+            onToggleFavorite={onToggleFavorite}
+            favoriteIds={favoriteSet}
+            emptyMessage={
+              search
+                ? `你嘅最愛入面未搵到「${search}」。`
+                : '未加入任何最愛商戶 — 喺商戶卡片上面撳 ❤️ 就可以加入!'
+            }
           />
+        </>
+      )}
+
+      {/* Drilldown view: sub-category chips + filtered vendor grid */}
+      {(inCategory || inSub) && (
+        <>
           <SubCategoryChips
             topKey={inSub ? filter.split('.')[0] : filter}
             currentFilter={filter}
-            onFilterChange={(next) => {
-              // Keep search across category-switches within the
-              // drilldown — it's a relevant query. Only clear when
-              // going back to the default view.
-              onFilterChange(next);
-            }}
+            onFilterChange={(next) => onFilterChange(next)}
             subCounts={counts.subCounts}
           />
           <VendorGrid
             vendors={filtered}
             onSelect={handleClick}
+            onToggleFavorite={onToggleFavorite}
+            favoriteIds={favoriteSet}
             emptyMessage={
               search
                 ? `冇商戶同時符合「${filter}」同「${search}」。`
@@ -217,35 +391,7 @@ export function DiscoverDirectory({
   );
 }
 
-// Search input box, accessible + keyboard-friendly.
-function SearchBar({ value, onChange, placeholder }) {
-  return (
-    <div className="relative max-w-xl mx-auto mb-8">
-      <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full pl-11 pr-10 py-3 rounded-full border border-slate-200 bg-white text-sm font-medium focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 outline-none transition-shadow"
-      />
-      {value && (
-        <button
-          type="button"
-          onClick={() => onChange('')}
-          className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors"
-          aria-label="清除搜尋"
-          title="清除搜尋"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-// Default-view grid: 13 top-level categories with sub-category
-// breakdown text per card.
+// 13 top-level categories with sub-category breakdown text per card.
 function CategoryGrid({ counts, subCounts, onCardClick }) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
@@ -255,9 +401,8 @@ function CategoryGrid({ counts, subCounts, onCardClick }) {
         const subItems = subCounts[topKey] || {};
         const visibleSubs = subs
           .filter(([subKey]) => (subItems[subKey] || 0) > 0)
-          .slice(0, 3); // cap at 3 subcategory lines so cards stay compact
-        const remainingSubs =
-          subs.length - visibleSubs.length;
+          .slice(0, 3);
+        const remainingSubs = subs.length - visibleSubs.length;
         return (
           <button
             key={topKey}
@@ -275,14 +420,8 @@ function CategoryGrid({ counts, subCounts, onCardClick }) {
               {cfg.label}
             </div>
             <div className="text-xs text-slate-500 mb-2">
-              {count === 0
-                ? '尚未有商戶'
-                : `${count} 個商戶`}
+              {count === 0 ? '尚未有商戶' : `${count} 個商戶`}
             </div>
-            {/* Sub-category breakdown — shows what's available within
-                this category without forcing a click. Capped at 3 lines
-                + an "+N 個" overflow indicator to keep cards compact
-                on mobile. */}
             {visibleSubs.length > 0 && (
               <ul className="space-y-0.5 text-[11px] text-slate-500 leading-relaxed border-t border-slate-100 pt-2">
                 {visibleSubs.map(([subKey, subLabel]) => (
@@ -310,8 +449,7 @@ function CategoryGrid({ counts, subCounts, onCardClick }) {
   );
 }
 
-// Renders sub-category chips for the active top-level category, plus
-// an "全部" chip that resets the filter to the top-level only.
+// Sub-category chips for the active top-level category.
 function SubCategoryChips({ topKey, currentFilter, onFilterChange, subCounts }) {
   const cfg = VENDOR_CATEGORIES[topKey];
   if (!cfg) return null;
@@ -358,7 +496,6 @@ function SubCategoryChips({ topKey, currentFilter, onFilterChange, subCounts }) 
   );
 }
 
-// Filter chip with active / disabled states.
 function FilterBtn({ current, value, onClick, disabled, children }) {
   const active = current === value;
   return (
@@ -379,8 +516,15 @@ function FilterBtn({ current, value, onClick, disabled, children }) {
   );
 }
 
-// Card grid for vendors in a (sub-)category view.
-function VendorGrid({ vendors, onSelect, emptyMessage }) {
+// Card grid for vendors. Each card has a heart icon (toggle favorite)
+// + featured badge (if applicable).
+function VendorGrid({
+  vendors,
+  onSelect,
+  onToggleFavorite,
+  favoriteIds,
+  emptyMessage,
+}) {
   if (vendors.length === 0) {
     return (
       <div className="bg-white rounded-2xl p-12 text-center border border-slate-200">
@@ -391,15 +535,14 @@ function VendorGrid({ vendors, onSelect, emptyMessage }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
       {vendors.map((vendor) => {
-        // Look up sub-category label without needing to import
-        // VENDOR_CATEGORIES twice — done via local lookup.
         const subLabel = vendor.subcategory
           ? VENDOR_CATEGORIES[vendor.category]?.subs?.[vendor.subcategory]
           : null;
+        const isFavorited = favoriteIds.has(vendor.id);
         return (
           <div
             key={vendor.id}
-            className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg cursor-pointer group"
+            className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hover:shadow-lg cursor-pointer group relative"
             onClick={() => onSelect(vendor)}
           >
             <div className="h-48 w-full overflow-hidden bg-slate-100 relative">
@@ -410,18 +553,57 @@ function VendorGrid({ vendors, onSelect, emptyMessage }) {
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                 />
               )}
-              {vendor.category &&
-                VENDOR_CATEGORIES[vendor.category] && (
-                  <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-sm rounded-full px-3 py-1 text-xs font-bold text-slate-700 shadow-sm">
-                    {VENDOR_CATEGORIES[vendor.category].icon}{' '}
-                    {VENDOR_CATEGORIES[vendor.category].label}
-                  </div>
-                )}
+              {/* Category pill (top-left) */}
+              {vendor.category && VENDOR_CATEGORIES[vendor.category] && (
+                <div className="absolute top-3 left-3 bg-white/90 backdrop-blur-sm rounded-full px-3 py-1 text-xs font-bold text-slate-700 shadow-sm">
+                  {VENDOR_CATEGORIES[vendor.category].icon}{' '}
+                  {VENDOR_CATEGORIES[vendor.category].label}
+                </div>
+              )}
+              {/* ⭐ 推薦 badge (top-right next to heart) */}
+              {vendor.featured && (
+                <div className="absolute top-3 right-14 bg-amber-100/95 backdrop-blur-sm text-amber-700 rounded-full px-2.5 py-1 text-[11px] font-black shadow-sm flex items-center gap-1">
+                  <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
+                  推薦
+                </div>
+              )}
+              {/* Heart toggle (top-right) — separate click target so
+                  tapping the heart doesn't open the vendor profile. */}
+              {onToggleFavorite && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleFavorite(vendor);
+                  }}
+                  className={`absolute top-3 right-3 w-9 h-9 rounded-full shadow-sm flex items-center justify-center transition-all ${
+                    isFavorited
+                      ? 'bg-rose-500 text-white hover:bg-rose-600'
+                      : 'bg-white/90 backdrop-blur-sm text-slate-400 hover:text-rose-500 hover:bg-white'
+                  }`}
+                  aria-label={
+                    isFavorited ? '從最愛移除' : '加入最愛'
+                  }
+                  title={isFavorited ? '從最愛移除' : '加入最愛'}
+                >
+                  <Heart
+                    className={`w-4 h-4 ${isFavorited ? 'fill-white' : ''}`}
+                  />
+                </button>
+              )}
             </div>
             <div className="p-5">
-              <h3 className="text-lg font-bold text-slate-800 mb-1 truncate">
-                {vendor.name}
-              </h3>
+              <div className="flex items-center gap-2 mb-1">
+                <h3 className="text-lg font-bold text-slate-800 truncate">
+                  {vendor.name}
+                </h3>
+                {vendor.rating ? (
+                  <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 flex-shrink-0">
+                    <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                    {vendor.rating.toFixed(1)}
+                  </span>
+                ) : null}
+              </div>
               {subLabel && (
                 <div className="text-xs text-slate-500 mb-2 truncate">
                   {subLabel}
@@ -443,13 +625,10 @@ function VendorGrid({ vendors, onSelect, emptyMessage }) {
   );
 }
 
-// Empty-state shown when a search returns nothing in the default view.
 function SearchEmpty({ onClear, query }) {
   return (
     <div className="bg-white rounded-2xl p-12 text-center border border-slate-200 mt-2">
-      <p className="text-slate-500 mb-3">
-        「{query}」搵唔到任何商戶。
-      </p>
+      <p className="text-slate-500 mb-3">「{query}」搵唔到任何商戶。</p>
       <button
         type="button"
         onClick={onClear}
