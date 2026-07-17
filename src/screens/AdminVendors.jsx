@@ -39,26 +39,10 @@ import {
 } from 'lucide-react';
 
 import { VendorModal } from '../components/modals/VendorModal';
-
-const CATEGORY_LABELS = {
-  photography: '📸 攝影',
-  deco: '🌸 佈置',
-  bridal_makeup: '💄 化妝',
-  mc: '🎤 司儀',
-  venue: '🏛️ 場地',
-  banquet: '🍽️ 婚宴',
-  cake: '🎂 蛋糕',
-  wedding_car: '🚗 花車',
-  invite: '✉️ 喜帖',
-  gift: '🎁 回禮',
-  honeymoon: '✈️ 蜜月',
-  other: '🔖 其他',
-};
-
-function categoryLabel(c) {
-  if (!c) return '—';
-  return CATEGORY_LABELS[c] || c;
-}
+import {
+  VENDOR_CATEGORIES,
+  getVendorCategoryLabel,
+} from '../lib/config';
 
 function fmtDate(v) {
   if (!v) return '—';
@@ -517,9 +501,16 @@ export function AdminVendors({ user, isAdmin }) {
                       </div>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell">
-                      <span className="inline-flex text-xs px-2 py-0.5 bg-slate-100 text-slate-700 rounded">
-                        {categoryLabel(v.category)}
-                      </span>
+                      <div className="inline-flex flex-col gap-0.5">
+                        <span className="inline-flex text-xs px-2 py-0.5 bg-slate-100 text-slate-700 rounded w-fit">
+                          {getVendorCategoryLabel(v.category)}
+                        </span>
+                        {v.subcategory && (
+                          <span className="inline-flex text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded w-fit">
+                            {getVendorCategoryLabel(v.category, v.subcategory)}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell">
                       <div className="flex items-center gap-1 text-slate-700">
@@ -639,6 +630,7 @@ export function AdminVendors({ user, isAdmin }) {
 function VendorEditModal({ vendor, onClose, onSaved }) {
   const [name, setName] = useState(vendor.name || '');
   const [category, setCategory] = useState(vendor.category || '');
+  const [subcategory, setSubcategory] = useState(vendor.subcategory || '');
   const [rating, setRating] = useState(
     typeof vendor.rating === 'number' ? String(vendor.rating) : '',
   );
@@ -652,6 +644,38 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
+  // Sub-options for the chosen top-level category. Subcategories are an
+  // object map (subKey → label) — keep it sorted by label so admin can
+  // find common ones by eye.
+  const subOptions = useMemo(() => {
+    if (!category) return [];
+    const cfg = VENDOR_CATEGORIES[category];
+    if (!cfg || !cfg.subs) return [];
+    return Object.entries(cfg.subs)
+      .map(([key, label]) => ({ key, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'zh-HK'));
+  }, [category]);
+
+  // When category changes, drop a subcategory that no longer matches.
+  // This is important when admin re-classifies a vendor — the previous
+  // sub would silently become invalid.
+  function handleCategoryChange(next) {
+    setCategory(next);
+    if (!next) {
+      setSubcategory('');
+      return;
+    }
+    const cfg = VENDOR_CATEGORIES[next];
+    if (!cfg || !cfg.subs) {
+      // No subs at all → no subcategory possible for this top.
+      setSubcategory('');
+      return;
+    }
+    if (!cfg.subs[subcategory]) {
+      setSubcategory('');
+    }
+  }
+
   async function handleSave(e) {
     e.preventDefault();
     setError(null);
@@ -659,6 +683,14 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
     const updates = {};
     if (name !== (vendor.name || '')) updates.name = name.trim();
     if (category !== (vendor.category || '')) updates.category = category.trim();
+    if (category) updates.category = category.trim(); // ensure set even if unchanged (defensive)
+    // Persist subcategory as a string (or null to clear). Always include
+    // when category has subs so server gets a consistent value.
+    const newSub = subcategory || null;
+    const oldSub = vendor.subcategory || null;
+    if (newSub !== oldSub) {
+      updates.subcategory = newSub;
+    }
     if (price !== (vendor.price || '')) updates.price = price.trim();
     if (description !== (vendor.description || '')) updates.description = description.trim();
     if (status !== (vendor.status || 'approved')) updates.status = status;
@@ -749,14 +781,55 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
                 />
               </div>
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">類別</label>
-                <input
-                  type="text"
+                <label className="block text-sm font-bold text-slate-700 mb-1">
+                  類別 <span className="text-xs text-slate-400 font-normal">(由管理員代客戶揀)</span>
+                </label>
+                <select
                   value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  placeholder="photography / deco / bridal_makeup ..."
-                  className="w-full p-2.5 rounded-lg border border-slate-300 focus:border-emerald-500 outline-none"
-                />
+                  onChange={(e) => handleCategoryChange(e.target.value)}
+                  className="w-full p-2.5 rounded-lg border border-slate-300 focus:border-emerald-500 outline-none bg-white"
+                >
+                  <option value="">— 請選擇分類 —</option>
+                  {Object.entries(VENDOR_CATEGORIES).map(([key, cfg]) => (
+                    <option key={key} value={key}>
+                      {cfg.icon} {cfg.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  客戶端 (DiscoverDirectory) 嘅分類卡片會用呢個 key 嚟做 filter。
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">
+                  子分類 (選填)
+                </label>
+                <select
+                  value={subcategory}
+                  onChange={(e) => setSubcategory(e.target.value)}
+                  disabled={!category || subOptions.length === 0}
+                  className={`w-full p-2.5 rounded-lg border outline-none ${
+                    !category || subOptions.length === 0
+                      ? 'bg-slate-50 border-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-white border-slate-300 focus:border-emerald-500'
+                  }`}
+                >
+                  <option value="">
+                    {!category
+                      ? '— 揀完主分類先 —'
+                      : subOptions.length === 0
+                      ? '— 此分類冇子分類 —'
+                      : '— (留空) —'}
+                  </option>
+                  {subOptions.map((s) => (
+                    <option key={s.key} value={s.key}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  商戶指南入面鑽入分類後嘅 top-chip 會用到呢個 sub 嚟做 filter。
+                </p>
               </div>
               <div>
                 <label className="block text-sm font-bold text-slate-700 mb-1">評分 (0–5)</label>

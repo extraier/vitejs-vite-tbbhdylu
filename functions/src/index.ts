@@ -601,6 +601,7 @@ export const admin_setDisabled = onCall(async (req) => {
 const VENDOR_EDITABLE_KEYS = [
   'name',
   'category',
+  'subcategory',
   'rating',
   'price',
   'tags',
@@ -635,6 +636,14 @@ function validateVendorEditable(payload: Record<string, unknown>): void {
   }
   if ('category' in payload && typeof payload.category !== 'string') {
     throw new HttpsError('invalid-argument', 'category must be a string.');
+  }
+  if (
+    'subcategory' in payload &&
+    payload.subcategory !== null &&
+    typeof payload.subcategory !== 'string'
+  ) {
+    // Allow string or null; admin may clear sub by setting null.
+    throw new HttpsError('invalid-argument', 'subcategory must be a string or null.');
   }
   if ('status' in payload) {
     const validStatuses = ['pending', 'approved', 'rejected', 'suspended'];
