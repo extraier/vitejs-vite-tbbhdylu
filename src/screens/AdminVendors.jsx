@@ -739,8 +739,16 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
 
     setSaving(true);
     try {
+      // 2026-07-17 — instrumentation. Save is silently failing for
+      // cs.kcupid@gmail.com on this branch — log every step of the
+      // path so we can see in DevTools if the function call never
+      // starts, never resolves, or rejects. Leave these in for now;
+      // we'll trim once the root cause is fixed.
       const fn = httpsCallable(getFunctions(), 'admin_updateVendor');
-      await fn({ vendorUid: vendor.vendorUid, updates });
+      console.log('[VendorEdit] calling admin_updateVendor', { vendorUid: vendor.vendorUid, updates });
+      const t0 = Date.now();
+      const result = await fn({ vendorUid: vendor.vendorUid, updates });
+      console.log('[VendorEdit] admin_updateVendor resolved in', Date.now() - t0, 'ms', result?.data);
       onSaved({ vendorUid: vendor.vendorUid, ...updates });
     } catch (err) {
       // The Cloud Functions SDK compresses HttpsError codes; expose
