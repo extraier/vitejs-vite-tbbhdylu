@@ -18,12 +18,12 @@
 //   - Multi-select category cards in default view. Click any
 //     combination of category cards to OR-filter vendors across
 //     more than one category at a time.
-//   - '📊 比較模式' toggle in favorites view. Add up to 3
-//     vendors to a comparison tray, then '📊 比較 (N/3)' button
+//   - '📊 比較模式' toggle in favorites view. Add up to 5
+//     vendors to a comparison tray, then '📊 比較 (N/5)' button
 //     opens a side-by-side <CompareModal/>.
 //   - '📤 分享商戶列表' chip — exports a WhatsApp-friendly text
 //     message via navigator.share (mobile) or clipboard (desktop).
-//   - '✅ 已選 N 個分類' (multi-select) and '🛒 比較 (N/3)'
+//   - '✅ 已選 N 個分類' (multi-select) and '🛒 比較 (N/5)'
 //     (compare tray) sticky bottom tray — light dismissable
 //     action bar.
 //
@@ -65,6 +65,10 @@ import { useLongPressRegistry } from '../lib/useLongPress';
 function isSubMatch(filter) {
   return filter && filter.includes('.');
 }
+
+// Max vendors the comparison tray holds. Bumped from 3 to 5 in
+// 2026-07-17 to support broader side-by-side reviews.
+const COMPARE_MAX = 5;
 
 const SORT_MODES = [
   { value: 'recommended', label: '⭐ 推薦' },
@@ -263,7 +267,7 @@ export function DiscoverDirectory({
       if (next.has(vendorId)) {
         next.delete(vendorId);
       } else {
-        if (next.size >= 3) return prev; // cap at 3
+        if (next.size >= COMPARE_MAX) return prev; // cap at COMPARE_MAX
         next.add(vendorId);
       }
       return next;
@@ -451,7 +455,7 @@ export function DiscoverDirectory({
             比較模式
             {compareTray.size > 0 && (
               <span className="ml-1 text-xs opacity-70">
-                ({compareTray.size}/3)
+                ({compareTray.size}/{COMPARE_MAX})
               </span>
             )}
           </button>
@@ -591,7 +595,7 @@ export function DiscoverDirectory({
         <ActionTray>
           <span className="flex items-center gap-2 text-sm font-bold text-slate-700">
             <BarChart3 className="w-4 h-4 text-indigo-600" />
-            比較籃：{compareTray.size} / 3 個商戶
+            比較籃：{compareTray.size} / {COMPARE_MAX} 個商戶
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -606,7 +610,7 @@ export function DiscoverDirectory({
               onClick={() => setShowCompareModal(true)}
               className="px-4 py-1.5 rounded-full text-sm font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm transition-colors"
             >
-              📊 比較 ({compareTray.size}/3)
+              📊 比較 ({compareTray.size}/{COMPARE_MAX})
             </button>
           </div>
         </ActionTray>
@@ -894,13 +898,13 @@ function VendorGrid({
                     onToggleCompare(vendor.id);
                   }}
                   disabled={
-                    !isCompared && (compareTray?.size || 0) >= 3
+                    !isCompared && (compareTray?.size || 0) >= COMPARE_MAX
                   }
                   className={`absolute top-3 right-3 w-9 h-9 rounded-full shadow-sm flex items-center justify-center transition-all ${
                     isCompared
                       ? 'bg-indigo-600 text-white'
                       : 'bg-white/90 backdrop-blur-sm text-slate-400 hover:text-indigo-600 hover:bg-white border border-indigo-200'
-                  } ${!isCompared && (compareTray?.size || 0) >= 3 ? 'opacity-30 cursor-not-allowed' : ''}`}
+                  } ${!isCompared && (compareTray?.size || 0) >= COMPARE_MAX ? 'opacity-30 cursor-not-allowed' : ''}`}
                   aria-label={isCompared ? '從比較移除' : '加入比較'}
                   title={isCompared ? '從比較移除' : '加入比較'}
                 >
@@ -940,6 +944,11 @@ function VendorGrid({
                   <span className="inline-flex items-center gap-0.5 text-xs text-amber-600 flex-shrink-0">
                     <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
                     {vendor.rating.toFixed(1)}
+                    {vendor.ratingCount ? (
+                      <span className="text-slate-400 ml-0.5">
+                        ({vendor.ratingCount})
+                      </span>
+                    ) : null}
                   </span>
                 ) : null}
               </div>

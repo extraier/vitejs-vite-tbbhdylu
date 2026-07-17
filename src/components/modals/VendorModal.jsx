@@ -1,6 +1,7 @@
 import { X, Star, ImageIcon } from 'lucide-react';
+import { ReviewsPanel } from '../ReviewsPanel';
 
-export function VendorModal({ vendor, onClose }) {
+export function VendorModal({ vendor, onClose, currentUser, currentUserRole }) {
   if (!vendor) return null;
   return (
     <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
@@ -68,6 +69,21 @@ export function VendorModal({ vendor, onClose }) {
                   />
                 </div>
               ))}
+            </div>
+
+            {/* 2026-07-17 — Couple reviews & rating composer. */}
+            <h3 className="text-xl font-bold text-slate-800 mb-4 mt-10 flex items-center gap-2">
+              💬 評語
+              <span className="text-sm font-normal text-slate-500">
+                ({vendor.ratingCount || 0} 個)
+              </span>
+            </h3>
+            <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100">
+              <ReviewsPanel
+                vendor={vendor}
+                currentUser={currentUser}
+                currentUserRole={currentUserRole}
+              />
             </div>
           </div>
         </div>

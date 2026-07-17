@@ -461,6 +461,9 @@ export * from './templates';
 // 2026-07-11: vendor onboarding & self-service (applyAsVendor,
 // updateMyVendorProfile, uploadVendorPortfolio). Lives in ./vendors.ts.
 export * from './vendors';
+// 2026-07-17: vendor ratings & reviews (submitRating, deleteMyRating,
+// listVendorRatings). Lives in ./ratings.ts.
+export * from './ratings';
 
 export const grantAdmin = onCall(async (req) => {
   if (!req.auth) {

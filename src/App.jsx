@@ -1870,6 +1870,8 @@ export default function App() {
       <VendorModal
         vendor={viewingVendorProfile}
         onClose={() => setViewingVendorProfile(null)}
+        currentUser={user}
+        currentUserRole={userRole}
       />
       <FullscreenSlideshow
         photos={eventPhotos}

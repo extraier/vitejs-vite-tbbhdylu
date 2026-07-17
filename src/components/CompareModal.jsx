@@ -48,71 +48,129 @@ export function CompareModal({ vendors, onClose, onToggleFavorite, favoriteIds }
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const cols = Math.max(2, Math.min(3, vendors.length));
+  const cols = Math.max(2, Math.min(5, vendors.length));
 
-  async function handleExport() {
+  // Render the exportRef subtree to a canvas using html2canvas-pro.
+  // Returns the canvas so the caller can decide whether to encode
+  // PNG, add it to a PDF page, or do something else.
+  async function renderToCanvas() {
+    const html2canvas = await loadHtml2Canvas();
+    const node = exportRef.current;
+    if (!node) throw new Error('exportRef not mounted');
+    return await html2canvas(node, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      windowWidth: Math.max(node.offsetWidth, 1024),
+      logging: false,
+    });
+  }
+
+  function tsFilename(ext) {
+    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    return `SaveTheDay-compare-${ts}.${ext}`;
+  }
+
+  function shareOrDownloadBlob(blob, filename, mime) {
+    const file = new File([blob], filename, { type: mime });
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.share &&
+      navigator.canShare &&
+      navigator.canShare({ files: [file] })
+    ) {
+      try {
+        // Use IIFE for async/await inside the synchronous path so the
+        // caller can `return` early.
+        (async () => {
+          try {
+            await navigator.share({
+              files: [file],
+              title: 'Save The Day — 商戶比較',
+              text: '商戶比較結果 🛍️',
+            });
+          } catch (_) {
+            downloadAnchor(blob, filename);
+          }
+        })();
+        return true;
+      } catch (_) {
+        // canShare threw — fall through
+      }
+    }
+    return false;
+  }
+
+  function downloadAnchor(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  async function handlePngExport() {
     if (!exportRef.current || exporting) return;
     setExporting(true);
     setExportError(null);
     try {
-      const html2canvas = await loadHtml2Canvas();
-      const node = exportRef.current;
-      const canvas = await html2canvas(node, {
-        // Render at 2x for crisp output on retina + better print quality.
-        scale: 2,
-        // Use the actual node background; falls back to white if unset.
-        backgroundColor: '#ffffff',
-        // CORS-friendly: html2canvas-pro sets `crossOrigin="anonymous"`
-        // on the relevant elements so cross-origin images don't taint
-        // the canvas.
-        useCORS: true,
-        // Allow the bitmap to be larger than the viewport (we typically
-        // only render up to 3 columns which fits, but this is a safety
-        // net).
-        windowWidth: Math.max(node.offsetWidth, 1024),
-        // Lower the chance of image flickering in the captured frame.
-        logging: false,
-      });
+      const canvas = await renderToCanvas();
       const blob = await new Promise((resolve) =>
         canvas.toBlob(resolve, 'image/png', 0.95),
       );
-      if (!blob) {
-        throw new Error('toBlob produced null — try a smaller scale');
-      }
-      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-      const filename = `SaveTheDay-compare-${ts}.png`;
-      // Mobile-friendly path: Web Share API can handoff the file.
-      const file = new File([blob], filename, { type: 'image/png' });
-      if (
-        typeof navigator !== 'undefined' &&
-        navigator.share &&
-        navigator.canShare &&
-        navigator.canShare({ files: [file] })
-      ) {
-        try {
-          await navigator.share({
-            files: [file],
-            title: 'Save The Day — 商戶比較',
-            text: '商戶比較結果 🛍️',
-          });
-          return;
-        } catch (_) {
-          // User cancelled or share failed — fall back to download.
-        }
-      }
-      // Desktop path: anchor.click() to trigger download.
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      if (!blob) throw new Error('toBlob 失敗 (try reducing scale)');
+      const filename = tsFilename('png');
+      const shared = shareOrDownloadBlob(blob, filename, 'image/png');
+      if (!shared) downloadAnchor(blob, filename);
     } catch (e) {
       // eslint-disable-next-line no-console
       console.warn('PNG export failed:', e?.message || e);
-      setExportError(e?.message || '匯出失敗');
+      setExportError(e?.message || 'PNG 匯出失敗');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function handlePdfExport() {
+    if (!exportRef.current || exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const canvas = await renderToCanvas();
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      if (!dataUrl || dataUrl === 'data:,') {
+        throw new Error('toDataURL 失敗 — 圖片可能 CORS 污染');
+      }
+      // Lazy-load jspdf so the heavy bundle isn't in the initial chunk.
+      const { jsPDF } = await import('jspdf');
+      // Match canvas aspect ratio: jpeg dimensions
+      const w = canvas.width;
+      const h = canvas.height;
+      // A4 landscape — but we want the PDF page to fit the comparison
+      // image regardless of orientation. Use the image's intrinsic
+      // width / 2 (canvas is at 2x scale) as the page width in mm,
+      // and proportion the height similarly.
+      const pageWidthMm = Math.min(420, Math.max(180, w / 4)); // cap so it fits landscape A4
+      const pageHeightMm = (h / w) * pageWidthMm;
+      const orientation =
+        pageWidthMm > pageHeightMm ? 'landscape' : 'portrait';
+      const pdf = new jsPDF({
+        orientation,
+        unit: 'mm',
+        format: [pageWidthMm, pageHeightMm],
+      });
+      pdf.addImage(dataUrl, 'JPEG', 0, 0, pageWidthMm, pageHeightMm, undefined, 'FAST');
+      const blob = pdf.output('blob');
+      const filename = tsFilename('pdf');
+      const shared = shareOrDownloadBlob(blob, filename, 'application/pdf');
+      if (!shared) downloadAnchor(blob, filename);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('PDF export failed:', e?.message || e);
+      setExportError(e?.message || 'PDF 匯出失敗');
     } finally {
       setExporting(false);
     }
@@ -125,7 +183,7 @@ export function CompareModal({ vendors, onClose, onToggleFavorite, favoriteIds }
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-3xl w-full max-w-6xl shadow-2xl animate-in zoom-in-95 duration-200 max-h-[92vh] overflow-hidden flex flex-col"
+        className="bg-white rounded-3xl w-full max-w-6xl xl:max-w-[1500px] 2xl:max-w-[1700px] shadow-2xl animate-in zoom-in-95 duration-200 max-h-[92vh] overflow-hidden flex flex-col"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 flex-shrink-0">
@@ -136,24 +194,20 @@ export function CompareModal({ vendors, onClose, onToggleFavorite, favoriteIds }
             </span>
           </h3>
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={handleExport}
-              disabled={exporting}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-bold transition-all border ${
-                exporting
-                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-wait'
-                  : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-400 hover:text-emerald-600'
-              }`}
+            <ExportButton
+              onClick={handlePngExport}
+              label="PNG"
               title="將商戶比較結果儲存為 PNG 圖片"
-            >
-              {exporting ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Download className="w-4 h-4" />
-              )}
-              {exporting ? '匯出中...' : '儲存為圖片'}
-            </button>
+              exporting={exporting}
+              tone="emerald"
+            />
+            <ExportButton
+              onClick={handlePdfExport}
+              label="PDF"
+              title="將商戶比較結果儲存為 PDF 文件"
+              exporting={exporting}
+              tone="indigo"
+            />
             <button
               type="button"
               onClick={onClose}
@@ -203,7 +257,11 @@ export function CompareModal({ vendors, onClose, onToggleFavorite, favoriteIds }
                   ? 'grid-cols-1'
                   : vendors.length === 2
                   ? 'grid-cols-1 md:grid-cols-2'
-                  : 'grid-cols-1 md:grid-cols-3'
+                  : vendors.length === 3
+                  ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
+                  : vendors.length === 4
+                  ? 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'
+                  : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5'
               }`}
             >
               {vendors.map((v) => (
@@ -281,6 +339,11 @@ function VendorColumn({ vendor, onToggleFavorite, isFavorited, exportMode }) {
             <span className="inline-flex items-center gap-1 text-sm text-amber-600 mt-1">
               <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
               {vendor.rating.toFixed(1)}
+              {vendor.ratingCount ? (
+                <span className="text-slate-400 ml-0.5">
+                  ({vendor.ratingCount} 個評分)
+                </span>
+              ) : null}
             </span>
           ) : null}
         </div>
@@ -339,5 +402,36 @@ function CompareRow({ label, children }) {
       </div>
       <div>{children}</div>
     </div>
+  );
+}
+
+// Small button primitive for PNG/PDF export actions.
+function ExportButton({ onClick, label, title, exporting, tone }) {
+  const toneClasses =
+    tone === 'indigo'
+      ? 'hover:border-indigo-400 hover:text-indigo-600'
+      : 'hover:border-emerald-400 hover:text-emerald-600';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={exporting}
+      title={title}
+      aria-label={title}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-bold transition-all border ${
+        exporting
+          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-wait'
+          : `bg-white text-slate-600 border-slate-200 ${toneClasses}`
+      }`}
+    >
+      {exporting ? (
+        <Loader2 className="w-4 h-4 animate-spin" />
+      ) : (
+        <Download className="w-4 h-4" />
+      )}
+      <span className="hidden sm:inline">
+        {exporting ? '匯出中...' : label}
+      </span>
+    </button>
   );
 }
