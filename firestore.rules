@@ -272,6 +272,31 @@ service cloud.firestore {
           allow create, update: if isOwner(ownerUid);
           allow delete: if isOwner(ownerUid);
         }
+
+        // ---- 2026-07-17: Big-day orchestration suite ---------------------
+        // Five parallel collections under /users/{ownerUid}:
+        //   • rundown   — 大日流程 (time-slot timeline)
+        //   • resources — 物資/兄弟姊妹分配清單
+        //   • teaCeremony — 敬茶 & 大影相名單 (長輩/新娘/新郎)
+        //   • playlist  — 歌單建議 (按儀式 moments 分組)
+        //   • checklist_ext — (currently unused — kept for parity with old
+        //     docs that may exist in some environments)
+        // All four are owner-only CRUD. Helpers are NOT given access
+        // here on purpose: 大日 is the couple's master plan, and
+        // helpers see only what they need at scan time (guest list +
+        // helperPerms.canViewChecklist for tasks).
+        match /rundown/{entryId} {
+          allow read, write: if isOwner(ownerUid);
+        }
+        match /resources/{itemId} {
+          allow read, write: if isOwner(ownerUid);
+        }
+        match /teaCeremony/{personId} {
+          allow read, write: if isOwner(ownerUid);
+        }
+        match /playlist/{songId} {
+          allow read, write: if isOwner(ownerUid);
+        }
       }
 
       // ---- Public marketplace (vendor discovery) -----------------------
