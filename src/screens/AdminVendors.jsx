@@ -683,9 +683,7 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
     const updates = {};
     if (name !== (vendor.name || '')) updates.name = name.trim();
     if (category !== (vendor.category || '')) updates.category = category.trim();
-    if (category) updates.category = category.trim(); // ensure set even if unchanged (defensive)
-    // Persist subcategory as a string (or null to clear). Always include
-    // when category has subs so server gets a consistent value.
+    // Persist subcategory as a string (or null to clear).
     const newSub = subcategory || null;
     const oldSub = vendor.subcategory || null;
     if (newSub !== oldSub) {
@@ -739,7 +737,13 @@ function VendorEditModal({ vendor, onClose, onSaved }) {
       await fn({ vendorUid: vendor.vendorUid, updates });
       onSaved({ vendorUid: vendor.vendorUid, ...updates });
     } catch (err) {
-      setError(err?.message || '儲存失敗');
+      // The Cloud Functions SDK compresses HttpsError codes; expose
+      // them in the UI instead of just the message string so we don't
+      // chase misleading "internal" messages.
+      const code = err?.code || '';
+      const message = err?.message || String(err);
+      console.error('[VendorEdit] save failed', { code, message, updates });
+      setError(message ? (code ? `(${code}) ${message}` : message) : '儲存失敗');
     } finally {
       setSaving(false);
     }
