@@ -27,8 +27,8 @@ import { Briefcase, Mail, Lock, Loader2, Globe } from 'lucide-react';
 const STRINGS = {
   zh: {
     badge: '我是商戶',
-    title: '加入囍程商戶指南',
-    tagline: '加入囍程商戶指南，5 分鐘填表，立即收到全港新人查詢。',
+    title: '加入 Save The Day 商戶指南',
+    tagline: '加入 Save The Day 商戶指南，5 分鐘填表，立即收到全港新人查詢。',
     nameLabel: '商戶名稱 / 工作室名',
     namePlaceholder: '例：ABC Wedding Studio',
     emailPlaceholder: '電郵地址',

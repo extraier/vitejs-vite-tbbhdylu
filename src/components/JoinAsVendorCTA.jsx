@@ -26,7 +26,7 @@ export function JoinAsVendorCTA({ user, onJoin }) {
         <div className="flex-1">
           <h3 className="text-lg font-bold mb-1">我是商戶 / For Vendors</h3>
           <p className="text-sm text-slate-300 mb-3">
-            加入囍程商戶指南，接觸全港新人。5 分鐘填表，立即收到查詢。
+            加入 Save The Day 商戶指南，接觸全港新人。5 分鐘填表，立即收到查詢。
           </p>
           <button
             type="button"

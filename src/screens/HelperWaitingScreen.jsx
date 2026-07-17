@@ -27,7 +27,7 @@ export function HelperWaitingScreen({
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <Heart className="w-16 h-16 text-rose-500 mx-auto mb-4 fill-rose-100" />
-          <h1 className="text-3xl font-black text-slate-800 mb-2">囍程 · 兄弟姊妹</h1>
+          <h1 className="text-3xl font-black text-slate-800 mb-2">Save The Day · 兄弟姊妹</h1>
           <p className="text-slate-500 text-sm">婚禮助手專用入口</p>
         </div>
 

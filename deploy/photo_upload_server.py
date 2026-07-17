@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Photo upload server for Save The Day 囍程.
+Photo upload server for Save The Day.
 
 Replaces Firebase Storage for guest photo uploads (cheaper, owner-controlled).
 

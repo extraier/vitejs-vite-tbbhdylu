@@ -463,7 +463,7 @@ function renderEmailHtml(args: {
             <p style="margin:8px 0 0;font-size:11px;color:#6366f1;font-family:monospace;">入場請出示此 QR Code</p>
           </div>
           <a href="{{PRIMARY_QR}}" style="display:inline-block;margin-top:24px;padding:14px 32px;background:#e11d48;color:#fff;text-decoration:none;border-radius:12px;font-weight:700;font-size:14px;">開啟專屬電子喜帖</a>
-          <p style="margin:24px 0 0;font-size:11px;color:#94a3b8;font-family:monospace;">Save The Day · 囍程</p>
+          <p style="margin:24px 0 0;font-size:11px;color:#94a3b8;font-family:monospace;">Save The Day</p>
         </td></tr>
       </table>
     </td></tr>

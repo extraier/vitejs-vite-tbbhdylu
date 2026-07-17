@@ -28,7 +28,7 @@ export function PersonalGuestPortal({
           <h2 className="text-xl font-black tracking-widest mb-1 relative z-10">
             {eventName || '婚禮晚宴'}
           </h2>
-          <p className="text-white/60 text-xs font-mono relative z-10">Save The Day 囍程</p>
+          <p className="text-white/60 text-xs font-mono relative z-10">Save The Day</p>
         </div>
 
         <div className="p-6 -mt-6 relative z-20">

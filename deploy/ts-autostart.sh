@@ -41,7 +41,7 @@ CLOUDFLARED_LOG="/tmp/cloudflared.log"
 # CF Tunnel connects outbound to CF edge; routes talmii.com / www.talmii.com
 # traffic to http://127.0.0.1:9877 (the local fli-data-server).
 
-# Photo upload server (Save The Day 囍程 guest photo upload, replaces Firebase Storage).
+# Photo upload server (Save The Day guest photo upload, replaces Firebase Storage).
 # Receives multipart uploads at Funnel path /upload, serves files back at /photos.
 PHOTO_UPLOAD_SERVER="/home/openclaw/bin/photo_upload_server.py"
 PHOTO_UPLOAD_PORT=9879

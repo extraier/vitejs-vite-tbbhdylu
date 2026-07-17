@@ -1446,7 +1446,7 @@ export default function App() {
                       else setCurrentView('couple-checklist');
                     }}
                   >
-                    <Heart className="w-6 h-6 fill-rose-500 text-rose-500" /> 囍程
+                    <Heart className="w-6 h-6 fill-rose-500 text-rose-500" /> Save The Day
                     <span className="text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded ml-2">
                       主控台
                     </span>

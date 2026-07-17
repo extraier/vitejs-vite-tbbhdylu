@@ -153,7 +153,7 @@ export function VendorDashboard({
             </span>
           </div>
           <p className="text-sm text-emerald-800 mb-4">
-            以下係透過「囍程」被新人直接指派嘅工作項目。即時更新，按優先排序。
+            以下係透過 Save The Day 被新人直接指派嘅工作項目。即時更新，按優先排序。
           </p>
           <ul className="space-y-2">
             {assignedTasks.map((t) => (

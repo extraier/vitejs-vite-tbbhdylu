@@ -147,7 +147,7 @@ export function InvitationCard({
           className="text-[10px] mt-6 font-mono"
           style={{ color: bgUrl ? 'rgba(255,255,255,0.6)' : t.palette.muted }}
         >
-          Save The Day · 囍程
+          Save The Day
         </p>
       </div>
     </div>

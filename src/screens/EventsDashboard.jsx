@@ -12,7 +12,7 @@ export function EventsDashboard({ events, newEventName, onNewEventNameChange, on
     <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
       <div className="text-center mb-12">
         <Heart className="w-16 h-16 text-rose-500 mx-auto mb-4 fill-rose-100" />
-        <h1 className="text-4xl font-black text-slate-800 mb-2">囍程 總大堂</h1>
+        <h1 className="text-4xl font-black text-slate-800 mb-2">Save The Day · 總大堂</h1>
         <p className="text-slate-500">建立或選擇你想管理的婚禮專案</p>
       </div>
 

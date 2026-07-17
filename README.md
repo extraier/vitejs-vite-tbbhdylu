@@ -1,4 +1,4 @@
-# Wedding App (囍程)
+# Save The Day (香港婚禮 SaaS)
 
 [![CI](https://github.com/extraier/vitejs-vite-tbbhdylu/actions/workflows/ci.yml/badge.svg)](https://github.com/extraier/vitejs-vite-tbbhdylu/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/extraier/vitejs-vite-tbbhdylu/actions/workflows/codeql.yml/badge.svg)](https://github.com/extraier/vitejs-vite-tbbhdylu/actions/workflows/codeql.yml)

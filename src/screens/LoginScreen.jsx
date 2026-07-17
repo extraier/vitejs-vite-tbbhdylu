@@ -239,8 +239,12 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
         <div className="bg-white p-8 md:p-10 rounded-[2rem] shadow-2xl w-full text-center border border-slate-100 relative overflow-hidden animate-in fade-in zoom-in duration-500">
           <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-rose-400 to-pink-500"></div>
           <Heart className="w-16 h-16 text-rose-500 fill-rose-500 mx-auto mb-6" />
-          <h1 className="text-3xl font-black text-slate-800 tracking-wider mb-2">囍程</h1>
-          <h2 className="text-xl font-bold text-slate-600 mb-6">Save The Day</h2>
+          <h1 className="text-4xl font-black text-slate-800 tracking-wider mb-2">
+            Save The Day
+          </h1>
+          <p className="text-sm font-bold text-slate-500 tracking-widest uppercase mb-6">
+            Hong Kong Wedding Platform
+          </p>
           <p className="text-slate-500 mb-6 text-sm leading-relaxed">{t.tagline}</p>
 
           {/* Google button */}
@@ -437,7 +441,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               <h3 className="text-sm font-bold mb-1">{lang === 'zh' ? '我是商戶' : 'For Vendors'}</h3>
               <p className="text-xs text-slate-300 mb-2">
                 {lang === 'zh'
-                  ? '加入囍程商戶指南，接觸全港新人。先註冊帳號再填寫商戶資料。'
+                  ? '加入 Save The Day 商戶指南，接觸全港新人。先註冊帳號再填寫商戶資料。'
                   : 'Join the directory to reach HK couples. Sign up first, then complete your vendor profile.'}
               </p>
               <a
@@ -473,7 +477,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
         </section>
 
         <p className="text-center text-xs text-slate-400 mt-8">
-          © 2026 囍程 Save The Day · Hong Kong
+          © 2026 Save The Day · Hong Kong Wedding Platform
         </p>
       </div>
     </div>

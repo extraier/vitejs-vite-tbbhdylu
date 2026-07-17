@@ -44,7 +44,7 @@ export function VendorInviteModal({ contact, onClose }) {
   function inviteMessage() {
     return (
       `Hi ${contact.vendorName || '你好'}！👋\n\n` +
-      `我哋正籌備緊婚禮，想邀請你加入「囍程 Save The Day」婚禮平台，方便日後一齊跟進工作進度同報價。\n\n` +
+      `我哋正籌備緊婚禮，想邀請你加入「Save The Day」婚禮平台，方便日後一齊跟進工作進度同報價。\n\n` +
       `免費註冊連結：${signupUrl}\n\n` +
       `註冊後我哋就可以直接喺 app 內傾偈！謝謝 🙏`
     );
@@ -82,7 +82,7 @@ export function VendorInviteModal({ contact, onClose }) {
 
         <div className="p-5 space-y-4 text-sm text-slate-700">
           <p className="leading-relaxed">
-            呢位商戶仲未加入「囍程」，所以 app 內即時通訊暫時用唔到。
+            呢位商戶仲未加入「Save The Day」，所以 app 內即時通訊暫時用唔到。
             <br />
             用以下任何一個方式邀請對方註冊，註冊後你哋就可以直接喺 app 內傾偈：
           </p>

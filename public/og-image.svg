@@ -14,6 +14,6 @@
   <!-- Heart -->
   <path d="M600 230 C600 170, 540 130, 480 170 C420 130, 360 170, 360 230 C360 290, 600 410, 600 410 C600 410, 840 290, 840 230 C840 170, 780 130, 720 170 C660 130, 600 170, 600 230 Z" fill="#f43f5e"/>
   <!-- Title -->
-  <text x="600" y="490" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="120" fill="#1e293b" letter-spacing="8">囍程</text>
+  <text x="600" y="490" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="120" fill="#1e293b" letter-spacing="8">Save The Day</text>
   <text x="600" y="565" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-weight="700" font-size="46" fill="#475569">Save The Day · Hong Kong Wedding SaaS</text>
 </svg>
