@@ -28,6 +28,12 @@ export function HelperManager({ ownerUid, onClose }) {
     const [invitePerms, setInvitePerms] = useState(defaultHelperPerms());
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
+    // 2026-07-18 — Copy-link state. Set when an email-send
+    // fails so the owner can still share the signup URL
+    // manually. Rendered as a code block + 複製連結 button under
+    // the error prose. Lives separately from `error` so the
+    // prose doesn't have to embed the URL twice.
+    const [copyLink, setCopyLink] = useState(null);
 
   // 2026-07-17 — Subscribe to BOTH /helpers and /pendingInvites in
   // parallel. We need both because:
@@ -114,6 +120,7 @@ export function HelperManager({ ownerUid, onClose }) {
     if (!inviteEmail || !inviteName) return;
     setBusy(true);
     setError(null);
+    setCopyLink(null);  // 2026-07-18 — clear stale copy-link on retry
     try {
       // 2026-07-18 — Step 1: invoke the cloud function, which writes
       // the placeholder doc. CF returns { ok, helperUid, pendingEmailRegistration }.
@@ -153,6 +160,7 @@ export function HelperManager({ ownerUid, onClose }) {
             inviteEmail.trim().toLowerCase(),
           );
           setError('📧 已發送邀請電郵。對方點擊連結即可加入。');
+          setCopyLink(null);  // clear if a previous attempt left one
         } catch (emailErr) {
           // 2026-07-18 — Surface a more diagnostic message than
           // the generic Firebase Auth error. The most common
@@ -188,7 +196,10 @@ export function HelperManager({ ownerUid, onClose }) {
           const fallback =
             '請到 Firebase Console > Authentication > Sign-in method，啟用「Email/Password」的「Email link (passwordless sign-in)」；並到 Settings > Authorized Domains 加入 savetheday.io。';
           setError(
-            `⚠️ 邀請已儲存，但電郵未能發送。\n\n錯誤 (${code}): ${reason}\n\n${fallback}\n\n未解決前可手動複製此連結傳俾對方：\nhttps://savetheday.io/?__heroinvite=1&email=${encodeURIComponent(inviteEmail.trim().toLowerCase())}`,
+            `⚠️ 邀請已儲存，但電郵未能發送。\n\n錯誤 (${code}): ${reason}\n\n${fallback}\n\n未解決前可手動複製下方連結傳俾對方：`,
+          );
+          setCopyLink(
+            `https://savetheday.io/?__heroinvite=1&email=${encodeURIComponent(inviteEmail.trim().toLowerCase())}`,
           );
         }
       }
@@ -241,38 +252,31 @@ export function HelperManager({ ownerUid, onClose }) {
           </button>
         </div>
 
-        {error && (() => {
-          // 2026-07-18 — Detect a copyable signup link inside the
-          // message so the modal can offer a one-click copy. Falls
-          // back to plain text for everything else.
-          const linkMatch = error.match(/https:\/\/savetheday\.io\/\?[^\s]+/);
-          const link = linkMatch ? linkMatch[0] : null;
-          return (
-            <div className="mx-6 mt-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm whitespace-pre-line">
-              {error}
-              {link && (
-                <div className="mt-3 flex items-center gap-2">
-                  <code className="flex-1 p-2 bg-white border border-rose-200 rounded font-mono text-xs break-all">
-                    {link}
-                  </code>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      try {
-                        navigator.clipboard?.writeText(link);
-                      } catch {
-                        /* noop */
-                      }
-                    }}
-                    className="px-2 py-1 rounded bg-rose-600 text-white text-xs font-bold hover:bg-rose-700"
-                  >
-                    複製連結
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })()}
+        {error && (
+          <div className="mx-6 mt-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm whitespace-pre-line">
+            {error}
+            {copyLink && (
+              <div className="mt-3 flex items-center gap-2">
+                <code className="flex-1 p-2 bg-white border border-rose-200 rounded font-mono text-xs break-all">
+                  {copyLink}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      navigator.clipboard?.writeText(copyLink);
+                    } catch {
+                      /* noop */
+                    }
+                  }}
+                  className="px-2 py-1 rounded bg-rose-600 text-white text-xs font-bold hover:bg-rose-700"
+                >
+                  複製連結
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="px-6 pt-4 flex gap-1 border-b border-slate-100">
           <TabButton active={activeTab === 'active'} onClick={() => setActiveTab('active')}>
