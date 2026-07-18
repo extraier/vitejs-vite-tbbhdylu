@@ -88,6 +88,16 @@ interface SendHelperInviteEmailResult {
 
 export const sendHelperInviteEmail = onCall(
   {
+    // 2026-07-18 — MISSING `cors: true` + `region: 'us-central1'` was the
+    // root cause of the CORS preflight block! Every other helper CF in
+    // index.ts uses { cors: true, region: 'us-central1' }. Without
+    // `cors: true`, the v2 onCall handler does NOT install the
+    // Access-Control-Allow-Origin preflight response handler, so the
+    // browser blocks the POST with a generic CORS error and the
+    // frontend sees `{message: 'internal'}` (which is why the catch
+    // block fired and the console warn read "FirebaseError: internal").
+    cors: true,
+    region: 'us-central1',
     timeoutSeconds: 60,
     memory: '256MiB',
     secrets: [SMTP_URL, SMTP_FROM, APP_BASE_URL],
@@ -241,6 +251,33 @@ async function _sendHelperInviteEmailImpl(req: any): Promise<SendHelperInviteEma
 
   return { ok: true, sent: true };
 }
+
+// 2026-07-18 — V2 alias. The CF control plane keeps recreating the
+// v1 deployment within seconds of any delete operation ("Resource
+// already exists" 409s on every redeploy). Rather than fight GCP,
+// we deploy under a fresh name and the front-end calls this new
+// entry point. Once GCP behaviour is healthy, V1 + V2 can be merged.
+export const sendHelperInviteEmailV2 = onCall(
+  {
+    cors: true,
+    region: 'us-central1',
+    timeoutSeconds: 60,
+    memory: '256MiB',
+    secrets: [SMTP_URL, SMTP_FROM, APP_BASE_URL],
+  },
+  async (req: any): Promise<SendHelperInviteEmailResult> => {
+    // Same impl as V1 — wraps any unhandled exception into HttpsError.
+    try {
+      return await _sendHelperInviteEmailImpl(req);
+    } catch (err: unknown) {
+      if (err instanceof HttpsError) throw err;
+      const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      // eslint-disable-next-line no-console
+      console.error('[sendHelperInviteEmailV2] unhandled error:', msg);
+      throw new HttpsError('internal', msg);
+    }
+  },
+);
 
 // ────────────────────────────────────────────────────────────────────────────
 // HTML template — Traditional-Chinese, rose-pink gradient hero, max-width

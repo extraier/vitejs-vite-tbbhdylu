@@ -156,9 +156,12 @@ async function acceptHelperInviteFn() {
 }
 
 // 2026-07-18 — Rich Traditional-Chinese helper-invite SMTP email.
-// sendHelperInviteEmail renders a branded HTML template and sends
+// sendHelperInviteEmailV2 renders a branded HTML template and sends
 // via Nodemailer (uses the same From / Reply-To envelope as the
-// e-card flow). Returns `{ ok, sent, dryRun?, html?, magicLinkUrl? }`.
+// e-card flow). The V2 suffix is only because the v1 stuck-CF-control-
+// plane is wedged — GCP keeps recreating it within seconds of any
+// delete. Once GCP returns the v1 to healthy, we can re-merge.
+// Returns `{ ok, sent, dryRun?, html?, magicLinkUrl? }`.
 // The front-end's HelperManager handleInvite uses this FIRST, falling
 // back to sendSignInLinkToEmail if the callable throws — preserves
 // the existing safety net while upgrading the visual quality.
@@ -174,7 +177,7 @@ async function sendHelperInviteEmailFn(args: {
   role?: string;
 }) {
   const fns = getFunctions();
-  const fn = httpsCallable(fns, 'sendHelperInviteEmail');
+  const fn = httpsCallable(fns, 'sendHelperInviteEmailV2');
   const res = await fn(args);
   return res.data as {
     ok: boolean;
