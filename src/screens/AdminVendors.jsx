@@ -36,6 +36,8 @@ import {
   CheckCircle2,
   XCircle,
   Pause,
+  // 2026-07-18 — batch CSV import CTA inside the header.
+  FileSpreadsheet,
 } from 'lucide-react';
 
 import { VendorModal } from '../components/modals/VendorModal';
@@ -136,7 +138,7 @@ function StatusBadge({ status }) {
   );
 }
 
-export function AdminVendors({ user, isAdmin }) {
+export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
   const [vendors, setVendors] = useState([]);
   const [total, setTotal] = useState(0);
   const [nextPageToken, setNextPageToken] = useState(null);
@@ -271,12 +273,24 @@ export function AdminVendors({ user, isAdmin }) {
 
   return (
     <div className="max-w-7xl mx-auto mt-8 px-4 pb-16">
-      <div className="mb-8">
-        <div className="flex items-center gap-3 mb-2">
-          <Store className="w-8 h-8 text-emerald-600" />
-          <h1 className="text-3xl font-black text-slate-900">商戶控制台</h1>
+      <div className="mb-8 flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <Store className="w-8 h-8 text-emerald-600" />
+            <h1 className="text-3xl font-black text-slate-900">商戶控制台</h1>
+          </div>
+          <p className="text-slate-500">查看所有商戶資料，編輯內容或刪除違規商戶。</p>
         </div>
-        <p className="text-slate-500">查看所有商戶資料，編輯內容或刪除違規商戶。</p>
+        {onOpenImportVendors && (
+          <button
+            type="button"
+            onClick={onOpenImportVendors}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold rounded-xl shadow-sm"
+            title="從 CSV 檔批次匯入多個商戶"
+          >
+            <FileSpreadsheet className="w-4 h-4" /> 批次匯入商戶 (CSV)
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

@@ -71,6 +71,7 @@ import { DiscoverDirectory } from './screens/DiscoverDirectory';
 import { VendorAnalytics } from './screens/VendorAnalytics';
 import { AdminUsers } from './screens/AdminUsers';
 import { AdminVendors } from './screens/AdminVendors';
+import { AdminImportVendors } from './screens/AdminImportVendors';
 import { VendorOnboarding } from './screens/VendorOnboarding';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
@@ -2017,7 +2018,20 @@ export default function App() {
 
             {/* Admin-only: vendor CRUD (list / edit / delete) */}
             {isAdmin && currentView === 'admin-vendors' && (
-              <AdminVendors user={user} isAdmin={isAdmin} />
+              <AdminVendors
+                user={user}
+                isAdmin={isAdmin}
+                onOpenImportVendors={() => setCurrentView('admin-import-vendors')}
+              />
+            )}
+
+            {/* Admin-only: batch vendor CSV import (entry from admin-vendors) */}
+            {isAdmin && currentView === 'admin-import-vendors' && (
+              <AdminImportVendors
+                user={user}
+                isAdmin={isAdmin}
+                onBack={() => setCurrentView('admin-vendors')}
+              />
             )}
 
             {(userRole === 'owner' || userRole === 'reception') &&
