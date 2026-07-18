@@ -155,29 +155,40 @@ export function HelperManager({ ownerUid, onClose }) {
           setError('📧 已發送邀請電郵。對方點擊連結即可加入。');
         } catch (emailErr) {
           // 2026-07-18 — Surface a more diagnostic message than
-          // the generic Firebase Auth error. The two common
-          // failure modes are:
+          // the generic Firebase Auth error. The most common
+          // failure modes when calling sendSignInLinkToEmail are:
           //   (a) Email-link sign-in method isn't enabled in
           //       Firebase Console > Authentication > Sign-in
-          //       method. Fix: enable "Email/Password" + "Email
-          //       link (passwordless sign-in)".
+          //       method. Yields `auth/operation-not-allowed` OR
+          //       `auth/argument-error` depending on the SDK
+          //       version.
           //   (b) `savetheday.io` isn't in Authorized Domains.
-          //       Fix: Firebase Console > Authentication >
-          //       Settings > Authorized Domains > Add domain.
-          // Don't fail the invite — the doc is already saved. The
-          // owner can still share the link manually if they want.
+          //       Yields `auth/unauthorized-domain`.
+          //   (c) Cloud Firestore auth state / email quota issues
+          //       (rare).
+          // We map both (a) variants to the same hint, plus a
+          // generic fallback that ALWAYS points at the Firebase
+          // Console, so even with a fresh error code we don't lose
+          // the helpful instruction.
           // eslint-disable-next-line no-console
           console.warn('[HelperManager] email send failed:', emailErr);
           const code = emailErr?.code || 'unknown';
           const msg = emailErr?.message || String(emailErr);
-          const reason =
-            code === 'auth/operation-not-allowed'
-              ? 'Firebase 尚未開啟 Email Link 登入 (Authentication > Sign-in method > Email/Password > Email link)。'
-              : code === 'auth/unauthorized-domain'
-                ? 'savetheday.io 不在 Firebase 認可域名內 (Authentication > Settings > Authorized Domains)。'
-                : msg;
+          const isAuthConfigErr =
+            code === 'auth/operation-not-allowed' ||
+            code === 'auth/argument-error' ||
+            code === 'auth/unauthorized-domain' ||
+            code === 'auth/invalid-action-code' ||
+            code === 'auth/missing-android-pkg-name' ||
+            code === 'auth/missing-continue-uri' ||
+            code === 'auth/missing-ios-bundle-id';
+          const reason = isAuthConfigErr
+            ? 'Firebase 尚未開啟「Email link (passwordless sign-in)」登入方法，或 savetheday.io 不在 Authorized Domains。'
+            : msg;
+          const fallback =
+            '請到 Firebase Console > Authentication > Sign-in method，啟用「Email/Password」的「Email link (passwordless sign-in)」；並到 Settings > Authorized Domains 加入 savetheday.io。';
           setError(
-            `⚠️ 邀請已儲存，但電郵未能發送。\n\n錯誤 (${code}): ${reason}\n\n解法：到 Firebase Console 開啟 Email Link 登入，並將 savetheday.io 加入 Authorized Domains。解決前可手動複製此連結傳俾對方。`,
+            `⚠️ 邀請已儲存，但電郵未能發送。\n\n錯誤 (${code}): ${reason}\n\n${fallback}\n\n未解決前可手動複製此連結傳俾對方：\nhttps://savetheday.io/?__heroinvite=1&email=${encodeURIComponent(inviteEmail.trim().toLowerCase())}`,
           );
         }
       }
@@ -230,11 +241,38 @@ export function HelperManager({ ownerUid, onClose }) {
           </button>
         </div>
 
-        {error && (
-          <div className="mx-6 mt-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm">
-            {error}
-          </div>
-        )}
+        {error && (() => {
+          // 2026-07-18 — Detect a copyable signup link inside the
+          // message so the modal can offer a one-click copy. Falls
+          // back to plain text for everything else.
+          const linkMatch = error.match(/https:\/\/savetheday\.io\/\?[^\s]+/);
+          const link = linkMatch ? linkMatch[0] : null;
+          return (
+            <div className="mx-6 mt-4 p-3 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-sm whitespace-pre-line">
+              {error}
+              {link && (
+                <div className="mt-3 flex items-center gap-2">
+                  <code className="flex-1 p-2 bg-white border border-rose-200 rounded font-mono text-xs break-all">
+                    {link}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try {
+                        navigator.clipboard?.writeText(link);
+                      } catch {
+                        /* noop */
+                      }
+                    }}
+                    className="px-2 py-1 rounded bg-rose-600 text-white text-xs font-bold hover:bg-rose-700"
+                  >
+                    複製連結
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="px-6 pt-4 flex gap-1 border-b border-slate-100">
           <TabButton active={activeTab === 'active'} onClick={() => setActiveTab('active')}>
