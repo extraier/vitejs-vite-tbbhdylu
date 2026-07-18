@@ -20,7 +20,7 @@ import {
 const STRINGS = {
   zh: {
     tagline:
-      '全港首個具備實時 QR Code 入席、相片收集箱及預算管理的一站式婚禮 SaaS 平台。',
+      '全港創新一站式婚禮管理平台。 Save your big day with endless vendor choices. Save your big day with timeless memories.',
     googleCta: '使用 Google 帳號登入',
     emailPlaceholder: '電郵地址',
     passwordPlaceholder: '密碼',
