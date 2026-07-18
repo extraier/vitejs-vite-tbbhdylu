@@ -26,6 +26,19 @@ import * as crypto from 'crypto';
 initializeApp();
 const db = getFirestore();
 
+// 2026-07-18 — Cloud functions were reading/writing under
+// `.collection('artifacts').doc(appId)` (random doc ID). Every Firestore
+// read+write from the client SDK goes to
+// `.doc('savetheday-production')`. So the functions were creating
+// docs in a parallel, isolated namespace that no client could
+// ever see. Fix: every CF that touches /artifacts must hard-code
+// `appId = 'savetheday-production'` (matching the constant in the
+// front-end lib/firebase.ts) so the function writes land where
+// the client reads. Without this, `inviteHelper`, `acceptHelperInvite`,
+// issueGuestLink, redeemGuestLink, vendor profile sync, etc.
+// silently fail to land data the user can see.
+const appId = 'savetheday-production';
+
 const HMAC_KEY = defineSecret('LINK_SECRET');
 
 // HMAC-SHA256 of `${ownerUid}|${eventId}|${guestId}|${expiresAt}`.
@@ -83,7 +96,7 @@ export const issueGuestLink = onCall(
     // hasn't redeemed yet). The client receives the docId + token and
     // embeds them in the QR URL.
     const linkRef = db
-      .collection('artifacts').doc() // any appId
+      .collection('artifacts').doc(appId) // any appId
       .collection('users').doc(ownerUid)
       .collection('guestLinks').doc();
 
@@ -147,7 +160,7 @@ export const redeemGuestLink = onCall(
     // the old one (best-effort).
     const ownerUid = link.ownerUid;
     const newRef = db
-      .collection('artifacts').doc()
+      .collection('artifacts').doc(appId)
       .collection('users').doc(ownerUid)
       .collection('guestLinks').doc(authUid);
 
@@ -297,7 +310,7 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
   if (helperUid) {
     // User exists — write to helpers/{uid}.
     await db
-      .collection('artifacts').doc()
+      .collection('artifacts').doc(appId)
       .collection('users').doc(ownerUid)
       .collection('helpers').doc(helperUid)
       .set(helperDoc);
@@ -306,7 +319,7 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
     // When they later sign up with this email, a client-side trigger
     // (or a Cloud Function onAuthCreate) migrates it.
     await db
-      .collection('artifacts').doc()
+      .collection('artifacts').doc(appId)
       .collection('users').doc(ownerUid)
       .collection('pendingInvites').doc(email.toLowerCase())
       .set(helperDoc);
@@ -347,7 +360,7 @@ export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, 
     const data = doc.data();
     const ownerUid = data.ownerUid;
     const newRef = db
-      .collection('artifacts').doc()
+      .collection('artifacts').doc(appId)
       .collection('users').doc(ownerUid)
       .collection('helpers').doc(authUid);
 
@@ -377,7 +390,7 @@ export const revokeHelper = onCall({ cors: true, region: "us-central1" }, async 
   if (!helperUid) throw new HttpsError('invalid-argument', 'helperUid required.');
 
   const helperRef = db
-    .collection('artifacts').doc()
+    .collection('artifacts').doc(appId)
     .collection('users').doc(req.auth.uid)
     .collection('helpers').doc(helperUid);
 
@@ -415,7 +428,7 @@ export const updateHelperPerms = onCall({ cors: true, region: "us-central1" }, a
   }
 
   const helperRef = db
-    .collection('artifacts').doc()
+    .collection('artifacts').doc(appId)
     .collection('users').doc(req.auth.uid)
     .collection('helpers').doc(helperUid);
 
