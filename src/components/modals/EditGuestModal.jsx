@@ -24,7 +24,14 @@ export function EditGuestModal({ isOpen, guest, onClose, onSave, onDelete }) {
   const handleSave = (e) => {
     e.preventDefault();
     if (!form.name.trim()) return;
-    onSave({ ...form, headCount: parseInt(form.headCount, 10) || 1 });
+    // 2026-07-18 — Coerce empty tableNumber → '未分配' so the data
+    // layer stays consistent with the new "leave blank" UX.
+    const tableNumber = form.tableNumber.trim() || '未分配';
+    onSave({
+      ...form,
+      headCount: parseInt(form.headCount, 10) || 1,
+      tableNumber,
+    });
   };
 
   const handleDelete = () => {
@@ -90,14 +97,17 @@ export function EditGuestModal({ isOpen, guest, onClose, onSave, onDelete }) {
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-600 mb-1">人數</label>
-              <input
-                type="number"
-                min="1"
-                required
-                className="w-full p-2.5 rounded-lg border border-slate-300 outline-none"
+              <select
+                className="w-full p-2.5 rounded-lg border border-slate-300 outline-none bg-white"
                 value={form.headCount}
-                onChange={(e) => setForm({ ...form, headCount: e.target.value })}
-              />
+                onChange={(e) => setForm({ ...form, headCount: parseInt(e.target.value, 10) || 1 })}
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                  <option key={n} value={n}>
+                    {n} 位
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 

@@ -286,7 +286,12 @@ export default function App() {
     name: '',
     group: '男家親戚',
     headCount: 1,
-    tableNumber: '未分配',
+    // 2026-07-18 — UX: leave tableNumber empty in the form so the user
+    // sees a blank input rather than the placeholder string "未分配".
+    // We coerce empty → '未分配' at write time so the data layer stays
+    // consistent (WeddingDay filter + GuestList rendering both rely on
+    // the literal string '未分配').
+    tableNumber: '',
   });
   // Restore 2026-07-02: family-form state for household expandable rows
   const [familyForm, setFamilyForm] = useState({
@@ -1320,16 +1325,21 @@ export default function App() {
     e.preventDefault();
     if (!user || !currentEvent || !newGuestForm.name) return;
     const guestId = Math.random().toString(36).substring(2, 8).toUpperCase();
+    // 2026-07-18 — Coerce empty tableNumber → '未分配' at write time so
+    // the data layer stays consistent. Form shows blank, doc stores the
+    // sentinel.
+    const tableNumber = newGuestForm.tableNumber.trim() || '未分配';
     const newGuest = {
       eventId: currentEvent.id,
       guestId,
       ...newGuestForm,
+      tableNumber,
       hasAttended: false,
       hasGifted: false,
       giftAmount: 0,
     };
     await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'guests'), newGuest);
-    setNewGuestForm({ name: '', group: '男家親戚', headCount: 1, tableNumber: '未分配' });
+    setNewGuestForm({ name: '', group: '男家親戚', headCount: 1, tableNumber: '' });
     showToast('✅ 嘉賓已加入名單，已生成專屬 QR Code！');
   };
 

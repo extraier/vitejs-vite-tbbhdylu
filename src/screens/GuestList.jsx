@@ -179,20 +179,22 @@ export function GuestList({
                         <option>VIP</option>
                         <option>其他</option>
                       </select>
-                      <input
-                        type="number"
-                        min="1"
-                        required
-                        placeholder="人數"
-                        className="w-full p-2.5 rounded-lg border border-slate-300 outline-none"
+                      <select
+                        className="w-full p-2.5 rounded-lg border border-slate-300 outline-none bg-white"
                         value={newGuestForm.headCount}
                         onChange={(e) =>
                           onNewGuestFormChange({
                             ...newGuestForm,
-                            headCount: parseInt(e.target.value) || 1,
+                            headCount: parseInt(e.target.value, 10) || 1,
                           })
                         }
-                      />
+                      >
+                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                          <option key={n} value={n}>
+                            {n} 位
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <input
                       type="text"
