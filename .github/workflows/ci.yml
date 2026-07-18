@@ -134,7 +134,7 @@ jobs:
         run: cd functions && npm run build && cd ..
 
       - name: Deploy rules + functions
-        if: ${{ secrets.FIREBASE_TOKEN }}
+        if: ${{ secrets.FIREBASE_TOKEN != '' }}
         run: |
           firebase login:ci --token "$FIREBASE_TOKEN"
           firebase deploy --only firestore:rules,functions --non-interactive --project savetheday-2377a
@@ -142,13 +142,13 @@ jobs:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Deploy hosting (optional)
-        if: ${{ secrets.FIREBASE_TOKEN }}
+        if: ${{ secrets.FIREBASE_TOKEN != '' }}
         continue-on-error: true
         run: firebase deploy --only hosting --non-interactive --project savetheday-2377a
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Skip notice (no FIREBASE_TOKEN configured)
-        if: ${{ !secrets.FIREBASE_TOKEN }}
+        if: ${{ secrets.FIREBASE_TOKEN == '' }}
         run: |
           echo "::warning::FIREBASE_TOKEN secret not configured — skipping deploy. See .github/SETUP.md."
