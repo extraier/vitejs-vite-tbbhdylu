@@ -369,7 +369,24 @@ export function CoupleChecklist({
 
   const filteredVendors = useMemo(() => {
     if (!activeCategory) return [];
-    let matched = vendors.filter((v) => v.category === activeCategory);
+    // 2026-07-18 — Subcategory-aware smart-match. Tasks may store
+    // category as either a bare top-level key (e.g. 'photo_video')
+    // OR a 'top.sub' namespace ('photo_video.photographer'). When a
+    // subcategory is in scope we narrow to vendors whose category
+    // matches the top AND whose subcategory matches the sub. When
+    // there's no sub (or the key didn't split) we keep the legacy
+    // top-only filter, which is the documented v1 behaviour.
+    let matched;
+    const dotIdx = activeCategory.indexOf('.');
+    if (dotIdx > 0) {
+      const top = activeCategory.slice(0, dotIdx);
+      const sub = activeCategory.slice(dotIdx + 1);
+      matched = vendors.filter(
+        (v) => v.category === top && v.subcategory === sub,
+      );
+    } else {
+      matched = vendors.filter((v) => v.category === activeCategory);
+    }
 
     // Stable per-vendor helpers so the comparator stays readable.
     const venueMatchScore = (v) =>
