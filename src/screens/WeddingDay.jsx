@@ -11,6 +11,7 @@ import {
   GripVertical,
   Search,
   Play,
+  Pause,
   Users,
   Package,
 } from 'lucide-react';
@@ -996,6 +997,12 @@ function PlaylistTab({ songs, onUpsert, onDelete, currentUserUid }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  // 2026-07-18 — P1 inline audio preview. We track which song id is
+  // currently playing so that tapping a different row stops the
+  // previous one (only one preview at a time across the whole tab).
+  // Storing the id, not the player ref, is enough — the iframe URL
+  // reacts to playingYtId and re-mounts cleanly.
+  const [playingYtId, setPlayingYtId] = useState(null);
 
   const grouped = useMemo(() => {
     const out = {};
@@ -1078,6 +1085,13 @@ function PlaylistTab({ songs, onUpsert, onDelete, currentUserUid }) {
                   key={song.id}
                   song={song}
                   currentUserUid={currentUserUid}
+                  // 2026-07-18 — P1 inline preview wiring: SongRow
+                  // reports its own playing state up; PlaylistTab
+                  // flips off whichever row was playing before.
+                  isPlaying={playingYtId === song.id}
+                  onTogglePlay={(ytId) =>
+                    setPlayingYtId((prev) => (prev === ytId ? null : ytId))
+                  }
                   onVote={() => {
                     const votes = new Set(song.votes || []);
                     if (votes.has(currentUserUid)) votes.delete(currentUserUid);
@@ -1101,7 +1115,7 @@ function PlaylistTab({ songs, onUpsert, onDelete, currentUserUid }) {
   );
 }
 
-function SongRow({ song, currentUserUid, onVote, onDelete }) {
+function SongRow({ song, currentUserUid, isPlaying, onTogglePlay, onVote, onDelete }) {
   const voted = (song.votes || []).includes(currentUserUid);
   const ytId = youtubeId(song.link);
 
@@ -1109,24 +1123,53 @@ function SongRow({ song, currentUserUid, onVote, onDelete }) {
     <div className="px-4 py-3 flex gap-3 items-start">
       <div className="flex-shrink-0 w-20">
         {ytId ? (
-          <a
-            href={song.link}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block relative aspect-video bg-slate-900 rounded-lg overflow-hidden group"
-          >
-            <img
-              src={`https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`}
-              alt={song.title}
-              className="w-full h-full object-cover opacity-90 group-hover:opacity-100"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }}
-            />
-            <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity">
-              <Play className="w-7 h-7 text-white" />
+          // 2026-07-18 — P1 inline preview. We render an iframe when
+          // this row is the active one (autoplay=1, modest UI). When
+          // the user taps the same thumbnail again we lift `null`
+          // up to PlaylistTab, which causes us to fall back to the
+          // static thumbnail. Tapping a different row's thumbnail
+          // causes the previous iframe to unmount cleanly because
+          // its parent re-renders without that branch.
+          isPlaying ? (
+            <div className="block relative aspect-video bg-slate-900 rounded-lg overflow-hidden">
+              <iframe
+                title={`preview-${song.id}`}
+                src={`https://www.youtube-nocookie.com/embed/${ytId}?autoplay=1&modestbranding=1&playsinline=1&rel=0`}
+                allow="autoplay; encrypted-media"
+                allowFullScreen
+                className="absolute inset-0 w-full h-full"
+              />
+              <button
+                type="button"
+                onClick={() => onTogglePlay(song.id)}
+                className="absolute top-1 right-1 bg-black/60 hover:bg-black/80 text-white rounded-full p-1"
+                aria-label="停止播放"
+                title="停止播放"
+              >
+                <Pause className="w-3 h-3" />
+              </button>
             </div>
-          </a>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onTogglePlay(song.id)}
+              className="block w-full relative aspect-video bg-slate-900 rounded-lg overflow-hidden group"
+              aria-label={`播放 ${song.title}`}
+              title={`播放 ${song.title}`}
+            >
+              <img
+                src={`https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`}
+                alt={song.title}
+                className="w-full h-full object-cover opacity-90 group-hover:opacity-100"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity">
+                <Play className="w-7 h-7 text-white" />
+              </div>
+            </button>
+          )
         ) : (
           <div className="aspect-video rounded-lg bg-slate-100 flex items-center justify-center">
             <Music2 className="w-5 h-5 text-slate-400" />
