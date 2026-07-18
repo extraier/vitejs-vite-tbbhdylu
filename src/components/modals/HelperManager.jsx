@@ -143,6 +143,56 @@ export function HelperManager({ ownerUid, onClose }) {
       // helper to re-enter the address — otherwise the link click
       // would only land them on a blank screen.
       if (inviteRes?.pendingEmailRegistration) {
+        // 2026-07-18 — Try the rich SMTP email FIRST. The new
+        // sendHelperInviteEmail cloud function renders a branded
+        // Traditional-Chinese HTML template (rose gradient hero,
+        // couple's name in From, etc.) and sends via the same
+        // Nodemailer envelope as the e-card flow.
+        //
+        // We still want the client-side sendSignInLinkToEmail as
+        // a safety net — that call works even when SMTP_URL is
+        // unset (delivered through Firebase's built-in templates),
+        // so the existing UX is preserved if the rich path fails
+        // for any reason (network, CF cold-start, permission, etc).
+        let richEmailOk = false;
+        try {
+          const smtpRes = await helpersApi.sendInviteEmail({
+            ownerUid,
+            helperEmail: inviteEmail.trim().toLowerCase(),
+            helperDisplayName: inviteName.trim(),
+            role: 'wedding helper',
+          });
+          if (smtpRes?.sent) {
+            // Rich email delivered via SMTP — we're done. No need to
+            // call sendSignInLinkToEmail; the magic link inside the
+            // rich HTML is the same shape and will land on the same
+            // `?__heroinvite=1` URL.
+            richEmailOk = true;
+            window.localStorage.setItem(
+              '__heroinvite_email',
+              inviteEmail.trim().toLowerCase(),
+            );
+            setError('📧 精美電郵已發送。對方點擊連結即可加入。');
+            setCopyLink(null);
+          } else if (smtpRes?.dryRun && smtpRes?.magicLinkUrl) {
+            // SMTP_URL not configured on the server (dev/test path).
+            // Surface the magic link so the owner can share it
+            // manually, then ALSO fall through to sendSignInLinkToEmail
+            // (which uses Firebase's built-in delivery and works
+            // without SMTP secrets).
+            setCopyLink(smtpRes.magicLinkUrl);
+            // Fall through to sendSignInLinkToEmail below.
+          }
+        } catch (smtpErr) {
+          // 2026-07-18 — SMTP path failed (cold start, CF error,
+          // network, etc.). Log and fall back to the client-side
+          // sendSignInLinkToEmail path. Never let the rich-email
+          // failure block the invite.
+          // eslint-disable-next-line no-console
+          console.warn('[HelperManager] rich SMTP email failed, falling back to Firebase Auth email link:', smtpErr);
+        }
+
+        if (!richEmailOk) {
         try {
           await sendSignInLinkToEmail(
             auth,
@@ -169,8 +219,12 @@ export function HelperManager({ ownerUid, onClose }) {
             '__heroinvite_email',
             inviteEmail.trim().toLowerCase(),
           );
+          // 2026-07-18 — Distinguish the two paths in the success
+          // message so the owner knows which one delivered. If the
+          // SMTP path above already set a copyLink for dryRun mode,
+          // it's still rendered underneath this message by the JSX
+          // (the copyLink state is independent of the error message).
           setError('📧 已發送邀請電郵。對方點擊連結即可加入。');
-          setCopyLink(null);  // clear if a previous attempt left one
         } catch (emailErr) {
           // 2026-07-18 — Surface a more diagnostic message than
           // the generic Firebase Auth error. The most common
@@ -215,10 +269,18 @@ export function HelperManager({ ownerUid, onClose }) {
           setError(
             `⚠️ 邀請已儲存，但電郵未能發送。\n\n錯誤 (${code}): ${reason}\n\n${fallback}\n\n未解決前可手動複製下方連結傳俾對方：`,
           );
-          setCopyLink(
-            `https://savetheday.io/?__heroinvite=1&email=${encodeURIComponent(inviteEmail.trim().toLowerCase())}`,
-          );
+          // 2026-07-18 — Prefer the SMTP-server-generated magic link
+          // (from sendHelperInviteEmail dryRun) over the locally
+          // crafted one. The server version is the canonical URL
+          // and matches what the deployed AuthScreen would have
+          // signed-into.
+          if (!copyLink) {
+            setCopyLink(
+              `https://savetheday.io/?__heroinvite=1&email=${encodeURIComponent(inviteEmail.trim().toLowerCase())}`,
+            );
+          }
         }
+        } // end if (!richEmailOk)
       }
       setInviteEmail('');
       setInviteName('');

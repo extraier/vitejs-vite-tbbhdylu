@@ -484,6 +484,14 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 // Restore 2026-07-02: re-export sendInvitations (defined in invitations.ts)
 export * from './invitations';
 
+// 2026-07-18: helper invite SMTP email (Traditional-Chinese rich HTML).
+// The callable lives in ./helpersMail.ts — re-exported here so
+// `firebase deploy --only functions` picks it up automatically. The
+// front-end calls sendHelperInviteEmail right after inviteHelper when
+// pendingEmailRegistration === true, falling back to the client-side
+// sendSignInLinkToEmail path if this callable throws.
+export * from './helpersMail';
+
 // 2026-07-03: admin-only invitation template editor.
 // The callable lives in ./templates.ts (updateTemplate) — re-exported
 // here so `firebase deploy --only functions` picks it up automatically.

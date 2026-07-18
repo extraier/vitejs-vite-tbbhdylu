@@ -155,11 +155,43 @@ async function acceptHelperInviteFn() {
   return res.data as { ok: boolean; accepted: { ownerUid: string; perms: HelperPerms }[] };
 }
 
+// 2026-07-18 — Rich Traditional-Chinese helper-invite SMTP email.
+// sendHelperInviteEmail renders a branded HTML template and sends
+// via Nodemailer (uses the same From / Reply-To envelope as the
+// e-card flow). Returns `{ ok, sent, dryRun?, html?, magicLinkUrl? }`.
+// The front-end's HelperManager handleInvite uses this FIRST, falling
+// back to sendSignInLinkToEmail if the callable throws — preserves
+// the existing safety net while upgrading the visual quality.
+//
+// ownerName / eventName are optional — the cloud function falls back
+// to collectionGroup('users') to resolve the owner's display name.
+async function sendHelperInviteEmailFn(args: {
+  ownerUid: string;
+  helperEmail: string;
+  helperDisplayName: string;
+  ownerName?: string;
+  eventName?: string;
+  role?: string;
+}) {
+  const fns = getFunctions();
+  const fn = httpsCallable(fns, 'sendHelperInviteEmail');
+  const res = await fn(args);
+  return res.data as {
+    ok: boolean;
+    sent: boolean;
+    dryRun?: boolean;
+    html?: string;
+    magicLinkUrl?: string;
+    error?: string;
+  };
+}
+
 export const helpersApi = {
   invite: inviteHelperFn,
   revoke: revokeHelperFn,
   updatePerms: updateHelperPermsFn,
   accept: acceptHelperInviteFn,
+  sendInviteEmail: sendHelperInviteEmailFn,
 };
 
 // ---- Client-side filter for gift amounts --------------------------------
