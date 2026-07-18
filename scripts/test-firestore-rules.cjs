@@ -467,7 +467,15 @@ async function runTests() {
   process.exit(failed === 0 ? 0 : 1);
 }
 
-seedAliceData()
+// 2026-07-18 — Seed functions reach for `env.authenticatedContext()` at
+// call time, so `setup()` (which builds env) must run before them.
+// Previously the chain was `seedAliceData → seedBobData → runTests`,
+// and `setup()` only ran inside `runTests()`. That made env
+// undefined at the seed phase — the very first test step would die
+// with `Cannot read properties of undefined (reading
+// 'authenticatedContext')`. We now call `setup()` first.
+setup()
+  .then(seedAliceData)
   .then(seedBobData)
   .then(runTests)
   .catch((e) => {
