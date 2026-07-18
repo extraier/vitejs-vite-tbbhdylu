@@ -1179,22 +1179,21 @@ export default function App() {
   // to `data` (and same for deleteWeddingDoc) restores the calls
   // — see git blame if you're curious why all four tabs were
   // silently failing to persist writes today.
+  // Per-collection wrappers — pass these to <WeddingDay/>:
   const upsertWeddingDoc = async (name, data) => {
-    if (!user || !data?.id) {
-      // eslint-disable-next-line no-console
-      console.warn('[upsertWeddingDoc] bailed — missing user or id:', { name, hasUser: !!user, hasId: !!data?.id });
-      return;
-    }
+    if (!user || !data?.id) return;
     const ref = doc(db, 'artifacts', appId, 'users', user.uid, name, data.id);
     // Strip the id itself — Firestore stores it as the doc key
     const { id: _id, ...rest } = data;
     try {
       await setDoc(ref, { ...rest, eventId: currentEvent?.id || null, updatedAt: Date.now() }, { merge: true });
-      // eslint-disable-next-line no-console
-      console.info('[upsertWeddingDoc] wrote', name, data.id);
     } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('[upsertWeddingDoc] FAILED', name, data.id, err?.code, err?.message, err);
+      // 2026-07-18 — the error stays visible to the user via
+      // the surrounding screen's UI fallbacks; we used to
+      // console.log here while tracking down the original
+      // `setDoc is not defined` ReferenceError. Now that
+      // `setDoc` is properly imported (commit a08523d) we
+      // can rethrow cleanly and stop spamming the dev console.
       throw err;
     }
   };
@@ -1973,6 +1972,11 @@ export default function App() {
                 onUpsertPlaylist={handleUpsertPlaylist}
                 onDeletePlaylist={handleDeletePlaylist}
                 currentUser={user}
+                // 2026-07-18 — pass the active helpers list down so
+                // 大日流程/物資 can offer a 兄弟姊妹 picker. Already
+                // subscribed in App.jsx (line 610) for use by the
+                // wedding-tasks panel — just plumb it through.
+                helpers={helpers}
               />
             )}
 

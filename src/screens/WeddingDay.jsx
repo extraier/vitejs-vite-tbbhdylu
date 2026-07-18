@@ -77,16 +77,98 @@ const RUNDOWN_GROUP_LABELS = {
   after: '送客 / 結尾',
 };
 
-function RundownTab({ entries, onUpsert, onDelete, onReorder }) {
+// 2026-07-18 — Reusable helper-picker chip group. Lets the couple
+// tag 大日流程 or 物資 items with one or more 兄弟姊妹. Stored on
+// the item as `assignedHelpers: [{id,name,uid}]` (uid empty for
+// free-typed names — used as the "before invite" fallback).
+function HelperPicker({ helpers = [], value = [], onChange }) {
+  const add = (h) => {
+    if (value.find((x) => x.id === h.id)) return;
+    onChange([...value, h]);
+  };
+  const remove = (id) => onChange(value.filter((x) => x.id !== id));
+  return (
+    <div>
+      <label className="text-xs font-bold text-slate-600 mb-1 block">
+        兄弟姊妹 / 負責人
+      </label>
+      <div className="flex flex-wrap gap-1.5 mb-1.5">
+        {value.map((h) => (
+          <span
+            key={h.id}
+            className="inline-flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200"
+          >
+            <span>{h.name || h.id}</span>
+            <button
+              type="button"
+              onClick={() => remove(h.id)}
+              className="text-indigo-500 hover:text-indigo-900 leading-none"
+              aria-label="移除"
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+        {value.length === 0 && (
+          <span className="text-xs text-slate-400">未分配</span>
+        )}
+      </div>
+      {helpers.length > 0 && (
+        <select
+          value=""
+          onChange={(e) => {
+            const hid = e.target.value;
+            const h = helpers.find((x) => x.id === hid);
+            if (h) add({ id: h.id, name: h.displayName || h.name || '?', uid: h.helperUid || '' });
+          }}
+          className="w-full p-2 rounded-lg border border-slate-300 text-xs bg-white"
+        >
+          <option value="">+ 從已邀請嘅兄弟姊妹加入...</option>
+          {helpers
+            .filter((h) => !value.find((x) => x.id === h.id))
+            .map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.displayName || h.name || h.email}
+              </option>
+            ))}
+        </select>
+      )}
+      <input
+        type="text"
+        placeholder="或自行輸入名 (例: 表姊 KC)"
+        value=""
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+            const name = e.currentTarget.value.trim();
+            const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            add({ id, name, uid: '' });
+            e.currentTarget.value = '';
+            e.preventDefault();
+          }
+        }}
+        className="w-full mt-1 p-2 rounded-lg border border-slate-300 text-xs"
+      />
+    </div>
+  );
+}
+
+function RundownTab({ entries, onUpsert, onDelete, onReorder, helpers }) {
   const [editing, setEditing] = useState(null);
   const [filterGroup, setFilterGroup] = useState('all');
+  const [filterAssigned, setFilterAssigned] = useState('all');
+
+  const unassignedCount = (entries || []).filter(
+    (e) => !e.assignedHelpers || e.assignedHelpers.length === 0,
+  ).length;
 
   const sorted = useMemo(() => {
     let s = [...(entries || [])];
     s.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
     if (filterGroup !== 'all') s = s.filter((e) => (e.group || 'prep') === filterGroup);
+    if (filterAssigned === 'unassigned')
+      s = s.filter((e) => !e.assignedHelpers || e.assignedHelpers.length === 0);
     return s;
-  }, [entries, filterGroup]);
+  }, [entries, filterGroup, filterAssigned]);
 
   const counts = useMemo(() => {
     const out = { all: (entries || []).length };
@@ -116,9 +198,17 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder }) {
             label={`${lbl} (${counts[g] || 0})`}
           />
         ))}
+        {unassignedCount > 0 && (
+          <FilterPill
+            active={filterAssigned === 'unassigned'}
+            onClick={() => setFilterAssigned(filterAssigned === 'unassigned' ? 'all' : 'unassigned')}
+            label={`⚠️ 未分配 (${unassignedCount})`}
+          />
+        )}
       </div>
 
       <NewEntryRow
+        helpers={helpers}
         onSubmit={(data) => {
           onUpsert({ id: `rd-${Date.now()}`, ...data });
         }}
@@ -134,6 +224,7 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder }) {
           <RundownCard
             key={entry.id}
             entry={entry}
+            helpers={helpers}
             isFirst={idx === 0}
             isLast={idx === sorted.length - 1}
             isEditing={editing === entry.id}
@@ -168,7 +259,7 @@ function FilterPill({ active, onClick, label }) {
   );
 }
 
-function RundownCard({ entry, isEditing, isFirst, isLast, onEdit, onCancel, onSave, onDelete, onMoveUp, onMoveDown }) {
+function RundownCard({ entry, helpers, isEditing, isFirst, isLast, onEdit, onCancel, onSave, onDelete, onMoveUp, onMoveDown }) {
   const [draft, setDraft] = useState({
     startTime: entry.startTime || '12:00',
     durationMin: entry.durationMin || 30,
@@ -176,6 +267,7 @@ function RundownCard({ entry, isEditing, isFirst, isLast, onEdit, onCancel, onSa
     location: entry.location || '',
     notes: entry.notes || '',
     group: entry.group || 'prep',
+    assignedHelpers: entry.assignedHelpers || [],
   });
 
   if (isEditing) {
@@ -231,6 +323,13 @@ function RundownCard({ entry, isEditing, isFirst, isLast, onEdit, onCancel, onSa
             onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
             className="col-span-12 p-2 rounded-lg border border-slate-300 text-sm resize-none"
           />
+          <div className="col-span-12">
+            <HelperPicker
+              helpers={helpers}
+              value={draft.assignedHelpers}
+              onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
+            />
+          </div>
         </div>
         <div className="flex justify-end gap-2">
           <button
@@ -281,11 +380,33 @@ function RundownCard({ entry, isEditing, isFirst, isLast, onEdit, onCancel, onSa
         )}
       </div>
       <div className="flex-grow min-w-0">
-        <div className="flex items-center gap-2 mb-1">
+        <div className="flex items-center gap-2 mb-1 flex-wrap">
           <span className="font-bold text-slate-800 truncate">{entry.title}</span>
           {entry.group && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-600 uppercase tracking-wide">
               {RUNDOWN_GROUP_LABELS[entry.group] || entry.group}
+            </span>
+          )}
+          {entry.assignedHelpers && entry.assignedHelpers.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {entry.assignedHelpers.map((h) => (
+                <span
+                  key={h.id}
+                  className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200"
+                  title={h.uid ? `已邀請 (uid: ${h.uid})` : '尚未邀請'}
+                >
+                  <Users className="w-2.5 h-2.5" />
+                  {h.name || h.id}
+                </span>
+              ))}
+            </div>
+          )}
+          {(!entry.assignedHelpers || entry.assignedHelpers.length === 0) && (
+            <span
+              className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200"
+              title="尚未分配 兄弟姊妹"
+            >
+              ⚠️ 未分配
             </span>
           )}
         </div>
@@ -314,7 +435,7 @@ function RundownCard({ entry, isEditing, isFirst, isLast, onEdit, onCancel, onSa
   );
 }
 
-function NewEntryRow({ onSubmit }) {
+function NewEntryRow({ onSubmit, helpers }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
     startTime: '12:00',
@@ -323,6 +444,7 @@ function NewEntryRow({ onSubmit }) {
     location: '',
     notes: '',
     group: 'reception',
+    assignedHelpers: [],
   });
 
   if (!open) {
@@ -385,6 +507,13 @@ function NewEntryRow({ onSubmit }) {
           onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
           className="col-span-12 p-2 rounded-lg border border-slate-300 text-sm resize-none"
         />
+        <div className="col-span-12">
+          <HelperPicker
+            helpers={helpers}
+            value={draft.assignedHelpers}
+            onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
+          />
+        </div>
       </div>
       <div className="flex justify-end gap-2">
         <button
@@ -397,7 +526,7 @@ function NewEntryRow({ onSubmit }) {
           onClick={() => {
             if (!draft.title.trim()) return;
             onSubmit({ ...draft, createdAt: Date.now() });
-            setDraft({ startTime: '12:00', durationMin: 30, title: '', location: '', notes: '', group: 'reception' });
+            setDraft({ startTime: '12:00', durationMin: 30, title: '', location: '', notes: '', group: 'reception', assignedHelpers: [] });
             setOpen(false);
           }}
           className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700"
@@ -422,7 +551,7 @@ const RESOURCE_CATEGORIES = {
   other: '其他',
 };
 
-function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser }) {
+function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser, helpers }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
 
@@ -430,8 +559,15 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser }) {
     if (filter === 'all') return items || [];
     if (filter === 'todo') return (items || []).filter((i) => !i.checked);
     if (filter === 'mine') return (items || []).filter((i) => i.assignedToId === (currentUser?.uid || ''));
+    if (filter === 'unassigned') return (items || []).filter(
+      (i) => !i.assignedToName && !(i.assignedHelpers && i.assignedHelpers.length > 0),
+    );
     return (items || []).filter((i) => (i.category || 'other') === filter);
   }, [items, filter, currentUser]);
+
+  const unassignedCount = (items || []).filter(
+    (i) => !i.assignedToName && !(i.assignedHelpers && i.assignedHelpers.length > 0),
+  ).length;
 
   const grouped = useMemo(() => {
     const out = {};
@@ -453,6 +589,13 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser }) {
         <FilterPill active={filter === 'all'} onClick={() => setFilter('all')} label={`全部 (${items?.length || 0})`} />
         <FilterPill active={filter === 'todo'} onClick={() => setFilter('todo')} label={`未完成 (${(items || []).filter((i) => !i.checked).length})`} />
         <FilterPill active={filter === 'mine'} onClick={() => setFilter('mine')} label={`我負責 (${(items || []).filter((i) => i.assignedToId === (currentUser?.uid || '')).length})`} />
+        {unassignedCount > 0 && (
+          <FilterPill
+            active={filter === 'unassigned'}
+            onClick={() => setFilter(filter === 'unassigned' ? 'all' : 'unassigned')}
+            label={`⚠️ 未分配 (${unassignedCount})`}
+          />
+        )}
         {Object.entries(RESOURCE_CATEGORIES).map(([c, lbl]) => (
           <FilterPill
             key={c}
@@ -463,7 +606,10 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser }) {
         ))}
       </div>
 
-      <NewResourceRow onSubmit={(d) => onUpsert({ id: `rs-${Date.now()}`, ...d })} />
+      <NewResourceRow
+        helpers={helpers}
+        onSubmit={(d) => onUpsert({ id: `rs-${Date.now()}`, ...d })}
+      />
 
       {Object.entries(grouped).map(([cat, list]) => (
         <div key={cat} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -494,7 +640,8 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser }) {
                   >
                     {item.label}
                   </div>
-                  {(item.qty || item.assignedToName || item.notes) && (
+                  {(item.qty || item.assignedToName || item.notes ||
+                    (item.assignedHelpers && item.assignedHelpers.length > 0)) && (
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-xs text-slate-500">
                       {item.qty && <span>數量: <b className="text-slate-700">{item.qty}</b></span>}
                       {item.assignedToName && (
@@ -502,6 +649,18 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser }) {
                           <Users className="w-3 h-3" />
                           負責: <b className="text-rose-600">{item.assignedToName}</b>
                         </span>
+                      )}
+                      {item.assignedHelpers && item.assignedHelpers.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {item.assignedHelpers.map((h) => (
+                            <span
+                              key={h.id}
+                              className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700"
+                            >
+                              {h.name || h.id}
+                            </span>
+                          ))}
+                        </div>
                       )}
                       {item.notes && <span>📝 {item.notes}</span>}
                     </div>
@@ -530,13 +689,14 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser }) {
   );
 }
 
-function NewResourceRow({ onSubmit }) {
+function NewResourceRow({ onSubmit, helpers }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
     label: '',
     qty: '',
     category: 'decor',
     assignedToName: '',
+    assignedHelpers: [],
     notes: '',
   });
 
@@ -586,6 +746,13 @@ function NewResourceRow({ onSubmit }) {
           onChange={(e) => setDraft({ ...draft, assignedToName: e.target.value })}
           className="col-span-4 p-2 rounded-lg border border-slate-300 text-sm"
         />
+        <div className="col-span-12">
+          <HelperPicker
+            helpers={helpers}
+            value={draft.assignedHelpers}
+            onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
+          />
+        </div>
         <input
           type="text"
           placeholder="備註 (可選)"
@@ -605,7 +772,7 @@ function NewResourceRow({ onSubmit }) {
           onClick={() => {
             if (!draft.label.trim()) return;
             onSubmit({ ...draft, checked: false, createdAt: Date.now() });
-            setDraft({ label: '', qty: '', category: 'decor', assignedToName: '', notes: '' });
+            setDraft({ label: '', qty: '', category: 'decor', assignedToName: '', assignedHelpers: [], notes: '' });
             setOpen(false);
           }}
           className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700"
@@ -1320,6 +1487,9 @@ export function WeddingDay({
   onUpsertPlaylist,
   onDeletePlaylist,
   currentUser,
+  // 2026-07-18 — pass the active helper list down so rundown and
+  // resources tabs can offer a 兄弟姊妹 picker for each item.
+  helpers = [],
 }) {
   const [active, setActive] = useState('rundown');
 
@@ -1355,6 +1525,7 @@ export function WeddingDay({
             onDelete={onDeleteResource}
             onToggle={onToggleResource}
             currentUser={currentUser}
+            helpers={helpers}
           />
         )}
         {active === 'teaCeremony' && (
