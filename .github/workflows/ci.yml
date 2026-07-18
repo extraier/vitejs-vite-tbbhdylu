@@ -133,22 +133,31 @@ jobs:
       - name: Build functions
         run: cd functions && npm run build && cd ..
 
+      # 2026-07-18 — GitHub Actions does NOT allow `if: ${{ secrets.X }}`
+      # to be evaluated (it's a security hardening). The previous
+      # syntax was throwing "Unrecognized named-value: 'secrets'"
+      # parser errors on every push. Workaround: just always run
+      # the step and bail inside the shell when the secret is
+      # empty. Adds a few seconds of overhead when there's no
+      # token, but no more email-spam failures.
       - name: Deploy rules + functions
-        if: ${{ secrets.FIREBASE_TOKEN != '' }}
         run: |
+          if [ -z "$FIREBASE_TOKEN" ]; then
+            echo "::warning::FIREBASE_TOKEN secret not configured — skipping deploy. See .github/SETUP.md."
+            exit 0
+          fi
           firebase login:ci --token "$FIREBASE_TOKEN"
           firebase deploy --only firestore:rules,functions --non-interactive --project savetheday-2377a
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Deploy hosting (optional)
-        if: ${{ secrets.FIREBASE_TOKEN != '' }}
         continue-on-error: true
-        run: firebase deploy --only hosting --non-interactive --project savetheday-2377a
+        run: |
+          if [ -z "$FIREBASE_TOKEN" ]; then
+            echo "::notice::FIREBASE_TOKEN secret not configured — skipping hosting deploy."
+            exit 0
+          fi
+          firebase deploy --only hosting --non-interactive --project savetheday-2377a
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-
-      - name: Skip notice (no FIREBASE_TOKEN configured)
-        if: ${{ secrets.FIREBASE_TOKEN == '' }}
-        run: |
-          echo "::warning::FIREBASE_TOKEN secret not configured — skipping deploy. See .github/SETUP.md."
