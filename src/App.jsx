@@ -1169,11 +1169,20 @@ export default function App() {
   // so re-builds from CSV / seed scripts don't collide.
   const weddingCol = (name) => collection(db, 'artifacts', appId, 'users', user?.uid || '_', name);
 
-  const upsertWeddingDoc = async (name, doc) => {
-    if (!user || !doc?.id) return;
-    const ref = doc(db, 'artifacts', appId, 'users', user.uid, name, doc.id);
+  // 2026-07-18 — Fix #1174: the previous version of this function
+  // had its second parameter literally named `doc`, which SHADOWED
+  // the imported `doc()` helper from firebase/firestore. So
+  // `doc(db, 'artifacts', ...)` was actually calling the data
+  // object as a function and throwing TypeError on every playlist
+  // add / rundown add / resources add / tea-ceremony add. Renaming
+  // to `data` (and same for deleteWeddingDoc) restores the calls
+  // — see git blame if you're curious why all four tabs were
+  // silently failing to persist writes today.
+  const upsertWeddingDoc = async (name, data) => {
+    if (!user || !data?.id) return;
+    const ref = doc(db, 'artifacts', appId, 'users', user.uid, name, data.id);
     // Strip the id itself — Firestore stores it as the doc key
-    const { id: _id, ...rest } = doc;
+    const { id: _id, ...rest } = data;
     await setDoc(ref, { ...rest, eventId: currentEvent?.id || null, updatedAt: Date.now() }, { merge: true });
   };
   const deleteWeddingDoc = async (name, id) => {
