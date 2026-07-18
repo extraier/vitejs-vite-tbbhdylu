@@ -22,10 +22,12 @@ import {
   EmailAuthProvider,
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
+  isSignInWithEmailLink,
   linkWithCredential,
   onAuthStateChanged,
   signInAnonymously,
   signInWithEmailAndPassword,
+  signInWithEmailLink,
   signInWithPopup,
   signInWithCustomToken,
   signOut,
@@ -61,6 +63,81 @@ export function useAuth() {
       // eslint-disable-next-line no-console
       console.error('[useAuth] __herotoken sign-in failed:', err?.code, err?.message);
     });
+  }, []);
+
+  // 2026-07-18 — Passwordless helper-invite link handler.
+  // When the owner invites an email via HelperManager, Firebase Auth
+  // sends a one-time signed link to that email containing
+  // `?apiKey=…&oobCode=…&__heroinvite=1`. We detect both the URL
+  // param and `isSignInWithEmailLink` to be belt-and-suspenders, then
+  // call `signInWithEmailLink` using the email we stashed in
+  // localStorage when the invite was first sent.
+  //
+  // After sign-in, acceptHelperInvite (called from App.jsx in
+  // response to onAuthStateChanged) reads pendingInvites for this
+  // email and migrates them to helpers/{uid} with status='active'.
+  //
+  // If the email isn't in localStorage (e.g. a private-window copy
+  // of the link), fall through to the LoginScreen where the helper
+  // can enter their email and we'll match it on next sign-in.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const isInviteLanding =
+      params.get('__heroinvite') === '1' || isSignInWithEmailLink(auth, window.location.href);
+    if (!isInviteLanding) return;
+
+    // Pull the email we stashed when the invite was sent. If absent,
+    // prompt the user (LoginScreen reads localStorage too).
+    let storedEmail = '';
+    try {
+      storedEmail = window.localStorage.getItem('__heroinvite_email') || '';
+    } catch (_) {
+      /* localStorage blocked — fall through */
+    }
+
+    // Strip our marker param so refreshes don't loop.
+    params.delete('__heroinvite');
+    const next =
+      window.location.pathname +
+      (params.toString() ? '?' + params.toString() : '') +
+      window.location.hash;
+    window.history.replaceState({}, '', next);
+
+    if (!storedEmail) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[useAuth] __heroinvite landing, but no stashed email — ' +
+          'LoginScreen will prompt for it.',
+      );
+      return;
+    }
+
+    signInWithEmailLink(auth, storedEmail, window.location.href)
+      .then(() => {
+        // Don't keep the email around forever — it's only needed for
+        // this one sign-in.
+        try {
+          window.localStorage.removeItem('__heroinvite_email');
+        } catch (_) {
+          /* noop */
+        }
+        // eslint-disable-next-line no-console
+        console.info('[useAuth] helper invite sign-in succeeded');
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error(
+          '[useAuth] __heroinvite sign-in failed:',
+          err?.code,
+          err?.message,
+        );
+        // Clear stale stored email so the user can re-enter.
+        try {
+          window.localStorage.removeItem('__heroinvite_email');
+        } catch (_) {
+          /* noop */
+        }
+      });
   }, []);
 
   useEffect(() => {

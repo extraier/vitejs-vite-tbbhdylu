@@ -286,7 +286,7 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
     const userRecord = await getAuth().getUserByEmail(email);
     helperUid = userRecord.uid;
   } catch (err: unknown) {
-    // User doesn't exist yet — that's OK, we'll write a placeholder.
+    // User not registered yet — write to a placeholder.
     const code = (err as { code?: string }).code;
     if (code !== 'auth/user-not-found') {
       throw err;
@@ -325,7 +325,25 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
       .set(helperDoc);
   }
 
-  return { ok: true, helperUid, pendingEmailRegistration: !helperUid };
+  // 2026-07-18 — Note on email delivery. We intentionally do NOT
+  // generate the email magic link from the cloud function for two
+  // reasons:
+  //   1. `getAuth().generateSignInWithEmailLink()` returns a deep
+  //      link but does NOT auto-send email. Sending requires either
+  //      a third-party email provider (SendGrid/Resend) or the
+  //      client-side `sendSignInLinkToEmail()` which auto-delivers
+  //      through Firebase's built-in templates.
+  //   2. Calling sendSignInLinkToEmail from a CF requires admin
+  //      SDK's `sendCustomEmailVerification` or building our own
+  //      SMTP — out of scope for this fix.
+  // The actual email delivery happens client-side right after this
+  // CF returns — see `handleInvite` in HelperManager.jsx.
+
+  return {
+    ok: true,
+    helperUid,
+    pendingEmailRegistration: !helperUid,
+  };
 });
 
 /**

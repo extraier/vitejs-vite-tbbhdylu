@@ -10,7 +10,8 @@
 import { useEffect, useState } from 'react';
 import { X, UserPlus, Users, Mail, Trash2, Check, RefreshCw, Clock, ChevronRight } from 'lucide-react';
 import { collection, query, onSnapshot, orderBy, doc, deleteDoc } from 'firebase/firestore';
-import { db, appId } from '../../lib/firebase';
+import { sendSignInLinkToEmail } from 'firebase/auth';
+import { db, appId, auth } from '../../lib/firebase';
 import {
   helpersApi,
   defaultHelperPerms,
@@ -114,11 +115,54 @@ export function HelperManager({ ownerUid, onClose }) {
     setBusy(true);
     setError(null);
     try {
-      await helpersApi.invite({
+      // 2026-07-18 — Step 1: invoke the cloud function, which writes
+      // the placeholder doc. CF returns { ok, helperUid, pendingEmailRegistration }.
+      // When pendingEmailRegistration === true, the invitee has never
+      // signed up — which is when we want to send the magic-link email.
+      const inviteRes = await helpersApi.invite({
         email: inviteEmail.trim().toLowerCase(),
         displayName: inviteName.trim(),
         perms: invitePerms,
       });
+      // 2026-07-18 — Step 2: dispatch the passwordless sign-in email.
+      // We use Firebase Auth's built-in delivery (no third-party
+      // email service needed) so the helper receives a real email
+      // containing a one-time signed link that auto-signs-them-in
+      // when they click it. The link lands on
+      // `https://savetheday.io/?__heroinvite=1` (see useAuth below).
+      //
+      // We persist the email locally so the AuthScreen useEffect can
+      // call signInWithEmailLink(email, link) without prompting the
+      // helper to re-enter the address — otherwise the link click
+      // would only land them on a blank screen.
+      if (inviteRes?.pendingEmailRegistration) {
+        try {
+          await sendSignInLinkToEmail(
+            auth,
+            inviteEmail.trim().toLowerCase(),
+            {
+              url: 'https://savetheday.io/?__heroinvite=1',
+              handleCodeInApp: false,
+            },
+          );
+          // localStorage flag is read by the AuthScreen useEffect
+          // (mounted on https://savetheday.io/?__heroinvite=1) to
+          // know which email to apply the link to.
+          window.localStorage.setItem(
+            '__heroinvite_email',
+            inviteEmail.trim().toLowerCase(),
+          );
+          setError('📧 已發送邀請電郵。對方點擊連結即可加入。');
+        } catch (emailErr) {
+          // Don't fail the invite — the doc is already saved. The
+          // owner can still share the link manually if they want.
+          // eslint-disable-next-line no-console
+          console.warn('[HelperManager] email send failed:', emailErr);
+          setError(
+            `邀請已儲存，但電郵未能發送 (${emailErr.message || emailErr.code})。可手動將此連結分享給對方。`,
+          );
+        }
+      }
       setInviteEmail('');
       setInviteName('');
       setInvitePerms(defaultHelperPerms());
