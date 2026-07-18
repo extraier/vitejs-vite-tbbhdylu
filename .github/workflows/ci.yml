@@ -79,11 +79,17 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install Java 17 (Firebase emulator prerequisite)
+      - name: Install Java 21 (Firebase emulator prerequisite)
+        # 2026-07-18 — bumped from Java 17 to Java 21 because
+        # firebase-tools@latest requires JDK 21+ now; leaving it
+        # at 17 was producing
+        #   "Error: firebase-tools no longer supports Java version
+        #    before 21"
+        # on every rules-test run.
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
       - name: Cache Firebase emulator binaries
         uses: actions/cache@v4
