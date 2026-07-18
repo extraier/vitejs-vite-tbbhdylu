@@ -1179,11 +1179,23 @@ export default function App() {
   // — see git blame if you're curious why all four tabs were
   // silently failing to persist writes today.
   const upsertWeddingDoc = async (name, data) => {
-    if (!user || !data?.id) return;
+    if (!user || !data?.id) {
+      // eslint-disable-next-line no-console
+      console.warn('[upsertWeddingDoc] bailed — missing user or id:', { name, hasUser: !!user, hasId: !!data?.id });
+      return;
+    }
     const ref = doc(db, 'artifacts', appId, 'users', user.uid, name, data.id);
     // Strip the id itself — Firestore stores it as the doc key
     const { id: _id, ...rest } = data;
-    await setDoc(ref, { ...rest, eventId: currentEvent?.id || null, updatedAt: Date.now() }, { merge: true });
+    try {
+      await setDoc(ref, { ...rest, eventId: currentEvent?.id || null, updatedAt: Date.now() }, { merge: true });
+      // eslint-disable-next-line no-console
+      console.info('[upsertWeddingDoc] wrote', name, data.id);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[upsertWeddingDoc] FAILED', name, data.id, err?.code, err?.message, err);
+      throw err;
+    }
   };
   const deleteWeddingDoc = async (name, id) => {
     if (!user || !id) return;
