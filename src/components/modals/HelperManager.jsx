@@ -149,7 +149,17 @@ export function HelperManager({ ownerUid, onClose }) {
             inviteEmail.trim().toLowerCase(),
             {
               url: 'https://savetheday.io/?__heroinvite=1',
-              handleCodeInApp: false,
+              // 2026-07-18 — DO NOT pass `handleCodeInApp: false`.
+              // Firebase REQUIRES `handleCodeInApp: true` for
+              // sendSignInLinkToEmail, even if it feels weird —
+              // the email link IS the "in-app" link because it
+              // sends the helper back to savetheday.io. Passing
+              // `false` here is silently asserted by the JS SDK
+              // and throws `auth/argument-error` with no
+              // helpful message. Always `true`.
+              // See node_modules/firebase/firebase-auth-compat.js:
+              //   G(r.handleCodeInApp, n, "argument-error")
+              handleCodeInApp: true,
             },
           );
           // localStorage flag is read by the AuthScreen useEffect
@@ -184,15 +194,22 @@ export function HelperManager({ ownerUid, onClose }) {
           const msg = emailErr?.message || String(emailErr);
           const isAuthConfigErr =
             code === 'auth/operation-not-allowed' ||
-            code === 'auth/argument-error' ||
             code === 'auth/unauthorized-domain' ||
             code === 'auth/invalid-action-code' ||
             code === 'auth/missing-android-pkg-name' ||
             code === 'auth/missing-continue-uri' ||
             code === 'auth/missing-ios-bundle-id';
+          // 2026-07-18 — auth/argument-error from sendSignInLinkToEmail
+          // is thrown when `handleCodeInApp !== true`. It's a
+          // CODE bug, not a config bug. We just fixed it; if it
+          // happens again it'll be because someone passed the
+          // wrong flag value.
+          const isArgumentErr = code === 'auth/argument-error';
           const reason = isAuthConfigErr
             ? 'Firebase 尚未開啟「Email link (passwordless sign-in)」登入方法，或 savetheday.io 不在 Authorized Domains。'
-            : msg;
+            : isArgumentErr
+              ? 'sendSignInLinkToEmail 的 config 唔啱。最常見係 `handleCodeInApp` 設錯。請檢查最近嘅 App 改動。'
+              : msg;
           const fallback =
             '請到 Firebase Console > Authentication > Sign-in method，啟用「Email/Password」的「Email link (passwordless sign-in)」；並到 Settings > Authorized Domains 加入 savetheday.io。';
           setError(
