@@ -16,7 +16,7 @@ export function CoupleJobBoard({
             <AlertCircle className="w-8 h-8 text-rose-500" />
           </div>
           <div>
-            <h2 className="text-2xl font-bold text-slate-800">出 Post 求救</h2>
+            <h2 className="text-2xl font-bold text-slate-800">徵求報價</h2>
             <p className="text-slate-500 text-sm mt-1">
               配對唔到心水？將你嘅要求、Budget、指定場地列出嚟，等全港 Vendor 主動搵你報價！
             </p>

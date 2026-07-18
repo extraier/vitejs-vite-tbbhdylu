@@ -35,7 +35,7 @@ export function tabsForRole(
       ['wedding-day', '📅 大日統籌'],
       ['couple-budget', '💰 預算管理'],
       ['discover-vendors', '🔍 商戶指南'],
-      ['couple-jobboard', '🆘 出Post求救'],
+      ['couple-jobboard', '🆘 徵求報價'],
       ['couple-guests', '🎟️ 嘉賓與座位'],
       ['photo-drop', '📸 互動相片牆'],
     ];
