@@ -1786,7 +1786,7 @@ export default function App() {
         }}
       />
 
-      {guest.isGuestMode ? (
+      {(guest.isGuestMode || userRole === 'guest_portal') ? (
         <PersonalGuestPortal
           guest={activeGuestPortal}
           eventName={currentEvent?.name}
@@ -1795,6 +1795,19 @@ export default function App() {
           isStorageFull={isStorageFull}
           onUpload={handleRealUpload}
           onRequestRedPacket={() => setShowPaymentModal(true)}
+          // 2026-07-18 — Owner preview-as-guest path now has an exit
+          // handler. In real guest mode (URL ?o=&e=&g=&token=) we still
+          // let the guest sign out via existing flow; in owner preview
+          // mode the user must be able to return to the guest list.
+          onExitPreview={
+            userRole === 'guest_portal' && !guest.isGuestMode
+              ? () => {
+                  setActiveGuestPortal(null);
+                  setUserRole('owner');
+                  setCurrentView('couple-guests');
+                }
+              : undefined
+          }
         />
       ) : (
         <>

@@ -10,6 +10,11 @@ export function PersonalGuestPortal({
   onUpload,
   onRequestRedPacket,
   onCopyQrLink,
+  // 2026-07-18 — When the owner clicks "preview as guest" on a row in
+  // the 嘉賓列表, they need a way to come back. In real guest mode
+  // (URL ?o=&e=&g=&token=) this prop is undefined and the helper
+  // button isn't rendered.
+  onExitPreview,
 }) {
   const fileInputRef = useRef(null);
 
@@ -21,6 +26,17 @@ export function PersonalGuestPortal({
 
   return (
     <div className="max-w-md mx-auto mt-4 pb-12 animate-in fade-in zoom-in duration-300">
+      {onExitPreview && (
+        <div className="flex justify-end mb-2">
+          <button
+            onClick={onExitPreview}
+            className="px-4 py-2 text-sm font-bold text-slate-700 bg-white hover:bg-slate-100 rounded-xl shadow-sm border border-slate-200 flex items-center gap-1.5"
+            title="返回嘉賓列表"
+          >
+            ← 返回嘉賓列表
+          </button>
+        </div>
+      )}
       <div className="bg-white rounded-[2rem] shadow-xl overflow-hidden border border-slate-200">
         <div className="bg-slate-900 text-center text-white py-10 px-6 relative">
           <div className="absolute top-0 left-0 w-full h-full bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] opacity-30"></div>
