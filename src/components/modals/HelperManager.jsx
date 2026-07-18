@@ -155,6 +155,7 @@ export function HelperManager({ ownerUid, onClose }) {
         // so the existing UX is preserved if the rich path fails
         // for any reason (network, CF cold-start, permission, etc).
         let richEmailOk = false;
+        let richEmailError = null;
         try {
           const smtpRes = await helpersApi.sendInviteEmail({
             ownerUid,
@@ -175,21 +176,22 @@ export function HelperManager({ ownerUid, onClose }) {
             setError('📧 精美電郵已發送。對方點擊連結即可加入。');
             setCopyLink(null);
           } else if (smtpRes?.dryRun && smtpRes?.magicLinkUrl) {
-            // SMTP_URL not configured on the server (dev/test path).
-            // Surface the magic link so the owner can share it
-            // manually, then ALSO fall through to sendSignInLinkToEmail
-            // (which uses Firebase's built-in delivery and works
-            // without SMTP secrets).
             setCopyLink(smtpRes.magicLinkUrl);
-            // Fall through to sendSignInLinkToEmail below.
+            richEmailError = 'SMTP_URL not configured on server (dryRun)';
+          } else if (smtpRes?.error) {
+            richEmailError = `CF returned error: ${smtpRes.error}`;
           }
         } catch (smtpErr) {
-          // 2026-07-18 — SMTP path failed (cold start, CF error,
-          // network, etc.). Log and fall back to the client-side
-          // sendSignInLinkToEmail path. Never let the rich-email
-          // failure block the invite.
+          // 2026-07-18 — SMTP path failed. Keep both the console
+          // warning (so DevTools shows it) AND a user-visible
+          // error banner so we can diagnose the next attempt.
           // eslint-disable-next-line no-console
           console.warn('[HelperManager] rich SMTP email failed, falling back to Firebase Auth email link:', smtpErr);
+          richEmailError = smtpErr?.message || String(smtpErr);
+        }
+
+        if (richEmailError) {
+          console.error('[HelperManager] SMTP path diagnostic:', richEmailError);
         }
 
         if (!richEmailOk) {
