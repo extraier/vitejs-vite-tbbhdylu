@@ -342,6 +342,14 @@ export function CoupleChecklist({
   onOpenChat,
   myVendorsPanel,
   vendorContacts = [],
+  // 2026-07-17 — Active helpers (兄弟姊妹) sourced from
+  // users/{uid}/helpers in App.jsx. Same parallel pattern as
+  // vendorContacts: each entry has at least id and a
+  // displayName/name; we render 'pick' mode for them and offer
+  // a '+ 自訂' toggle to fall back to a free-form typed name
+  // when the helper hasn't been invited yet.
+  helpers = [],
+  helpersLoading = false,
   currentUser,
 }) {
   const progressPercentage = Math.round(
@@ -552,6 +560,94 @@ export function CoupleChecklist({
                 </option>
               ))}
             </select>
+            {/*
+              2026-07-17 — Helper (兄弟姊妹) assignment. Two visual
+              modes share the same `col-span-2` slot as the vendor
+              dropdown so the form's two-line layout stays balanced:
+                - 'pick' (default): a dropdown sourced from
+                  users/{uid}/helpers filtered to status='active'.
+                  Empty entry = "未指派".
+                - 'custom' : a small text input for ad-hoc names
+                  ("I'll ask my cousin tomorrow"). The text is
+                  stored verbatim on the task as assignedHelperName,
+                  with no assignedHelperId (so it's clearly
+                  free-form rather than an invite).
+              A small "+ 自訂" / "📋 從清單" button below toggles
+              between the two. We deliberately keep both modes in
+              the same component (not a separate <select>) so the
+              UX matches the vendor dropdown visually.
+            */}
+            {newTaskForm.assignedHelperMode === 'pick' ? (
+              <select
+                value={newTaskForm.assignedHelperId || ''}
+                onChange={(e) =>
+                  onNewTaskFormChange({
+                    ...newTaskForm,
+                    assignedHelperId: e.target.value,
+                  })
+                }
+                className="col-span-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
+              >
+                <option value="">🤝 未指派兄弟姊妹 (從上方「兄弟姊妹」加入)</option>
+                {helpersLoading && (
+                  <option value="" disabled>讀取中...</option>
+                )}
+                {!helpersLoading && helpers.length === 0 && (
+                  <option value="" disabled>尚未邀請任何兄弟姊妹</option>
+                )}
+                {helpers.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.displayName || h.name || '(未命名)'}
+                    {h.perms?.canScan ? ' · 接待' : ''}
+                    {h.perms?.canViewGuestList ? ' · 名冊' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                placeholder="輸入兄弟姊妹名稱 (例: 嘉嘉、阿明)..."
+                className="col-span-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none"
+                value={newTaskForm.assignedHelperName}
+                onChange={(e) =>
+                  onNewTaskFormChange({
+                    ...newTaskForm,
+                    assignedHelperName: e.target.value,
+                  })
+                }
+              />
+            )}
+            <div className="col-span-2 flex items-center justify-between -mt-1">
+              <button
+                type="button"
+                onClick={() =>
+                  onNewTaskFormChange({
+                    ...newTaskForm,
+                    assignedHelperMode:
+                      newTaskForm.assignedHelperMode === 'pick' ? 'custom' : 'pick',
+                    // Clear the unused mode's input so we don't
+                    // accidentally persist a stale value when the
+                    // user toggles back and forth.
+                    assignedHelperId:
+                      newTaskForm.assignedHelperMode === 'pick' ? '' : newTaskForm.assignedHelperId,
+                    assignedHelperName:
+                      newTaskForm.assignedHelperMode === 'custom'
+                        ? ''
+                        : newTaskForm.assignedHelperName,
+                  })
+                }
+                className="text-[11px] text-slate-500 hover:text-rose-600 font-medium"
+              >
+                {newTaskForm.assignedHelperMode === 'pick'
+                  ? '✏️ + 自訂名稱'
+                  : '📋 從兄弟姊妹清單揀'}
+              </button>
+              <span className="text-[10px] text-slate-400">
+                {newTaskForm.assignedHelperMode === 'pick'
+                  ? `${helpers.length} 位活躍兄弟姊妹`
+                  : '未邀請都可用，儲存後會保留名稱'}
+              </span>
+            </div>
             <button
               type="submit"
               className="col-span-2 bg-slate-900 text-white font-bold py-3 rounded-lg mt-1 hover:bg-slate-800 shadow-sm flex items-center justify-center gap-2"
@@ -699,6 +795,39 @@ function TaskRow({
               // vendor-side status to mirror).
               <VendorStatusChip status={task.status} note={task.statusNote} />
             )}
+          </div>
+        )}
+        {/*
+          2026-07-17 — Helper (兄弟姊妹) chip. Mirrors the
+          assigned-vendor badge above but without a status layer
+          (helpers don't have their own dashboard; they just
+          receive the task via the helper view).
+            - assignedHelperUid set => emerald (linked helper,
+              they've signed up so they can see it in their
+              helper dashboard once that's wired).
+            - assignedHelperName set but no assignedHelperUid =>
+              amber (free-form name, e.g. typed inline); rendering
+              this without a uid tells the couple "yes we wrote
+              down who, but they're not a registered helper yet".
+        */}
+        {task.assignedHelperName && (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+            <span
+              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+                task.assignedHelperUid
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-amber-50 text-amber-700 border-amber-200'
+              }`}
+              title={
+                task.assignedHelperUid
+                  ? '已指派兄弟姊妹'
+                  : '自訂名稱（非已邀請兄弟姊妹）'
+              }
+            >
+              {task.assignedHelperUid ? '✓ ' : '🤝 '}
+              {task.assignedHelperName}
+              {task.assignedHelperUid ? '' : ' (未邀請)'}
+            </span>
           </div>
         )}
       </div>

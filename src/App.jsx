@@ -271,6 +271,15 @@ export default function App() {
     dueTime: '',
     estimatedCost: '',
     taskType: 'vendor',
+    // 2026-07-17 — helper (兄弟姊妹) assignment, mirrors the vendor
+    // assignment fields below. `assignedHelperMode` is 'pick' to
+    // show the dropdown sourced from users/{uid}/helpers, or
+    // 'custom' to show a free-form text input for cases where the
+    // couple hasn't formally invited the helper yet.
+    assignedHelperId: '',
+    assignedHelperName: '',
+    assignedHelperUid: '',
+    assignedHelperMode: 'pick',
   });
   const [newGuestForm, setNewGuestForm] = useState({
     name: '',
@@ -585,6 +594,44 @@ export default function App() {
          // eslint-disable-next-line no-console
          console.warn('vendorContacts subscribe failed:', err?.message);
          setVendorContactsLoading(false);
+       },
+     );
+     return unsub;
+   }, [user?.uid, guest.isGuestMode]);
+
+   // 2026-07-17 — Couple's active helpers (兄弟姊妹). Each helper is
+   // invited via HelperManager; this collection only contains docs
+   // for helpers who have either accepted the invite (status='active')
+   // or are awaiting acceptance (status='invited'). The task-form
+   // dropdown only offers 'active' helpers — we don't want couples to
+   // delegate a task to someone who hasn't joined yet. Sourced from
+   // /users/{userUid}/helpers in real-time.
+   const [helpers, setHelpers] = useState([]);
+   const [helpersLoading, setHelpersLoading] = useState(true);
+   useEffect(() => {
+     if (!user || user.isAnonymous || guest.isGuestMode) {
+       setHelpers([]);
+       setHelpersLoading(false);
+       return undefined;
+     }
+     setHelpersLoading(true);
+     const q = query(
+       collection(db, 'artifacts', appId, 'users', user.uid, 'helpers'),
+     );
+     const unsub = onSnapshot(
+       q,
+       (snap) => {
+         // Pull every doc, then filter to active client-side so we
+         // can surface invites (pending) elsewhere if we want.
+         const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+         const active = all.filter((h) => h.status === 'active');
+         setHelpers(active);
+         setHelpersLoading(false);
+       },
+       (err) => {
+         // eslint-disable-next-line no-console
+         console.warn('helpers subscribe failed:', err?.message);
+         setHelpersLoading(false);
        },
      );
      return unsub;
@@ -1008,6 +1055,21 @@ export default function App() {
       (c) => c.id === newTaskForm.assignedContactId,
     );
 
+    // 2026-07-17 — Resolve chosen helper for the task doc. In 'pick'
+    // mode we look up by id; in 'custom' mode the helper is a free-form
+    // typed name (no id, no auth uid yet — they haven't been invited).
+    let chosenHelperId = '';
+    let chosenHelperName = '';
+    let chosenHelperUid = '';
+    if (newTaskForm.assignedHelperMode === 'pick') {
+      const h = helpers.find((x) => x.id === newTaskForm.assignedHelperId);
+      chosenHelperId = h?.id || '';
+      chosenHelperName = h?.displayName || h?.name || '';
+      chosenHelperUid = h?.helperUid || '';
+    } else {
+      chosenHelperName = newTaskForm.assignedHelperName || '';
+    }
+
     const newTask = {
       eventId: currentEvent.id,
       title,
@@ -1026,6 +1088,16 @@ export default function App() {
       assignedContactId: chosenContact?.id || '',
       assignedVendorName: chosenContact?.vendorName || '',
       assignedVendorUid: chosenContact?.linkedVendorUid || '',
+      // 2026-07-17 — helper (兄弟姊妹) assignment fields. Same
+      // parallel pattern as vendor above. We always store
+      // `assignedHelperName` (so the chip never goes blank); we
+      // store `assignedHelperId` only when picked from the dropdown
+      // (so we can switch to the linked helper UI later); we store
+      // `assignedHelperUid` only when the helper has been linked to
+      // an auth uid (post-invite-acceptance).
+      assignedHelperId: chosenHelperId,
+      assignedHelperName: chosenHelperName,
+      assignedHelperUid: chosenHelperUid,
     };
     await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), newTask);
     setNewTaskForm({
@@ -1039,6 +1111,10 @@ export default function App() {
       dueTime: '',
       estimatedCost: '',
       taskType: 'vendor',
+      assignedHelperId: '',
+      assignedHelperName: '',
+      assignedHelperUid: '',
+      assignedHelperMode: 'pick',
     });
     showToast('✅ 任務已新增');
   };
@@ -1776,6 +1852,8 @@ export default function App() {
                   />
                 }
                 vendorContacts={vendorContacts}
+                helpers={helpers}
+                helpersLoading={helpersLoading}
               />
             )}
 
