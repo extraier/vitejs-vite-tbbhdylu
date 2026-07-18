@@ -600,13 +600,23 @@ export default function App() {
      return unsub;
    }, [user?.uid, guest.isGuestMode]);
 
-   // 2026-07-17 — Couple's active helpers (兄弟姊妹). Each helper is
-   // invited via HelperManager; this collection only contains docs
-   // for helpers who have either accepted the invite (status='active')
-   // or are awaiting acceptance (status='invited'). The task-form
-   // dropdown only offers 'active' helpers — we don't want couples to
-   // delegate a task to someone who hasn't joined yet. Sourced from
-   // /users/{userUid}/helpers in real-time.
+   // 2026-07-18 — Couple's helpers + pending invites (兄弟姊妹
+   // including those who haven't accepted yet). Two sources, both
+   // keyed off the owner's uid:
+   //   - /users/{uid}/helpers/{helperUid}        : uid-keyed (when
+   //                                                the email was
+   //                                                already
+   //                                                registered). Has
+   //                                                helperUid.
+   //   - /users/{uid}/pendingInvites/{email}    : email-keyed (when
+   //                                                the invitee
+   //                                                hasn't signed up
+   //                                                yet). No
+   //                                                helperUid.
+   // Both collections support status='active' (accepted) or
+   // status='invited' (pending). Merging them here means the
+   // wedding-task / rundown / resources pickers can list EVERYONE
+   // the owner has invited, not just the ones already accepted.
    const [helpers, setHelpers] = useState([]);
    const [helpersLoading, setHelpersLoading] = useState(true);
    useEffect(() => {
@@ -616,18 +626,68 @@ export default function App() {
        return undefined;
      }
      setHelpersLoading(true);
-     const q = query(
-       collection(db, 'artifacts', appId, 'users', user.uid, 'helpers'),
+
+     // 2026-07-18 — Tag each doc with `_src` so the picker can
+     // distinguish an email-only pendingInvite (helperUid === null)
+     // from a registered email that's still pending acceptance
+     // (helperUid set, status='invited'). Stored on the runtime
+     // object only; never written back to Firestore.
+     const merge = (snap, src) =>
+       snap.docs.map((d) => ({ id: d.id, _src: src, ...d.data() }));
+
+     const helpersQ = collection(
+       db,
+       'artifacts',
+       appId,
+       'users',
+       user.uid,
+       'helpers',
      );
-     const unsub = onSnapshot(
-       q,
+     const pendingQ = collection(
+       db,
+       'artifacts',
+       appId,
+       'users',
+       user.uid,
+       'pendingInvites',
+     );
+
+     let activeDocs = [];
+     let pendingDocs = [];
+
+     const apply = () => {
+       // Drop 'revoked' ones. Merge active + pending into one
+       // alphabetical list (by displayName) so the HelperPicker
+       // dropdown shows everyone, with active ones first.
+       const all = [
+         ...activeDocs.filter((h) => h.status === 'active'),
+         ...pendingDocs.filter((h) => h.status === 'invited'),
+         ...activeDocs.filter((h) => h.status === 'invited'),
+       ];
+       all.sort((a, b) =>
+         (a.displayName || a.email || '').localeCompare(
+           b.displayName || b.email || '',
+         ),
+       );
+       // Dedup by displayName+email — same person can show up on
+       // both lists if a registration race happens.
+       const seen = new Set();
+       const deduped = [];
+       for (const h of all) {
+         const key = (h.email || h.id || '').toLowerCase();
+         if (!key || seen.has(key)) continue;
+         seen.add(key);
+         deduped.push(h);
+       }
+       setHelpers(deduped);
+       setHelpersLoading(false);
+     };
+
+     const unsubHelpers = onSnapshot(
+       helpersQ,
        (snap) => {
-         // Pull every doc, then filter to active client-side so we
-         // can surface invites (pending) elsewhere if we want.
-         const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-         const active = all.filter((h) => h.status === 'active');
-         setHelpers(active);
-         setHelpersLoading(false);
+         activeDocs = merge(snap, 'helpers');
+         apply();
        },
        (err) => {
          // eslint-disable-next-line no-console
@@ -635,7 +695,26 @@ export default function App() {
          setHelpersLoading(false);
        },
      );
-     return unsub;
+
+     const unsubPending = onSnapshot(
+       pendingQ,
+       (snap) => {
+         pendingDocs = merge(snap, 'pendingInvites');
+         apply();
+       },
+       (err) => {
+         // Soft-fail — pendingInvites is empty for most owners.
+         // eslint-disable-next-line no-console
+         console.warn('pendingInvites subscribe failed:', err?.message);
+         pendingDocs = [];
+         apply();
+       },
+     );
+
+     return () => {
+       unsubHelpers();
+       unsubPending();
+     };
    }, [user?.uid, guest.isGuestMode]);
 
    // 2026-07-17 — Couple's favorited vendors (🔍 商戶指南 ❤️ 我的最愛).

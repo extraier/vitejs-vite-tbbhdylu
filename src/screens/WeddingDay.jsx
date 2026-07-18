@@ -113,26 +113,54 @@ function HelperPicker({ helpers = [], value = [], onChange }) {
           <span className="text-xs text-slate-400">未分配</span>
         )}
       </div>
-      {helpers.length > 0 && (
-        <select
-          value=""
-          onChange={(e) => {
-            const hid = e.target.value;
-            const h = helpers.find((x) => x.id === hid);
-            if (h) add({ id: h.id, name: h.displayName || h.name || '?', uid: h.helperUid || '' });
-          }}
-          className="w-full p-2 rounded-lg border border-slate-300 text-xs bg-white"
-        >
-          <option value="">+ 從已邀請嘅兄弟姊妹加入...</option>
-          {helpers
-            .filter((h) => !value.find((x) => x.id === h.id))
-            .map((h) => (
-              <option key={h.id} value={h.id}>
-                {h.displayName || h.name || h.email}
-              </option>
-            ))}
-        </select>
-      )}
+      {helpers.length > 0 && (() => {
+        // 2026-07-18 — Build deduped option list. Same person can
+        // appear in both /helpers and /pendingInvites (registered
+        // email pending acceptance vs. just an invited email),
+        // often with different doc ids. We dedupe on email — when
+        // both exist, prefer the /helpers row (uid-keyed).
+        const picked = new Set(value.map((v) => v.id));
+        const byEmail = new Map();
+        helpers.forEach((h) => {
+          const key = (h.email || h.id || '').toLowerCase();
+          if (!key || picked.has(h.id)) return;
+          if (h.status === 'revoked') return;
+          const cur = byEmail.get(key);
+          if (!cur || (h._src === 'helpers' && cur._src !== 'helpers')) {
+            byEmail.set(key, h);
+          }
+        });
+        const list = Array.from(byEmail.values()).sort((a, b) =>
+          (a.displayName || a.email).localeCompare(b.displayName || b.email),
+        );
+        if (list.length === 0) return null;
+        return (
+          <select
+            value=""
+            onChange={(e) => {
+              const hid = e.target.value;
+              const h = helpers.find((x) => x.id === hid);
+              if (h) add({
+                id: h.id,
+                name: h.displayName || h.name || h.email || '?',
+                uid: h.helperUid || '',
+              });
+            }}
+            className="w-full p-2 rounded-lg border border-slate-300 text-xs bg-white"
+          >
+            <option value="">+ 從已邀請嘅兄弟姊妹加入...</option>
+            {list.map((h) => {
+              const accepted = h.status === 'active';
+              return (
+                <option key={h.id} value={h.id}>
+                  {h.displayName || h.name || h.email}
+                  {!accepted ? '  (待接受)' : ''}
+                </option>
+              );
+            })}
+          </select>
+        );
+      })()}
       <input
         type="text"
         placeholder="或自行輸入名 (例: 表姊 KC)"
