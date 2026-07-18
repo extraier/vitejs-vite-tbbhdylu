@@ -8,8 +8,8 @@
 // access immediately (rules check status == 'active').
 
 import { useEffect, useState } from 'react';
-import { X, UserPlus, Users, Mail, Trash2, Check, RefreshCw } from 'lucide-react';
-import { collection, query, onSnapshot } from 'firebase/firestore';
+import { X, UserPlus, Users, Mail, Trash2, Check, RefreshCw, Clock, ChevronRight } from 'lucide-react';
+import { collection, query, onSnapshot, orderBy, doc, deleteDoc } from 'firebase/firestore';
 import { db, appId } from '../../lib/firebase';
 import {
   helpersApi,
@@ -28,22 +28,84 @@ export function HelperManager({ ownerUid, onClose }) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
 
-  // Subscribe to active helpers in real-time
+  // 2026-07-17 — Subscribe to BOTH /helpers and /pendingInvites in
+  // parallel. We need both because:
+  //   - /helpers/{uid}            : invite to a registered email
+  //                                 (or after acceptHelperInvite)
+  //   - /pendingInvites/{email}   : invite to an email that hasn't
+  //                                 registered yet
+  // The "待接受" tab merges the two so the owner sees ALL invites
+  // regardless of which subcollection they live in.
   useEffect(() => {
     if (!ownerUid) return undefined;
-    const q = query(
+
+    setError(null);
+
+    const helpersQ = query(
       collection(db, 'artifacts', appId, 'users', ownerUid, 'helpers'),
+      orderBy('invitedAt', 'desc'),
     );
-    const unsub = onSnapshot(
-      q,
+    const pendingQ = query(
+      collection(db, 'artifacts', appId, 'users', ownerUid, 'pendingInvites'),
+      orderBy('invitedAt', 'desc'),
+    );
+
+    let activeHelpers = [];
+    let pendingFromHelpers = [];
+    let pendingFromEmails = [];
+
+    const recompute = () => {
+      // 'invited' status on /helpers = registered email still pending
+      // 'invited' status on /pendingInvites = email-only invite
+      const pending = [
+        ...pendingFromEmails.map((p) => ({
+          ...p,
+          _src: 'pendingInvites',
+        })),
+        ...pendingFromHelpers.map((p) => ({
+          ...p,
+          _src: 'helpers',
+        })),
+      ];
+      setHelpers(activeHelpers);
+      setPendingInvites(pending);
+    };
+
+    const unsubHelpers = onSnapshot(
+      helpersQ,
       (snap) => {
         const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setHelpers(all.filter((h) => h.status === 'active'));
-        setPendingInvites(all.filter((h) => h.status === 'invited'));
+        activeHelpers = all.filter((h) => h.status === 'active');
+        pendingFromHelpers = all.filter((h) => h.status === 'invited');
+        recompute();
       },
       (err) => setError(err.message),
     );
-    return unsub;
+
+    const unsubPending = onSnapshot(
+      pendingQ,
+      (snap) => {
+        // 2026-07-17 — pendingInvites docs are immediately 'invited'
+        // by construction (the inviteHelper function sets it on
+        // write). We surface them all to the pending list, sorted
+        // by invitedAt descending.
+        pendingFromEmails = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        recompute();
+      },
+      (err) => {
+        // Soft-fail — pendingInvites might not yet exist, that's OK
+        // (no pending email invites means nothing to show).
+        // eslint-disable-next-line no-console
+        console.warn('pendingInvites subscribe failed:', err?.message);
+        pendingFromEmails = [];
+        recompute();
+      },
+    );
+
+    return () => {
+      unsubHelpers();
+      unsubPending();
+    };
   }, [ownerUid]);
 
   const handleInvite = async (e) => {
@@ -129,7 +191,7 @@ export function HelperManager({ ownerUid, onClose }) {
             <ActiveList helpers={helpers} onTogglePerm={handleTogglePerm} onRevoke={handleRevoke} />
           )}
           {activeTab === 'pending' && (
-            <PendingList pending={pendingInvites} />
+            <PendingList pending={pendingInvites} ownerUid={ownerUid} />
           )}
           {activeTab === 'invite' && (
             <InviteForm
@@ -231,30 +293,137 @@ function ActiveList({ helpers, onTogglePerm, onRevoke }) {
   );
 }
 
-function PendingList({ pending }) {
+function PendingList({ pending, ownerUid }) {
+  // 2026-07-17 — Owner can cancel an invite directly via the
+  // Firestore client. Rules permit owner-only delete on both
+  // subcollections, so we don't need a Cloud Function round-trip
+  // for this. Returns a Promise so the caller can await.
+  const handleCancel = (p) => {
+    const ref = p._src === 'pendingInvites'
+      ? doc(db, 'artifacts', appId, 'users', ownerUid, 'pendingInvites', p.id)
+      : doc(db, 'artifacts', appId, 'users', ownerUid, 'helpers', p.id);
+    return deleteDoc(ref);
+  };
+
   if (pending.length === 0) {
     return (
       <div className="text-center py-10 text-slate-400">
         目前沒有待接受的邀請。
+        <div className="text-xs mt-2 text-slate-400">
+          從「新增邀請」分頁發送邀請後，無論對方有否註冊帳號都會喺度見到。
+        </div>
       </div>
     );
   }
+
+  // 2026-07-17 — Column layout for the pending list. We render:
+  //   • Display name + email
+  //   • Permission summary (e.g. "接待 + 名冊")
+  //   • Days pending (with red badge for >7 days)
+  //   • Source pill (email-pending vs registered-but-unaccepted)
+  //   • Action: cancel invite (deletes the underlying doc).
   return (
-    <div className="space-y-3">
-      {pending.map((p) => (
-        <div key={p.id} className="flex items-center justify-between p-4 border border-amber-200 bg-amber-50 rounded-xl">
-          <div>
-            <div className="font-bold text-slate-800">{p.displayName}</div>
-            <div className="text-xs text-slate-500">{p.email}</div>
-            <div className="text-xs text-amber-700 mt-1 flex items-center gap-1">
-              <RefreshCw className="w-3 h-3" /> 等待對方登入並接受邀請
+    <div className="space-y-2">
+      <div className="grid grid-cols-12 gap-2 px-3 py-1.5 text-[10px] uppercase tracking-wider text-slate-400 font-bold border-b border-slate-200">
+        <div className="col-span-4">姓名 / 電郵</div>
+        <div className="col-span-3">權限</div>
+        <div className="col-span-2">等待</div>
+        <div className="col-span-2">來源</div>
+        <div className="col-span-1 text-right">操作</div>
+      </div>
+      {pending.map((p) => {
+        const days = ageInDays(p.invitedAt);
+        const perms = Object.entries(p.perms || {})
+          .filter(([, v]) => v)
+          .map(([k]) => HELPER_PERM_LABELS[k] || k)
+          .join(' · ') || '無權限';
+        const isEmailPending = p._src === 'pendingInvites';
+        return (
+          <div
+            key={p.id}
+            className="grid grid-cols-12 gap-2 items-center px-3 py-2 border border-amber-200 bg-amber-50/50 rounded-lg hover:bg-amber-50 transition-colors"
+          >
+            <div className="col-span-4 min-w-0">
+              <div className="font-bold text-slate-800 truncate flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                {p.displayName || p.email || '(未命名)'}
+              </div>
+              <div className="text-xs text-slate-500 truncate flex items-center gap-1">
+                <Mail className="w-3 h-3" /> {p.email}
+              </div>
+            </div>
+            <div className="col-span-3 text-xs text-slate-600 truncate" title={perms}>
+              {perms}
+            </div>
+            <div className="col-span-2 text-xs">
+              <span
+                className={`inline-flex items-center px-1.5 py-0.5 rounded-full font-bold ${
+                  days > 7
+                    ? 'bg-rose-100 text-rose-700'
+                    : days > 3
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-slate-100 text-slate-600'
+                }`}
+                title={days === 1 ? '已等待 1 日' : `已等待 ${days} 日`}
+              >
+                {days === 0 ? '今日' : days === 1 ? '1 日' : `${days} 日`}
+              </span>
+            </div>
+            <div className="col-span-2 text-xs">
+              <span
+                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border font-medium ${
+                  isEmailPending
+                    ? 'border-amber-300 bg-white text-amber-700'
+                    : 'border-slate-300 bg-white text-slate-600'
+                }`}
+                title={
+                  isEmailPending
+                    ? '對方尚未註冊帳號：等待佢用呢個電郵註冊並登入'
+                    : '對方已註冊但未點擊接受：依然要等佢首次登入才會自動接手'
+                }
+              >
+                {isEmailPending ? (
+                  <>
+                    <Mail className="w-3 h-3" /> 待註冊
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-3 h-3" /> 待接受
+                  </>
+                )}
+              </span>
+            </div>
+            <div className="col-span-1 flex justify-end">
+              <button
+                onClick={async () => {
+                  if (!confirm(`取消 ${p.displayName || p.email} 的邀請？`)) return;
+                  try {
+                    await handleCancel(p);
+                  } catch (err) {
+                    alert(`取消失敗：${err.message}`);
+                  }
+                }}
+                className="text-slate-400 hover:text-rose-500 p-1 rounded"
+                title="取消邀請"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
           </div>
-          <Check className="w-5 h-5 text-amber-500" />
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
+}
+
+// 2026-07-17 — helper for the "等待" column.
+// invitedAt is a Firestore Timestamp (or null). We fall back to
+// `now()` if missing so the column never crashes on orphan docs.
+function ageInDays(invitedAt) {
+  if (!invitedAt) return 0;
+  const ms = invitedAt.toMillis ? invitedAt.toMillis() : Number(invitedAt);
+  if (!Number.isFinite(ms)) return 0;
+  return Math.max(0, Math.floor((Date.now() - ms) / 86_400_000));
 }
 
 function InviteForm({ email, name, perms, busy, onEmailChange, onNameChange, onPermsChange, onSubmit }) {

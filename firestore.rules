@@ -277,6 +277,18 @@ service cloud.firestore {
           allow create, update, delete: if isOwner(ownerUid);
         }
 
+        // 2026-07-17 — Pending helper invites (email-pending path).
+        // inviteHelper writes here when an owner invites an email that
+        // isn't yet tied to a Firebase Auth account. The
+        // HelperManager UI reads this in parallel with /helpers and
+        // shows them in the "待接受" tab. acceptHelperInvite reads
+        // via collectionGroup('pendingInvites') and migrates on first
+        // sign-up.
+        match /pendingInvites/{email} {
+          allow read: if isOwner(ownerUid);
+          allow create, update, delete: if isOwner(ownerUid);
+        }
+
         // ScanLog: append-only audit trail of every QR-code scan.
         // Anyone signed-in can write (the helper doing the scan).
         // Only the owner can read the log.
