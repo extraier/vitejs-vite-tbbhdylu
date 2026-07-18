@@ -154,12 +154,30 @@ export function HelperManager({ ownerUid, onClose }) {
           );
           setError('📧 已發送邀請電郵。對方點擊連結即可加入。');
         } catch (emailErr) {
+          // 2026-07-18 — Surface a more diagnostic message than
+          // the generic Firebase Auth error. The two common
+          // failure modes are:
+          //   (a) Email-link sign-in method isn't enabled in
+          //       Firebase Console > Authentication > Sign-in
+          //       method. Fix: enable "Email/Password" + "Email
+          //       link (passwordless sign-in)".
+          //   (b) `savetheday.io` isn't in Authorized Domains.
+          //       Fix: Firebase Console > Authentication >
+          //       Settings > Authorized Domains > Add domain.
           // Don't fail the invite — the doc is already saved. The
           // owner can still share the link manually if they want.
           // eslint-disable-next-line no-console
           console.warn('[HelperManager] email send failed:', emailErr);
+          const code = emailErr?.code || 'unknown';
+          const msg = emailErr?.message || String(emailErr);
+          const reason =
+            code === 'auth/operation-not-allowed'
+              ? 'Firebase 尚未開啟 Email Link 登入 (Authentication > Sign-in method > Email/Password > Email link)。'
+              : code === 'auth/unauthorized-domain'
+                ? 'savetheday.io 不在 Firebase 認可域名內 (Authentication > Settings > Authorized Domains)。'
+                : msg;
           setError(
-            `邀請已儲存，但電郵未能發送 (${emailErr.message || emailErr.code})。可手動將此連結分享給對方。`,
+            `⚠️ 邀請已儲存，但電郵未能發送。\n\n錯誤 (${code}): ${reason}\n\n解法：到 Firebase Console 開啟 Email Link 登入，並將 savetheday.io 加入 Authorized Domains。解決前可手動複製此連結傳俾對方。`,
           );
         }
       }
