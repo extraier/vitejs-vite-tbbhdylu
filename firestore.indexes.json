@@ -7,6 +7,15 @@
         { "fieldPath": "monthBucket", "order": "ASCENDING" },
         { "fieldPath": "vendorId", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "scanLog",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "eventId", "order": "ASCENDING" },
+        { "fieldPath": "scannedAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
