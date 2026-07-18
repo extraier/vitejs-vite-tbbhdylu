@@ -11,10 +11,11 @@ import {
      orderBy,
      query,
      serverTimestamp,
+     setDoc,
      updateDoc,
      where,
      writeBatch,
-   } from 'firebase/firestore';
+     } from 'firebase/firestore';
 
 import { db, appId } from './lib/firebase';
 
