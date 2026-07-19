@@ -511,9 +511,14 @@ function VendorTaskCard({ task, onUpdateStatus, currentUser }) {
         <div className="px-3 pb-3">
           {/* 2026-07-19 — switch to merged `<TaskActivityTimeline>`
               so vendors see status updates from the couple alongside
-              discussion. Same role pass-through, vendor-side. */}
+              discussion. Same role pass-through, vendor-side.
+              ownerUid is `task.ownerUid` here because vendor tasks
+              come in via collectionGroup which preserves that field
+              (CoupleChecklist's tasks don't carry it, so there we
+              have to source it from currentUser instead). */}
           <TaskActivityTimeline
             task={task}
+            ownerUid={task.ownerUid}
             currentUser={{ uid: currentUser?.uid || '', displayName: currentUser?.name || '商戶' }}
             currentRole="vendor"
           />

@@ -384,8 +384,13 @@ function HelperTaskCard({ task, ownerUid, currentUser, showToast }) {
         </div>
       </div>
       <div className="border-t border-slate-200 bg-slate-50 p-3">
+        {/* 2026-07-19 — helper-side tasks come from the owner's task
+            collection via `where('assignedHelperUid', '==', uid)`.
+            Each task doc carries `ownerUid` because that's what the
+            rule reads. Pass it explicitly. */}
         <TaskActivityTimeline
           task={task}
+          ownerUid={task.ownerUid}
           currentUser={currentUser}
           currentRole="helper"
         />

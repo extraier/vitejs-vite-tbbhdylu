@@ -36,16 +36,25 @@ import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
  *   compact        — optional; if true, hide the role-tinted author
  *                    labels (used on vendor/helper side where context is
  *                    already clear)
+ *   ownerUid       — explicit owner uid (task.ownerUid isn't
+ *                    denormalized onto the task doc; the path is
+ *                    /users/{ownerUid}/tasks/{taskId}). When omitted,
+ *                    we fall back to task.ownerUid for back-compat.
  *   readOnly       — optional; hides the input form (read-only review)
  */
 export function TaskComments({
   task,
+  ownerUid: ownerUidProp,
   currentUser,
   currentRole = 'owner',
   onClose,
   compact = false,
   readOnly = false,
 }) {
+  // 2026-07-19 — see TaskActivityTimeline for the rationale. Same
+  // bug existed here: tasks have no `ownerUid` field. Without this
+  // fallback line, every send returned "no ownerUid" silently.
+  const ownerUid = ownerUidProp ?? task?.ownerUid;
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState(null); // comment object or null
   const [sending, setSending] = useState(false);
@@ -53,20 +62,20 @@ export function TaskComments({
   const prevCountRef = useRef(0);
 
   const path =
-    task?.ownerUid && task?.id
+    ownerUid && task?.id
       ? collection(
           db,
           'artifacts',
           appId,
           'users',
-          task.ownerUid,
+          ownerUid,
           'tasks',
           task.id,
           'comments',
         )
       : null;
   const { data: comments = [], loading } = useFirestoreCollection(path, [
-    task?.ownerUid,
+    ownerUid,
     task?.id,
   ]);
 
@@ -136,7 +145,7 @@ export function TaskComments({
         'artifacts',
         appId,
         'users',
-        task.ownerUid,
+        ownerUid,
         'tasks',
         task.id,
         'comments',
@@ -169,7 +178,7 @@ export function TaskComments({
   };
 
   const handleDelete = async (c) => {
-    if (!task?.ownerUid || !task?.id || !c?.id) return;
+    if (!ownerUid || !task?.id || !c?.id) return;
     if (!confirm('刪除呢條留言？')) return;
     await deleteDoc(
       doc(
@@ -177,7 +186,7 @@ export function TaskComments({
         'artifacts',
         appId,
         'users',
-        task.ownerUid,
+        ownerUid,
         'tasks',
         task.id,
         'comments',

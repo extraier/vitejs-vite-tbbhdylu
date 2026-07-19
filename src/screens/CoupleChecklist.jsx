@@ -901,9 +901,13 @@ function TaskRow({
       <div className="mt-2">
         {/* 2026-07-19 — switch from chat-only `<TaskComments>` to the
             merged `<TaskActivityTimeline>` so the couple sees both
-            threaded discussion AND status changes in one place. */}
+            threaded discussion AND status changes in one place.
+            ownerUid comes from currentUser (the couple's auth uid),
+            not task.ownerUid (which is no longer denormalized onto
+            the task doc — it's only in the Firestore path). */}
         <TaskActivityTimeline
           task={task}
+          ownerUid={currentUser?.uid}
           currentUser={currentUser}
           currentRole="owner"
         />

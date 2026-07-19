@@ -35,13 +35,33 @@ import {
 
 /**
  * Props:
- *   task            — task doc with at least { id, ownerUid, ... }
+ *   task            — task doc with at least { id, ... }
+ *   ownerUid        — REQUIRED: the uid of the wedding owner.
+ *                      The Firestore task lives at
+ *                        /users/{ownerUid}/tasks/{taskId}
+ *                      and the old `<TaskComments>` design assumed
+ *                      `task.ownerUid` was denormalized onto the
+ *                      task. **It is not** — the ownerUid is only
+ *                      in the parent path. Callers MUST pass it
+ *                      explicitly. We fall back to `task.ownerUid`
+ *                      for parity with any older doc that may have
+ *                      it denormalized, but the explicit prop wins.
  *   currentUser     — { uid, displayName? }
  *   currentRole     — 'owner' | 'vendor' | 'helper'
  *   readOnly        — disable the input form
  */
-export function TaskActivityTimeline({ task, currentUser, currentRole = 'owner', readOnly = false }) {
-  const ownerUid = task?.ownerUid;
+export function TaskActivityTimeline({
+  task,
+  ownerUid: ownerUidProp,
+  currentUser,
+  currentRole = 'owner',
+  readOnly = false,
+}) {
+  // 2026-07-19 — explicit prop wins, fall back to task.ownerUid for
+  // any older code path that still denormalizes the field. Without
+  // this, every "send" silently bailed with the silent message
+  // "no permission", which the user sees as "nothing happens".
+  const ownerUid = ownerUidProp ?? task?.ownerUid;
   const taskId = task?.id;
 
   // Subscribe to both subcollections, parallel.
