@@ -137,7 +137,16 @@ async function _sendHelperInviteEmailImpl(req: any): Promise<SendHelperInviteEma
     throw new HttpsError('invalid-argument', 'helperDisplayName required.');
   }
 
-  const appBase = APP_BASE_URL.value() || 'https://savetheday.io';
+  // 2026-07-19 — APP_BASE_URL secret was originally saved with a trailing
+  // newline, which made `${appBase}/?…` an invalid URL and caused every
+  // helper-invite to fail with "Magic link generation failed: The continue
+  // URL must be a valid URL string." The deployed revision still binds to
+  // the bad version (the CFP control plane has been returning 409 from
+  // deploys). Until the function can be redeployed cleanly, we sanitize
+  // the value here AND fall back to the production origin.
+  const rawBase = APP_BASE_URL.value();
+  const sanitized = (rawBase || '').replace(/[\s\n\r\t]+/g, '').replace(/\/+$/, '');
+  const appBase = sanitized || 'https://savetheday.io';
 
   // Resolve the owner's display name. Mirrors invitations.ts: walk a
   // collectionGroup('users') query restricted by `uid` so we work
