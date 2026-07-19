@@ -77,6 +77,7 @@ import { VendorOnboarding } from './screens/VendorOnboarding';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
 import { ReceptionScanner } from './screens/ReceptionScanner';
+import { HelperDashboard } from './screens/HelperDashboard';
 import { WeddingDay } from './screens/WeddingDay';
 import { ChatRoom } from './screens/ChatRoom';
 import { Inbox } from './screens/Inbox';
@@ -178,6 +179,33 @@ export default function App() {
     }
   }, [isVendor, user]);
 
+  // 2026-07-19 — auto-route active helpers (兄弟姊妹) to their
+  // dashboard. Only runs when the user is NOT also an owner /
+  // vendor (those roles take precedence). Hidden by the helper
+  // waiting screen earlier in the render path when there are no
+  // active assignments, so reaching here means: signed in, active
+  // helper somewhere, not also an owner/vendor.
+  useEffect(() => {
+    if (!user || user.isAnonymous) return;
+    if (helperCtx.loading) return;
+    if (!helperActiveAssignment) return;
+    if (isAdmin) return; // admin role-switcher handles them
+    if (isVendor) return; // vendor dashboard takes precedence
+    if (userRole === 'helper' && currentView === 'helper-dashboard') return;
+    // Helper users typically don't own events; if they happen to
+    // also own one (edge case), leave the owner flow alone.
+    setUserRole('helper');
+    setCurrentView('helper-dashboard');
+  }, [
+    helperCtx.loading,
+    helperActiveAssignment,
+    user,
+    isVendor,
+    isAdmin,
+    userRole,
+    currentView,
+  ]);
+
   // 2026-07-14 — post-login intent routing. If the user clicked the
   // 'I'm a Vendor' CTA on the LoginScreen before signing up, the screen
   // stashed 'vendor-onboarding' in sessionStorage. On login, we route
@@ -237,6 +265,26 @@ export default function App() {
   const helperPerms = currentEvent?.userId
     ? helperCtx.getPerms(currentEvent.userId)
     : null;
+
+  // 2026-07-19 — `helperActiveAssignment` for the helper dashboard.
+  // In helper mode there's no currentEvent (the helper doesn't own any
+  // wedding), so we derive an "assignment" object the `<HelperDashboard>`
+  // can render against. Picks the first active assignment when there
+  // are multiple (today they're rarely >1; in future this could be a
+  // dropdown of "switch wedding").
+  const helperActiveAssignment = useMemo(() => {
+    if (!helperCtx.assignments) return null;
+    const a = helperCtx.assignments.find(
+      (x) => x.status === 'active' && x.ownerUid,
+    );
+    if (!a) return null;
+    return {
+      id: a.id,
+      ownerUid: a.ownerUid,
+      ownerName: a.displayName || a.email || null,
+      perms: a.perms || {},
+    };
+  }, [helperCtx.assignments]);
   const [activeVenue, setActiveVenue] = useState(null);
   const [activeGuestPortal, setActiveGuestPortal] = useState(null);
 
@@ -1808,6 +1856,12 @@ export default function App() {
             setUserRole('reception');
             setActiveGuestPortal(null);
             setCurrentView('reception-scanner');
+          } else if (role === 'helper') {
+            // 2026-07-19 — active helpers land on their dashboard. Distinct
+            // from 'reception' which is a one-perm QR-only role.
+            setUserRole('helper');
+            setActiveGuestPortal(null);
+            setCurrentView('helper-dashboard');
           } else if (role === 'vendor') {
             setUserRole('vendor');
             setActiveGuestPortal(null);
@@ -1899,6 +1953,27 @@ export default function App() {
                         title="管理兄弟姊妹 (邀請、權限、撤銷)"
                       >
                         <Users className="w-4 h-4" /> 兄弟姊妹
+                      </button>
+                    )}
+                    {/* 2026-07-19 — helper pill: visible whenever the
+                        current user is an active helper somewhere.
+                        Jumps them to the helper dashboard. Distinct
+                        from the owner-only "兄弟姊妹 管理" pill to its
+                        left. Hidden for non-helpers. */}
+                    {helperActiveAssignment && userRole !== 'owner' && userRole !== 'vendor' && (
+                      <button
+                        onClick={() => {
+                          setUserRole('helper');
+                          setCurrentView('helper-dashboard');
+                        }}
+                        className={`flex items-center gap-1 text-sm font-bold px-3 py-1.5 rounded-lg border transition-colors ${
+                          userRole === 'helper'
+                            ? 'text-amber-700 bg-amber-100 border-amber-300'
+                            : 'text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-200'
+                        }`}
+                        title="切換到助手控制台"
+                      >
+                        🤝 助手控制台
                       </button>
                     )}
                     <button
@@ -2137,6 +2212,24 @@ export default function App() {
 
             {userRole === 'reception' && currentEvent && currentView === 'reception-scanner' && (
               <ReceptionScanner
+                eventGuests={eventGuests}
+                recentScans={recentScans || []}
+                onCheckIn={handleSimulateReceptionScan}
+                onManualCheckIn={handleSimulateReceptionScan}
+              />
+            )}
+
+            {/* 2026-07-19 — Helper dashboard. Active helpers
+                (兄弟姊妹/助手) get a perm-driven tabbed UI: tasks with
+                the new Activity Timeline + status picker, plus
+                optional 賓客 / 預算 / 相片 / 接待 tabs based on
+                what perms the couple granted. The header above the
+                tab strip shows which owner they're working for and
+                which perms they have. */}
+            {userRole === 'helper' && currentView === 'helper-dashboard' && helperActiveAssignment && (
+              <HelperDashboard
+                helperAssignment={helperActiveAssignment}
+                currentUser={user}
                 eventGuests={eventGuests}
                 recentScans={recentScans || []}
                 onCheckIn={handleSimulateReceptionScan}
