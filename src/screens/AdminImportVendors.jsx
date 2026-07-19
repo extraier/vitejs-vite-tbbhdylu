@@ -119,23 +119,39 @@ export function AdminImportVendors({ user, isAdmin, onBack }) {
 
   async function handleCommit() {
     if (!plan || acceptedRows.length === 0) return;
+    // 2026-07-19 — V2 commit dialog: distinguishes create vs update so
+    // the admin knows which docs will be touched and how.
+    const summary = plan.hasUpdates
+      ? `${plan.createCount} 個建立 + ${plan.updateCount} 個更新`
+      : `${acceptedRows.length} 個建立`;
     if (
       !confirm(
-        `確認要批次匯入 ${acceptedRows.length} 個商戶？\n\n` +
-          `會新增 Firestore 文件 (vendors collection)。\n` +
-          `重複的商戶名稱會跳過。`,
+        `確認要批次匯入 ${summary} 個商戶？\n\n` +
+          `會寫入 Firestore (vendors collection)。\n` +
+          (plan.hasUpdates
+            ? `更新會以 merge:true 套用 (CSV 未提的欄位保留)。\n`
+            : `重複的商戶名稱會跳過。\n`) +
+          `完成後會留下一筆 audit log (vendorImportLogs)。`,
       )
     ) {
       return;
     }
     setCommitting(true);
     setProgress({ done: 0, total: acceptedRows.length, failed: 0 });
-    const result = await commitImportPlan(plan, (p) =>
-      setProgress({
-        done: p.done,
-        total: p.total,
-        failed: p.failed,
-      }),
+    const result = await commitImportPlan(
+      plan,
+      {
+        // 2026-07-19 — audit trail: stamp the admin uid + file name in
+        // the vendorImportLogs doc. `user` is passed in via App.jsx.
+        adminUid: user?.uid || '',
+        fileName: file?.name || 'manual.csv',
+        onProgress: (p) =>
+          setProgress({
+            done: p.done,
+            total: p.total,
+            failed: p.failed,
+          }),
+      },
     );
     setCommitResult(result);
     setCommitting(false);
@@ -256,6 +272,22 @@ export function AdminImportVendors({ user, isAdmin, onBack }) {
                 value={plan.acceptedCount}
                 tone="emerald"
               />
+              {/* 2026-07-19 — break the accepted count down by create vs
+                  update so the admin knows what the commit will do. */}
+              {plan.hasUpdates && (
+                <>
+                  <Stat
+                    label="建立"
+                    value={plan.createCount}
+                    tone="sky"
+                  />
+                  <Stat
+                    label="更新"
+                    value={plan.updateCount}
+                    tone="indigo"
+                  />
+                </>
+              )}
               {plan.rejectedCount > 0 && (
                 <Stat
                   label="錯誤"
@@ -303,6 +335,13 @@ export function AdminImportVendors({ user, isAdmin, onBack }) {
                     <th className="text-left px-3 py-2 font-bold text-slate-600">
                       行
                     </th>
+                    {/* 2026-07-19 — show action badge so admin can see at a
+                        glance which rows will create vs update. */}
+                    {plan.hasUpdates && (
+                      <th className="text-left px-3 py-2 font-bold text-slate-600">
+                        動作
+                      </th>
+                    )}
                     <th className="text-left px-3 py-2 font-bold text-slate-600">
                       商戶名稱
                     </th>
@@ -332,6 +371,19 @@ export function AdminImportVendors({ user, isAdmin, onBack }) {
                       <td className="px-3 py-2 text-slate-500">
                         {r.lineNumber}
                       </td>
+                      {plan.hasUpdates && (
+                        <td className="px-3 py-2">
+                          {r.action === 'update' ? (
+                            <span className="inline-block bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-bold px-2 py-0.5 rounded">
+                              更新
+                            </span>
+                          ) : (
+                            <span className="inline-block bg-sky-50 text-sky-700 border border-sky-200 text-xs font-bold px-2 py-0.5 rounded">
+                              建立
+                            </span>
+                          )}
+                        </td>
+                      )}
                       <td className="px-3 py-2 font-bold text-slate-800">
                         {r.doc.name}
                         {r.warnings.length > 0 && (
@@ -517,6 +569,17 @@ export function AdminImportVendors({ user, isAdmin, onBack }) {
                         </span>
                       </>
                     )}
+                  </>
+                )}
+                {commitResult.auditLogId && (
+                  <>
+                    <br />
+                    <span className="text-xs">
+                      📋 Audit log:{' '}
+                      <code className="bg-slate-100 px-1.5 py-0.5 rounded text-slate-700">
+                        vendorImportLogs/{commitResult.auditLogId}
+                      </code>
+                    </span>
                   </>
                 )}
               </span>

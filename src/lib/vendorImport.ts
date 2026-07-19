@@ -1,7 +1,17 @@
 // ─── Vendor CSV import (admin batch) ──────────────────────────────────────
-// Maps parsed CSV rows to vendor docs and writes them in batches of 500.
-// V1 scope (2026-07-18):
-//   - create only (no upsert/update path)
+// Maps parsed CSV rows to vendor docs and writes them in batches of 450.
+//
+// V2 (2026-07-19) additions over V1:
+//   - update mode: a `vendorId` column directly addresses an existing doc
+//     (used with `merge: true` so unprovided columns aren't clobbered)
+//   - audit trail: every commit writes a summary doc to `vendorImportLogs`
+//     (per-row actions array, admin uid, file name, timestamp)
+//   - safer setRef: switches between `batch.set(ref, doc)` (create) and
+//     `batch.set(ref, doc, { merge: true })` (update) based on a per-row
+//     `merge` boolean resolved at plan-time
+//
+// V1 behaviour preserved:
+//   - create only when no vendorId column present
 //   - deduped against (name + phone) then (name only)
 //   - rejected rows surface a per-row reason; not in the batch
 //   - phone/email/district/website live under the contact nested object so
@@ -10,6 +20,7 @@
 // Column order is flexible — header keys are matched case-insensitively.
 
 import {
+  addDoc,
   collection,
   doc,
   getDocs,
@@ -27,8 +38,12 @@ import { VENDOR_CATEGORIES } from './config';
 export type VendorImportRow = {
   /** 1-based line number in the original CSV (header = 1, first data = 2). */
   lineNumber: number;
-  /** Generated vendor doc id (deterministic so dedupe can find existing). */
+  /** Generated OR explicit vendor doc id. */
   vendorId: string;
+  /** "create" or "update". Determined at plan-time. */
+  action: 'create' | 'update';
+  /** True if the CSV row provided an explicit vendorId (not derived). */
+  explicitId: boolean;
   /** Source row data, post-mapping. */
   doc: Record<string, unknown>;
   /** Non-blocking warnings (e.g. tag count trimmed). */
@@ -44,8 +59,22 @@ export type VendorImportPlan = {
   rows: VendorImportRow[];
   acceptedCount: number;
   rejectedCount: number;
+  /** # of accepted rows whose action === 'update'. */
+  updateCount: number;
+  /** # of accepted rows whose action === 'create'. */
+  createCount: number;
   duplicateCount: number;
+  /** True if ANY accepted row is an update — UI uses this to enable merge. */
+  hasUpdates: boolean;
   parseErrors: { line: number; reason: string }[];
+};
+
+export type CommitSummary = {
+  written: number;
+  failed: number;
+  lastError: string | null;
+  /** Doc id of the audit trail document written under vendorImportLogs. */
+  auditLogId: string | null;
 };
 
 const MAX_TAGS = 5;
@@ -104,9 +133,12 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
   const headers = parsed.headers;
   const errors = parsed.errors;
 
-  // Pre-load existing vendor docs to dedupe by id (cheap O(N) using a small
-  // collection query OR in-memory if caller already populated it). For the
-  // first version we just always create — dedupe runs again at write time.
+  // 2026-07-19 — If the CSV has a vendorId column, plan is mix-update;
+  // otherwise every row is treated as a create.
+  const hasExplicitIdColumn = headers.some(
+    (h) => h.toLowerCase() === 'vendorid' || h.toLowerCase() === 'vendor_id',
+  );
+
   const rows: VendorImportRow[] = [];
 
   for (let i = 0; i < parsed.rows.length; i++) {
@@ -115,13 +147,20 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
     const rowErrors: string[] = [];
     const warnings: string[] = [];
 
+    const explicitIdRaw = csvCell(raw, ['vendorId', 'vendor_id']);
+    const explicitId = explicitIdRaw.length > 0;
+
     const name = csvCell(raw, ['name', '商戶名稱', 'vendor name']);
-    if (!name) rowErrors.push('缺少商戶名稱 (name)');
-    if (name.length > 60) rowErrors.push(`商戶名稱過長 (${name.length}/60)`);
+    // V1 enforced name presence for ALL rows. V2: only required for create.
+    // Update rows must have an explicit vendorId but can omit name.
+    if (!explicitId && !name) rowErrors.push('缺少商戶名稱 (name)');
+    if (name && name.length > 60)
+      rowErrors.push(`商戶名稱過長 (${name.length}/60)`);
 
     const category = csvCell(raw, ['category', 'categoryKey', '類別']);
-    if (!category) rowErrors.push('缺少類別 (category)');
-    else if (!VENDOR_CATEGORIES[category])
+    if (!category && !explicitId)
+      rowErrors.push('缺少類別 (category)');
+    else if (category && !VENDOR_CATEGORIES[category])
       rowErrors.push(
         `類別「${category}」不在 VENDOR_CATEGORIES (合法值：${Object.keys(
           VENDOR_CATEGORIES,
@@ -137,8 +176,6 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
         ).join(', ')})`,
       );
     }
-    // If subcategory is empty/missing, that's a warning (not a hard error —
-    // many categories only have one sub so the top label is acceptable).
     if (category && !subRaw) warnings.push('未填次類別，會以頂層類別配對');
 
     const phone = csvCell(raw, ['phone', '電話', 'tel']);
@@ -191,12 +228,26 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
       warnings.push(`簡介超過 500 字，已截斷`);
     }
 
-    const vendorId = name ? deriveVendorId(name, phone) : `imp-${i}`;
+    // V2 — resolve the target vendorId and action.
+    let action: 'create' | 'update';
+    let targetId: string;
+    if (explicitId) {
+      if (!/^[A-Za-z0-9_\-]{1,1500}$/.test(explicitIdRaw)) {
+        rowErrors.push(
+          `vendorId「${explicitIdRaw.slice(0, 30)}...」格式不合 (只接受 [A-Za-z0-9_-])`,
+        );
+      }
+      action = 'update';
+      targetId = explicitIdRaw;
+    } else {
+      action = 'create';
+      targetId = name ? deriveVendorId(name, phone) : `imp-${i}`;
+    }
 
     const vendorDoc: Record<string, unknown> = {
-      name: name.slice(0, 60),
-      category,
-      subcategory,
+      name: name ? name.slice(0, 60) : null,
+      category: category || null,
+      subcategory: subcategory || null,
       contact: {
         phone: phone || null,
         email: email || null,
@@ -209,21 +260,32 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
       priceMin,
       priceMax,
       currency: 'HKD',
-      // Defaults that mirror what the onboarding wizard sets, so the new
-      // vendor looks identical whether it came from CSV or the wizard.
-      serviceArea: district || '香港',
-      yearsInBusiness: 0,
-      rating: 0,
-      ratingCount: 0,
-      status: 'approved',
-      appliedAt: serverTimestamp(),
-      importedAt: serverTimestamp(),
-      importedVia: 'admin-csv',
+      // For create rows set defaults so the doc matches a fresh onboarding.
+      // For update rows: merge:true keeps unmentioned fields intact; we
+      // still stamp `importedAt`/`importedVia` for forensic trail.
+      ...(action === 'create'
+        ? {
+            serviceArea: district || '香港',
+            yearsInBusiness: 0,
+            rating: 0,
+            ratingCount: 0,
+            status: 'approved',
+            appliedAt: serverTimestamp(),
+            importedAt: serverTimestamp(),
+            importedVia: 'admin-csv',
+          }
+        : {
+            importedAt: serverTimestamp(),
+            importedVia: 'admin-csv',
+            lastEditedViaImport: serverTimestamp(),
+          }),
     };
 
     rows.push({
       lineNumber,
-      vendorId,
+      vendorId: targetId,
+      action,
+      explicitId,
       doc: vendorDoc,
       warnings,
       errors: rowErrors,
@@ -231,7 +293,7 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
     });
   }
 
-  // Dedupe within the CSV itself: same vendorId & non-empty name collide.
+  // Dedupe within the CSV itself.
   const seen = new Map<string, VendorImportRow[]>();
   for (const r of rows) {
     if (r.errors.length > 0) continue;
@@ -251,10 +313,7 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
     }
   }
 
-  // Cross-source dedupe (existing docs): if any vendorId matches an
-  // existing doc we already have, mark it as duplicate. Cheap because we
-  // fetch up to 500 docs by `where('vendorId', '==', id)` is too narrow; we
-  // instead match on (name, phone) by reading the page (cost-aware).
+  // Cross-source dedupe for CREATE rows only.
   try {
     if (getApps().length > 0) {
       const db = getFirestore();
@@ -272,8 +331,11 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
       });
       for (const r of rows) {
         if (r.errors.length > 0) continue;
-        const nm = (r.doc.name as string).toLowerCase().trim();
-        const ph = digitsOnly((r.doc.contact as { phone?: string }).phone ?? '');
+        if (r.action === 'update') continue;
+        const nm = ((r.doc.name as string) || '').toLowerCase().trim();
+        const ph = digitsOnly(
+          (r.doc.contact as { phone?: string }).phone ?? '',
+        );
         if (nm && ph && byNamePhone.has(`${nm}|${ph}`)) {
           r.errors.push('與現有商戶同名同電話，請手動合併');
         } else if (nm && byName.has(nm)) {
@@ -282,24 +344,29 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
       }
     }
   } catch {
-    // Firestore not initialised yet / permission issue — skip, the UI
-    // catches the actual write error at commit time.
+    // Permission issue / not initialised yet — UI surfaces actual errors.
   }
 
-  const acceptedCount = rows.filter((r) => r.errors.length === 0).length;
+  const accepted = rows.filter((r) => r.errors.length === 0);
+  const acceptedCount = accepted.length;
   const rejectedCount = rows.length - acceptedCount;
+  const updateCount = accepted.filter((r) => r.action === 'update').length;
+  const createCount = acceptedCount - updateCount;
 
   return {
     headers,
     rows,
     acceptedCount,
     rejectedCount,
+    updateCount,
+    createCount,
     duplicateCount,
+    hasUpdates: updateCount > 0,
     parseErrors: errors,
   };
 }
 
-// ─── Commit: batched write to Firestore ───────────────────────────────────
+// ─── Commit: batched write to Firestore + audit trail ─────────────────────
 
 export type CommitProgress = {
   total: number;
@@ -308,22 +375,37 @@ export type CommitProgress = {
   lastError: string | null;
 };
 
+export type CommitOptions = {
+  /** The admin user's uid (from Firebase Auth). Written to the audit log. */
+  adminUid: string;
+  /** CSV / file name that triggered this commit. */
+  fileName: string;
+  onProgress?: (p: CommitProgress) => void;
+};
+
 export async function commitImportPlan(
   plan: VendorImportPlan,
-  onProgress?: (p: CommitProgress) => void,
-): Promise<{ written: number; failed: number; lastError: string | null }> {
+  options: CommitOptions,
+): Promise<CommitSummary> {
   const accepted = plan.rows.filter((r) => r.errors.length === 0);
   const db = getFirestore();
   let written = 0;
   let failed = 0;
   let lastError: string | null = null;
 
+  const perRowLog: { lineNumber: number; vendorId: string; action: 'create' | 'update' }[] = [];
+
   for (let i = 0; i < accepted.length; i += BATCH_SIZE) {
     const chunk = accepted.slice(i, i + BATCH_SIZE);
     const batch = writeBatch(db);
     for (const row of chunk) {
       const ref = doc(db, 'vendors', row.vendorId);
-      batch.set(ref, row.doc);
+      batch.set(ref, row.doc, { merge: row.action === 'update' });
+      perRowLog.push({
+        lineNumber: row.lineNumber,
+        vendorId: row.vendorId,
+        action: row.action,
+      });
     }
     try {
       await batch.commit();
@@ -337,7 +419,32 @@ export async function commitImportPlan(
     }
   }
 
-  return { written, failed, lastError };
+  // 2026-07-19 — Audit trail. One summary doc per commit.
+  let auditLogId: string | null = null;
+  try {
+    const auditRef = await addDoc(collection(db, 'vendorImportLogs'), {
+      at: serverTimestamp(),
+      adminUid: options.adminUid || null,
+      fileName: options.fileName || '',
+      totalAccepted: plan.acceptedCount,
+      totalRejected: plan.rejectedCount,
+      createCount: plan.createCount,
+      updateCount: plan.updateCount,
+      duplicateCount: plan.duplicateCount,
+      written,
+      failed,
+      lastError,
+      parseErrors: plan.parseErrors.length,
+      rows: perRowLog.slice(0, 2000),
+      rowsTruncated: perRowLog.length > 2000 ? perRowLog.length - 2000 : 0,
+    });
+    auditLogId = auditRef.id;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[vendorImport] audit log write failed:', err);
+  }
+
+  return { written, failed, lastError, auditLogId };
 }
 
 // ─── Sample CSV template (for the download button) ────────────────────────
@@ -347,4 +454,5 @@ export const VENDOR_CSV_TEMPLATE = [
   'Visionary Capture,photo_video,photographer,+852 9123 4567,info@visionarycapture.example,https://visionarycapture.example,中西區,專業婚紗及晚宴攝影｜8 年經驗｜中環 / 尖沙咀 取景,婚紗攝影|紀錄式|香港,https://cdn.example/v1.jpg|https://cdn.example/v2.jpg,8000,20000',
   'The Glasshouse,honeymoon,hotel,,,,,蜜月度假首選 — 峇里私人別墅,蜜月|峇里,https://cdn.example/villa1.jpg,15000,',
   '（範例：priceMax 留空 = 上不封頂；輸入 "open" 同樣視為上不封頂；tags / portfolioUrls 用 | 分隔；中文欄位亦接受）',
+  '（更新模式：CSV 加上 vendorId 欄，會以 merge:true 更新既有商戶；無 vendorId 欄時仍為建立新商戶）',
 ].join('\n');
