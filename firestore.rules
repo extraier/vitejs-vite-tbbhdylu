@@ -182,7 +182,11 @@ service cloud.firestore {
         match /tasks/{taskId} {
           allow read: if isOwner(ownerUid)
             || hasHelperPerm(ownerUid, 'canViewChecklist')
-            || (isSignedIn() && request.auth.uid == resource.data.assignedVendorUid);
+            || (isSignedIn() && request.auth.uid == resource.data.assignedVendorUid)
+            // 2026-07-19 — helpers assigned via `assignedHelperUid`
+            // can read their own tasks too. Same shape as the vendor
+            // check above.
+            || (isSignedIn() && request.auth.uid == resource.data.assignedHelperUid);
           allow create, delete: if isOwner(ownerUid);
           // 2026-07-17: vendors can write — but ONLY the three status
           // fields, never title/dueDate/cost/etc. Enforced by checking
@@ -194,12 +198,22 @@ service cloud.firestore {
               && request.auth.uid == resource.data.assignedVendorUid
               && request.resource.data.diff(resource.data).affectedKeys()
                   .hasOnly(['status', 'statusUpdatedAt', 'statusNote'])
+            )
+            // 2026-07-19 — assigned helpers get the same limited
+            // status-update ability as vendors. They cannot rename the
+            // task or change due date — just the status fields.
+            || (
+              isSignedIn()
+              && request.auth.uid == resource.data.assignedHelperUid
+              && request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['status', 'statusUpdatedAt', 'statusNote'])
             );
-          // 2026-07-17: 對話串 (comments) on a task. Same access model as
-          // the parent task: owner / canViewChecklist helper / assigned
-          // vendor can read. Owner + assigned vendor can write — helpers
-          // never post to keep the thread attributable to
-          // decision-makers.
+          // 2026-07-19 — discussion + status-change audit log.
+          // Same access model as the parent task: owner /
+          // canViewChecklist helper / assigned vendor / assigned
+          // helper can read. Owner + assigned vendor + assigned helper
+          // can write. Author always has edit+delete on their own
+          // comments; statusUpdates are append-only.
           match /comments/{commentId} {
             allow read: if isOwner(ownerUid)
               || hasHelperPerm(ownerUid, 'canViewChecklist')
@@ -207,8 +221,17 @@ service cloud.firestore {
               || (
                 isSignedIn()
                 && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId))
-                && get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedVendorUid == request.auth.uid
+                && (
+                  get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedVendorUid == request.auth.uid
+                  || get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedHelperUid == request.auth.uid
+                )
               );
+            // 2026-07-19 — write access: owner / vendor / helper
+            // assigned to the parent task. Helper needs `canViewChecklist`
+            // perm in their helpers doc to author comments (their helper
+            // doc could otherwise be entirely read-only). `parentCommentId`
+            // is optional — omit for top-level, set to another
+            // comment's id for a reply.
             allow create: if isOwner(ownerUid)
               || (
                 isSignedIn()
@@ -217,11 +240,56 @@ service cloud.firestore {
                 && request.resource.data.text is string
                 && request.resource.data.text.size() > 0
                 && request.resource.data.text.size() <= 2000
+                && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
                 && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId))
-                && get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedVendorUid == request.auth.uid
+                && (
+                  get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedVendorUid == request.auth.uid
+                  || (
+                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedHelperUid == request.auth.uid
+                    && hasHelperPerm(ownerUid, 'canViewChecklist')
+                  )
+                )
               );
+            // Author can edit+delete their own; owner (couple) can
+            // always delete for moderation.
             allow update, delete: if isOwner(ownerUid)
               || (isSignedIn() && request.auth.uid == resource.data.authorUid);
+          }
+          // 2026-07-19 — Audit-trail collection for status changes.
+          // Append-only: once written, statusUpdates cannot be edited
+          // or deleted. The client also writes the change to the
+          // parent task's status fields; this collection is the
+          // fine-grained timeline (who, when, from→to, optional reason).
+          match /statusUpdates/{updateId} {
+            allow read: if isOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewChecklist')
+              || (
+                isSignedIn()
+                && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId))
+                && (
+                  get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedVendorUid == request.auth.uid
+                  || get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedHelperUid == request.auth.uid
+                )
+              );
+            allow create: if (
+              isOwner(ownerUid)
+              || (
+                isSignedIn()
+                && request.resource.data.byUid == request.auth.uid
+                && request.resource.data.keys().hasAll(['byUid', 'byRole', 'fromStatus', 'toStatus', 'createdAt'])
+                && request.resource.data.byRole in ['owner', 'vendor', 'helper']
+                && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId))
+                && (
+                  get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedVendorUid == request.auth.uid
+                  || (
+                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/tasks/$(taskId)).data.assignedHelperUid == request.auth.uid
+                    && hasHelperPerm(ownerUid, 'canViewChecklist')
+                  )
+                )
+              )
+            );
+            // Append-only — never editable.
+            allow update, delete: if false;
           }
         }
 

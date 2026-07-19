@@ -43,6 +43,7 @@ import {
 } from './lib/config';
 import { parseGuestParams } from './lib/guestMode';
 import { uploadPhotoToNas } from './lib/uploadToNas';
+import { recordTaskStatusUpdate } from './lib/taskUpdates';
 import {
   openInquiry,
   subscribeToInquiries,
@@ -560,6 +561,20 @@ export default function App() {
       update.isCompleted = true;
     }
     await setDoc(ref, update, { merge: true });
+    // 2026-07-19 — also append to the per-task audit trail so the
+    // activity timeline reflects this status change. Vendor-side
+    // path; the byRole is hardcoded to 'vendor' because this
+    // handler is only mounted on the vendor dashboard.
+    recordTaskStatusUpdate({
+      ownerUid: task.ownerUid,
+      taskId: task.id,
+      fromStatus: task.status || null,
+      toStatus: newStatusId,
+      byUid: user.uid,
+      byName: vendor?.name || user.displayName || user.email || null,
+      byRole: 'vendor',
+      reason: statusNote || null,
+    });
   };
 
    // Aggregate unread count for the header inbox badge.
@@ -1212,6 +1227,20 @@ export default function App() {
     await updateDoc(taskRef, {
       isCompleted: !task.isCompleted,
       actualCost: !task.isCompleted ? task.estimatedCost : 0,
+    });
+    // 2026-07-19 — append to the per-task audit trail so the
+    // activity timeline picks up the check/uncheck as a status
+    // change ('done' <-> previous). Task already had a `status`
+    // field; we map isCompleted back to one of the TASK_STATUSES
+    // ids for the trail.
+    recordTaskStatusUpdate({
+      ownerUid: user.uid,
+      taskId: task.id,
+      fromStatus: task.status || null,
+      toStatus: !task.isCompleted ? 'done' : task.status || 'todo',
+      byUid: user.uid,
+      byName: user.displayName || user.email || '主理新人',
+      byRole: 'owner',
     });
   };
 

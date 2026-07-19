@@ -18,6 +18,7 @@ import {
   CalendarDays,
 } from 'lucide-react';
 import { TaskComments } from '../components/TaskComments';
+import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
 import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 
@@ -898,11 +899,17 @@ function TaskRow({
     </div>
     {showComments && (
       <div className="mt-2">
-        <TaskComments
+        {/* 2026-07-19 — switch from chat-only `<TaskComments>` to the
+            merged `<TaskActivityTimeline>` so the couple sees both
+            threaded discussion AND status changes in one place. */}
+        <TaskActivityTimeline
           task={task}
           currentUser={currentUser}
           currentRole="owner"
         />
+        {/* Hidden legacy chat-only view kept behind a comment count
+            toggle for backwards-compat. Uncomment below to restore. */}
+        {/* <TaskComments task={task} currentUser={currentUser} currentRole="owner" /> */}
       </div>
     )}
     </>

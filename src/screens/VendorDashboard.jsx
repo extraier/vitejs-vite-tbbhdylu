@@ -35,6 +35,7 @@ import {
 import { getVendorCategoryLabel } from '../lib/config';
 import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 import { TaskComments } from '../components/TaskComments';
+import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
 
 // 2026-07-17 — task-status config. Five states. Stored on
 // /tasks/{taskId}.status. Vendor-side writable per firestore.rules
@@ -508,11 +509,13 @@ function VendorTaskCard({ task, onUpdateStatus, currentUser }) {
       )}
       {expanded && (
         <div className="px-3 pb-3">
-          <TaskComments
+          {/* 2026-07-19 — switch to merged `<TaskActivityTimeline>`
+              so vendors see status updates from the couple alongside
+              discussion. Same role pass-through, vendor-side. */}
+          <TaskActivityTimeline
             task={task}
             currentUser={{ uid: currentUser?.uid || '', displayName: currentUser?.name || '商戶' }}
             currentRole="vendor"
-            compact
           />
         </div>
       )}
