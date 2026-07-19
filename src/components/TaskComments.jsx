@@ -118,8 +118,17 @@ export function TaskComments({
 
   const handleSend = async (e) => {
     if (e) e.preventDefault();
+    // 2026-07-19 — silent bails were causing "send does nothing"
+    // reports. Surface every guard.
     const clean = text.trim();
-    if (!clean || !currentUser?.uid || !task?.ownerUid || !task?.id) return;
+    if (!clean) {
+      window.alert && window.alert('⚠ 請輸入留言內容');
+      return;
+    }
+    if (!currentUser?.uid || !task?.ownerUid || !task?.id) {
+      window.alert && window.alert('⚠ 任務資料遺失，請重新整理再試');
+      return;
+    }
     setSending(true);
     try {
       const commentRef = collection(
@@ -152,7 +161,8 @@ export function TaskComments({
       setReplyTo(null);
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('TaskComments: send failed', err?.message);
+      console.warn('[TaskComments] send failed', err?.message);
+      window.alert && window.alert('✗ 留言失敗：' + (err?.message || '未知錯誤'));
     } finally {
       setSending(false);
     }

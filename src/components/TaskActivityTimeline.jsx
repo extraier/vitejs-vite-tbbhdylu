@@ -20,10 +20,11 @@
  */
 
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { collection, addDoc, deleteDoc, doc } from 'firebase/firestore';
 import { ArrowRight, Clock, Loader2, Reply, CornerUpRight, Send, Trash2 } from 'lucide-react';
+import { collection, addDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db, appId } from '../lib/firebase';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
+import { useToast } from '../hooks/useToast';
 import {
   mergeTaskActivity,
   buildStatusUpdateDoc,
@@ -133,6 +134,7 @@ export function TaskActivityTimeline({ task, currentUser, currentRole = 'owner',
   const [sending, setSending] = useState(false);
   const listRef = useRef(null);
   const prevCountRef = useRef(0);
+  const { showToast } = useToast();
 
   // Auto-scroll on growth.
   useEffect(() => {
@@ -148,27 +150,45 @@ export function TaskActivityTimeline({ task, currentUser, currentRole = 'owner',
 
   const handleSend = async (e) => {
     if (e) e.preventDefault();
-    if (!allowed) return;
+    // 2026-07-19 — silent bails hurt the user (every "send" looked
+    // successful from the input being cleared, but nothing happened).
+    // Each guard now sets a human-readable state so the user can fix it.
+    if (!allowed) {
+      showToast?.('⚠ 你冇權限留喺呢個任務留言');
+      return;
+    }
     const clean = text.trim();
-    if (!clean || !ownerUid || !taskId || !currentUser?.uid) return;
+    if (!clean) {
+      showToast?.('⚠ 請輸入留言內容');
+      return;
+    }
+    if (!ownerUid || !taskId || !currentUser?.uid) {
+      showToast?.('⚠ 任務資料遺失，請重新整理再試');
+      return;
+    }
     setSending(true);
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'users', ownerUid, 'tasks', taskId, 'comments'), {
-        authorUid: currentUser.uid,
-        authorName:
-          currentUser.displayName ||
-          currentUser.email ||
-          (currentRole === 'vendor' ? '商戶' : currentRole === 'helper' ? '助手' : '主理新人'),
-        authorRole: currentRole,
-        text: clean,
-        parentCommentId: replyTo?.id || null,
-        createdAt: Date.now(),
-      });
+      await addDoc(
+        collection(db, 'artifacts', appId, 'users', ownerUid, 'tasks', taskId, 'comments'),
+        {
+          authorUid: currentUser.uid,
+          authorName:
+            currentUser.displayName ||
+            currentUser.email ||
+            (currentRole === 'vendor' ? '商戶' : currentRole === 'helper' ? '助手' : '主理新人'),
+          authorRole: currentRole,
+          text: clean,
+          parentCommentId: replyTo?.id || null,
+          createdAt: Date.now(),
+        },
+      );
       setText('');
       setReplyTo(null);
+      showToast?.('✓ 留言已送出');
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('TaskActivityTimeline: send failed', err?.message);
+      console.warn('[TaskActivityTimeline] send failed', err?.message);
+      showToast?.(`✗ 留言失敗：${err?.message || '未知錯誤'}`);
     } finally {
       setSending(false);
     }
