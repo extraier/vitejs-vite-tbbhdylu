@@ -380,7 +380,26 @@ service cloud.firestore {
     // catch-all).
     match /vendors/{vendorUid} {
       allow read: if true;
-      allow write: if isSignedIn() && request.auth.uid == vendorUid;
+      // 2026-07-19 — Vendor CSV import (admin batch) writes here with
+      // either: (a) derived ids like 'imp-...', or (b) explicit vendor
+      // uid targets. Both should be permitted for admin callers. Owner
+      // can still write their own profile.
+      allow write: if isAdmin()
+        || (isSignedIn() && request.auth.uid == vendorUid);
+
+      // 2026-07-19 — Audit trail for admin CSV imports. Admin-only
+      // create; read for admin only. We deliberately scope audit docs
+      // outside /artifacts/* (no per-user isolation needed — they are
+      // application-level logs, not user data).
+      match /vendorImportLogs/{logId} {
+        // Implicit deny on read to anyone but admin.
+        allow read: if isAdmin();
+        // Anonymous create from browser: only admin (custom-claim `admin`) can create.
+        allow create: if isAdmin()
+          && request.resource.data.keys().hasAll(['at', 'adminUid', 'fileName'])
+          && request.resource.data.at is timestamp;
+        allow update, delete: if false;
+      }
 
       // 2026-07-17 — Couple reviews/ratings.
       // Public read for browsing.
