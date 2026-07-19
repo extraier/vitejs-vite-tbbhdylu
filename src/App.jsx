@@ -179,32 +179,13 @@ export default function App() {
     }
   }, [isVendor, user]);
 
-  // 2026-07-19 — auto-route active helpers (兄弟姊妹) to their
-  // dashboard. Only runs when the user is NOT also an owner /
-  // vendor (those roles take precedence). Hidden by the helper
-  // waiting screen earlier in the render path when there are no
-  // active assignments, so reaching here means: signed in, active
-  // helper somewhere, not also an owner/vendor.
-  useEffect(() => {
-    if (!user || user.isAnonymous) return;
-    if (helperCtx.loading) return;
-    if (!helperActiveAssignment) return;
-    if (isAdmin) return; // admin role-switcher handles them
-    if (isVendor) return; // vendor dashboard takes precedence
-    if (userRole === 'helper' && currentView === 'helper-dashboard') return;
-    // Helper users typically don't own events; if they happen to
-    // also own one (edge case), leave the owner flow alone.
-    setUserRole('helper');
-    setCurrentView('helper-dashboard');
-  }, [
-    helperCtx.loading,
-    helperActiveAssignment,
-    user,
-    isVendor,
-    isAdmin,
-    userRole,
-    currentView,
-  ]);
+  // NOTE: helper auto-route is intentionally NOT here — moving it
+  // next to the vendor one would create a Temporal Dead Zone
+  // because `helperActiveAssignment` is declared below this point
+  // (it depends on `helperCtx` which is grouped with the other
+  // data hooks). The auto-route useEffect is co-located with the
+  // `helperActiveAssignment` definition further down. See hook
+  // order for context.
 
   // 2026-07-14 — post-login intent routing. If the user clicked the
   // 'I'm a Vendor' CTA on the LoginScreen before signing up, the screen
@@ -285,6 +266,32 @@ export default function App() {
       perms: a.perms || {},
     };
   }, [helperCtx.assignments]);
+
+  // 2026-07-19 — auto-route active helpers (兄弟姊妹) to their
+  // dashboard. Co-located with `helperActiveAssignment` because
+  // referring to it from an earlier useEffect would crash
+  // (`const` declarations are not hoisted — the deps array is
+  // evaluated when useEffect is called, putting the reference in
+  // TDZ). Vendor role takes precedence; helper waiting screen
+  // earlier in the render path handles the "active-not-yet" case.
+  useEffect(() => {
+    if (!user || user.isAnonymous) return;
+    if (helperCtx.loading) return;
+    if (!helperActiveAssignment) return;
+    if (isAdmin) return;
+    if (isVendor) return;
+    if (userRole === 'helper' && currentView === 'helper-dashboard') return;
+    setUserRole('helper');
+    setCurrentView('helper-dashboard');
+  }, [
+    helperCtx.loading,
+    helperActiveAssignment,
+    user,
+    isVendor,
+    isAdmin,
+    userRole,
+    currentView,
+  ]);
   const [activeVenue, setActiveVenue] = useState(null);
   const [activeGuestPortal, setActiveGuestPortal] = useState(null);
 
