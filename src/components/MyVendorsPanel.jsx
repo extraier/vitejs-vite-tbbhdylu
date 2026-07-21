@@ -8,6 +8,13 @@
 // <VendorInviteModal> (share a signup link via WhatsApp/IG/email);
 // tapping 💬 on an onboarded contact (linkedVendorUid set) opens
 // the real chat via the existing chat.js helpers.
+//
+// 2026-07-21 — Two-path "新增商戶" flow:
+//   1. AddVendorPicker: pick from existing catalog (677 onboarded)
+//      OR fall back to creating a custom off-platform vendor.
+//   2. When picking from catalog, we use the vendor's existing data
+//      (name, category, location, etc.) and set linkedVendorUid so
+//      chat opens immediately.
 
 import { useState } from 'react';
 import {
@@ -24,6 +31,7 @@ import {
 import { VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { VendorContactForm } from './modals/VendorContactForm';
 import { VendorInviteModal } from './modals/VendorInviteModal';
+import { AddVendorPicker } from './modals/AddVendorPicker';
 
 export function MyVendorsPanel({
   contacts = [],
@@ -34,6 +42,7 @@ export function MyVendorsPanel({
   onLinkContact, // (contact) => void; manual uid-based link fallback
   onChatContact, // (contact) => void; called for contacts with linkedVendorUid
 }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [invitingContact, setInvitingContact] = useState(null);
@@ -56,6 +65,41 @@ export function MyVendorsPanel({
     }
   }
 
+  // 2026-07-21 — when user picks an existing vendor from the catalog,
+  // map vendor fields → MyVendors contact shape. linkedVendorUid set
+  // → chat opens immediately (no invite modal needed).
+  function handlePickExisting(vendor) {
+    const contact = {
+      vendorName: vendor.name,
+      vendorEmail: '',         // not exposed publicly
+      vendorPhone: '',         // not exposed publicly
+      vendorInstagram: '',     // could pull from vendor doc later
+      category: vendor.category || '',
+      notes: vendor.serviceAreaCity
+        ? `從目錄加入 · ${vendor.serviceAreaCity}`
+        : '從目錄加入',
+      linkedVendorUid: vendor.id,
+      // Save a snapshot so the card still works if the vendor doc moves
+      vendorSnapshot: {
+        name: vendor.name,
+        categoryLabel: vendor.categoryLabel,
+        serviceAreaCity: vendor.serviceAreaCity,
+        serviceAreaDistrict: vendor.serviceAreaDistrict,
+        portfolio: (vendor.portfolio || []).slice(0, 4),
+        rating: vendor.rating || 0,
+      },
+      isFromCatalog: true,
+    };
+    onAddContact?.(contact);
+    setPickerOpen(false);
+  }
+
+  function handleAddCustom() {
+    setPickerOpen(false);
+    setEditing(null);
+    setFormOpen(true);
+  }
+
   return (
     <div className="mb-6">
       <div className="flex items-center justify-between mb-3">
@@ -68,7 +112,7 @@ export function MyVendorsPanel({
         <button
           onClick={() => {
             setEditing(null);
-            setFormOpen(true);
+            setPickerOpen(true);
           }}
           className="text-sm bg-rose-50 hover:bg-rose-100 text-rose-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 border border-rose-200"
         >
@@ -111,6 +155,14 @@ export function MyVendorsPanel({
             />
           ))}
         </div>
+      )}
+
+      {pickerOpen && (
+        <AddVendorPicker
+          onPickExisting={handlePickExisting}
+          onAddCustom={handleAddCustom}
+          onClose={() => setPickerOpen(false)}
+        />
       )}
 
       {formOpen && (
@@ -160,12 +212,28 @@ function ContactCard({ contact, onChat, onLink, onEdit, onDelete }) {
           {contact.vendorName?.charAt(0)?.toUpperCase() || '?'}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-bold text-slate-800 truncate">
-            {contact.vendorName}
+          <div className="flex items-center gap-1.5">
+            <div className="font-bold text-slate-800 truncate">
+              {contact.vendorName}
+            </div>
+            {contact.isFromCatalog && (
+              <span
+                className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded font-bold flex-shrink-0"
+                title="從 Save The Day 商戶目錄加入"
+              >
+                📂 從目錄
+              </span>
+            )}
           </div>
           {contact.category && (
             <div className="text-[10px] text-slate-500 mt-0.5 truncate">
               {categoryLabel(contact.category)}
+            </div>
+          )}
+          {contact.vendorSnapshot?.serviceAreaCity && (
+            <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+              📍 {contact.vendorSnapshot.serviceAreaCity}
+              {contact.vendorSnapshot.serviceAreaDistrict && ` · ${contact.vendorSnapshot.serviceAreaDistrict}`}
             </div>
           )}
           {contact.notes && (
