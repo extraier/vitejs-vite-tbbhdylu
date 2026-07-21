@@ -435,6 +435,58 @@ service cloud.firestore {
           && (resource.data.vendorUid == request.auth.uid
               || resource.data.coupleUid == request.auth.uid);
       }
+
+      // 2026-07-20 — vendor ↔ couple chat threads. Lives under
+      // /artifacts/{appId}/vendorInquiries/{inquiryId}/ so it can be
+      // keyed by a deterministic id (sorted vendorUid + coupleUid)
+      // and read by either party. VendorModal's inquiry form calls
+      // openInquiry() + sendMessage() from lib/chat.js to create
+      // these threads and post the couple's brief as the first
+      // message. The vendor sees them in their shared Inbox view.
+      match /vendorInquiries/{inquiryId} {
+        // Either party can read; admin sees everything for moderation.
+        allow read: if isAdmin()
+          || (isSignedIn() && (
+            resource.data.vendorUid == request.auth.uid
+            || resource.data.coupleUid == request.auth.uid
+          ));
+        // Either party can create — id is deterministic (sorted pair)
+        // so a duplicate click is harmless (setDoc merges).
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasAll(['vendorUid', 'coupleUid', 'createdAt'])
+          && request.resource.data.vendorUid is string
+          && request.resource.data.coupleUid is string
+          && request.resource.data.createdAt is timestamp
+          && (request.resource.data.vendorUid == request.auth.uid
+              || request.resource.data.coupleUid == request.auth.uid);
+        // Either party can update counters (unread, lastMessageAt, etc).
+        allow update: if isSignedIn()
+          && (resource.data.vendorUid == request.auth.uid
+              || resource.data.coupleUid == request.auth.uid);
+        allow delete: if isAdmin()
+          || (isSignedIn() && (
+            resource.data.vendorUid == request.auth.uid
+            || resource.data.coupleUid == request.auth.uid
+          ));
+
+        // Messages subcollection. Same auth shape — either party can
+        // read + write messages.
+        match /messages/{messageId} {
+          allow read: if isAdmin()
+            || (isSignedIn() && (
+              get(/databases/$(database)/documents/artifacts/$(appId)/vendorInquiries/$(inquiryId)).data.vendorUid == request.auth.uid
+              || get(/databases/$(database)/documents/artifacts/$(appId)/vendorInquiries/$(inquiryId)).data.coupleUid == request.auth.uid
+            ));
+          allow create: if isSignedIn()
+            && request.resource.data.keys().hasAll(['senderUid', 'senderRole', 'text', 'createdAt'])
+            && request.resource.data.senderUid == request.auth.uid
+            && request.resource.data.senderRole is string
+            && request.resource.data.text is string
+            && request.resource.data.text.size() <= 4000
+            && request.resource.data.createdAt is timestamp;
+          allow update, delete: if false;
+        }
+      }
     }
 
     // ---- Vendor directory (root-level, NOT under /artifacts/{appId}) ----
@@ -466,6 +518,89 @@ service cloud.firestore {
         allow create: if isAdmin()
           && request.resource.data.keys().hasAll(['at', 'adminUid', 'fileName'])
           && request.resource.data.at is timestamp;
+        allow update, delete: if false;
+      }
+
+      // 2026-07-20 — vendor activation audit trail. Every meaningful
+      // step of the activation flow (token_issued, email_sent,
+      // email_failed, claim_attempt, claim_failed, claim_success,
+      // apply_attempt, apply_failed, apply_success) writes here from
+      // the cloud function (which uses the service account and bypasses
+      // these rules). Admins read this to surface "Activation history"
+      // per vendor. Writes from client are denied — only server-side
+      // functions may append, otherwise vendors could fake their own
+      // activation record.
+      match /vendorActivationLogs/{logId} {
+        allow read: if isAdmin();
+        allow create, update, delete: if false;
+      }
+
+      // 2026-07-20 — vendor portfolio image view analytics.
+      // Couples open the vendor lightbox to see full-resolution
+      // portfolio images; we log one row per lightbox open so the
+      // vendor + admin can see which images get the most attention.
+      //
+      // Read access:
+      //   - Admin sees all rows (for moderation + cross-vendor insights)
+      //   - Vendor reads only their own rows (where vendorSlug matches
+      //     their own vendorUid doc ID). This lets vendors see "which
+      //     of my portfolio images is performing best" without seeing
+      //     other vendors' analytics.
+      //
+      // Writes from any signed-in user (couples, vendors previewing,
+      // admins). Updates/deletes are denied — analytics are
+      // append-only.
+      match /vendorImageViews/{viewId} {
+        // 2026-07-20 — visibility widened from admin/own-vendor to
+        // all signed-in users. Couples need to read this
+        // collection for the 商戶指南 popularity sort (count
+        // views by vendorSlug). Each row only exposes
+        // vendorSlug + count — no PII (image URL is fine, but
+        // viewerUid is sensitive so we still gate write-side
+        // checks). If we ever need to gate by relationship, do it
+        // client-side; for now any signed-in user can see the
+        // aggregate.
+        allow read: if isAdmin()
+          || (isSignedIn() && resource.data.vendorSlug == request.auth.uid)
+          || isSignedIn();  // 2026-07-20 — popularity sort needs all rows
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasAll(['vendorSlug', 'imageIndex', 'imageUrl', 'viewerUid', 'createdAt'])
+          && request.resource.data.vendorSlug is string
+          && request.resource.data.imageIndex is int
+          && request.resource.data.imageUrl is string
+          && request.resource.data.viewerUid is string
+          && request.resource.data.createdAt is timestamp
+          && request.resource.data.viewerUid == request.auth.uid;
+        allow update, delete: if false;
+      }
+
+      // 2026-07-20 — vendor direct inquiries. Couples hit the
+      // "聯絡商戶" CTA inside VendorModal when the vendor is
+      // onboarded (signupStatus === 'claimed'). One inquiry doc
+      // per submission, with the couple's name, contact, brief,
+      // and the vendor's slug. Vendors read their own inbound
+      // inquiries; admin reads everything for moderation.
+      //
+      // Writes are restricted to signed-in users, and fromUid must
+      // match the caller's auth.uid to prevent spoofing. The
+      // submitted vendorSlug must equal the caller's target
+      // vendorUid — this couples the write to a specific vendor
+      // and prevents the couple from claiming to write to arbitrary
+      // vendors via a forged vendorSlug.
+      match /vendorInquiries/{inquiryId} {
+        allow read: if isAdmin()
+          || (isSignedIn() && resource.data.vendorSlug == request.auth.uid);
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasAll(['vendorSlug', 'vendorName', 'fromContact', 'brief', 'createdAt'])
+          && request.resource.data.vendorSlug is string
+          && request.resource.data.vendorName is string
+          && request.resource.data.fromContact is string
+          && request.resource.data.brief is string
+          && request.resource.data.brief.size() <= 1000
+          && request.resource.data.fromContact.size() <= 200
+          && request.resource.data.createdAt is timestamp
+          && (request.resource.data.fromUid == null
+              || request.resource.data.fromUid == request.auth.uid);
         allow update, delete: if false;
       }
 

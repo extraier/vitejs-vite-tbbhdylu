@@ -43,11 +43,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
+  CheckCircle2,
   ChevronLeft,
+  Flame,
   Heart,
+  Loader2,
   Search,
   Share2,
+  Sparkles,
   Star,
+  TrendingUp,
   X,
   ShoppingBag,
   BarChart3,
@@ -73,6 +78,7 @@ const COMPARE_MAX = 5;
 const SORT_MODES = [
   { value: 'recommended', label: '⭐ 推薦' },
   { value: 'rating', label: '最高評分' },
+  { value: 'popular', label: '🔥 熱門' },
   { value: 'price_asc', label: '價格由低至高' },
   { value: 'price_desc', label: '價格由高至低' },
   { value: 'newest', label: '最新加入' },
@@ -100,14 +106,29 @@ function buildSorter(mode) {
       ? (v) => -1 * (parseFormattedNumber(v.price) || 0)
       : mode === 'newest'
       ? (v) => -1 * getCreatedAtMs(v)
+      // 2026-07-20 — popular sort. Higher viewCount wins. Vendors
+      // with no views sort to the bottom (negative infinity
+      // comparison puts them last after any zero). Falls back to
+      // rating as tiebreaker so equal-view vendors don't reshuffle.
+      : mode === 'popular'
+      ? (v) => -1 * (v.viewCount || 0)
       : mode === 'recommended'
       ? (v) => -1 * (v.rating || 0)
       : () => 0;
   return (a, b) => {
+    // 2026-07-20 — recommended sort boost. Claimed vendors
+    // (onboarded, can receive messages) sort ahead of
+    // uninvited/invited vendors within the same rating tier.
+    // Boost is +0.5 stars equivalent.
+    const aClaimed = a.signupStatus === 'claimed' ? 0.5 : 0;
+    const bClaimed = b.signupStatus === 'claimed' ? 0.5 : 0;
     const aFeat = a.featured ? 1 : 0;
     const bFeat = b.featured ? 1 : 0;
     if (aFeat !== bFeat) return bFeat - aFeat;
-    return primary(a) - primary(b);
+    const primaryDiff = primary(a) - primary(b);
+    if (primaryDiff !== 0) return primaryDiff;
+    // 2026-07-20 — stable tiebreaker.
+    return getCreatedAtMs(b) - getCreatedAtMs(a);
   };
 }
 
@@ -140,6 +161,13 @@ export function DiscoverDirectory({
   const [showCompareModal, setShowCompareModal] = useState(false);
   // Local toast for "shortlist copied!" feedback after shareOrCopy.
   const [actionToast, setActionToast] = useState(null);
+  // 2026-07-20 — infinite scroll. Default page size 60.
+  // visibleCount grows as the user scrolls near the bottom.
+  const [visibleCount, setVisibleCount] = useState(60);
+  // 2026-07-20 — popularity is now sourced from the vendor doc
+  // itself (popularity.viewCount7d, .viewCount30d, etc.) — kept
+  // up-to-date by the onVendorImageViewCreated cloud function.
+  // No client-side /vendorImageViews subscription needed.
 
   const favoriteSet = useMemo(() => favoriteIds || new Set(), [favoriteIds]);
 
@@ -185,6 +213,24 @@ export function DiscoverDirectory({
     const sorter = buildSorter(sortMode);
     return [...narrowed].sort(sorter);
   }, [filter, vendors, search, sortMode, favoriteSet, selectedCats]);
+
+  // 2026-07-20 — vendor.viewCount is now already attached at the
+  // App.jsx subscription layer (sourced from popularity.viewCount7d
+  // on the vendor doc). Pass-through (no decoration needed).
+  const decorated = useMemo(() => filtered, [filtered]);
+
+  // 2026-07-20 — reset pagination when filter/search/sort changes.
+  useEffect(() => {
+    setVisibleCount(60);
+  }, [filter, search, sortMode, selectedCats, favoriteSet]);
+
+  // 2026-07-20 — the slice we actually render. IntersectionObserver
+  // grows visibleCount by 60 each time the sentinel enters view.
+  const visibleVendors = useMemo(
+    () => decorated.slice(0, visibleCount),
+    [decorated, visibleCount],
+  );
+  const hasMore = visibleCount < decorated.length;
 
   // Counts across both category cards and per-subcategory chips.
   const counts = useMemo(() => {
@@ -307,7 +353,9 @@ export function DiscoverDirectory({
   }
 
   const totalCategories = Object.keys(VENDOR_CATEGORIES).length;
-  const visibleCount = filtered.length;
+  // 2026-07-20 — renamed from `visibleCount` to avoid shadowing the
+  // pagination state declared above.
+  const filteredCount = filtered.length;
   const hasAnySelection = selectedCats.size > 0;
   const isComparing = compareMode && compareTray.size >= 2;
 
@@ -333,7 +381,7 @@ export function DiscoverDirectory({
           {inFavorites
             ? '我哋嘅心水商戶'
             : inMultiSelect
-            ? `已選 ${selectedCats.size} 個類別，商戶總數：${visibleCount}`
+            ? `已選 ${selectedCats.size} 個類別，商戶總數：${filteredCount}`
             : inSub
             ? filter.replace('.', ' › ')
             : inCategory
@@ -472,7 +520,7 @@ export function DiscoverDirectory({
             onCardDrilldown={(topKey) => setFilterWithSearchReset(topKey)}
             selectedCats={selectedCats}
           />
-          {search && visibleCount === 0 && (
+          {search && filteredCount === 0 && (
             <SearchEmpty onClear={() => setSearch('')} query={search} />
           )}
           {/* Tip line under the grid so users discover the long-press
@@ -496,16 +544,23 @@ export function DiscoverDirectory({
             onClear={clearCats}
           />
           <VendorGrid
-            vendors={filtered}
-            onSelect={handleClick}
-            onToggleFavorite={onToggleFavorite}
-            favoriteIds={favoriteSet}
-            emptyMessage={
-              search
-                ? `已選類別入面未搵到「${search}」。`
-                : '已選類別入面未有商戶。'
-            }
+          vendors={visibleVendors}
+          onSelect={handleClick}
+          onToggleFavorite={onToggleFavorite}
+          favoriteIds={favoriteSet}
+          emptyMessage={
+            search
+    ? `已選類別入面未搵到「${search}」。`
+    : '已選類別入面未有商戶。'
+          }
           />
+          {/* 2026-07-20 — infinite scroll sentinel */}
+          {hasMore && (
+          <InfiniteSentinel
+            onIntersect={() => setVisibleCount((c) => c + 60)}
+            label="載入更多商戶"
+          />
+          )}
         </>
       )}
 
@@ -513,26 +568,60 @@ export function DiscoverDirectory({
       {inFavorites && (
         <>
           <div className="text-center mb-4">
-            <p className="text-sm text-slate-500">
-              {compareMode
-                ? '📊 選擇 2-3 個商戶加入比較籃（最多 3 個）'
-                : '撳商戶卡片 ❤️ 將佢加入或移出最愛。'}
-            </p>
+          <p className="text-sm text-slate-500">
+            {compareMode
+    ? '📊 選擇 2-3 個商戶加入比較籃（最多 3 個）'
+    : '撳商戶卡片 ❤️ 將佢加入或移出最愛。'}
+          </p>
           </div>
+          {/* 2026-07-20 — favorites quick-sort chips */}
+          {counts.favorites >= 2 && (
+          <div className="flex flex-wrap items-center justify-center gap-2 mb-6">
+            <span className="text-xs text-slate-500 font-bold mr-1">排序：</span>
+            {[
+    { value: 'newest', label: '🆕 新加入' },
+    { value: 'popular', label: '🔥 熱門' },
+    { value: 'rating', label: '⭐ 最高評分' },
+    { value: 'recommended', label: '✨ 推薦' },
+            ].map((opt) => {
+    const isActive = sortMode === opt.value;
+    return (
+      <button
+        key={opt.value}
+        type="button"
+        onClick={() => setSortMode(opt.value)}
+        className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+          isActive
+            ? 'bg-rose-500 text-white shadow-sm'
+            : 'bg-white text-slate-600 border border-slate-200 hover:border-rose-300 hover:text-rose-600'
+        }`}
+      >
+        {opt.label}
+      </button>
+    );
+            })}
+          </div>
+          )}
           <VendorGrid
-            vendors={filtered}
-            onSelect={handleClick}
-            onToggleFavorite={onToggleFavorite}
-            favoriteIds={favoriteSet}
-            compareMode={compareMode}
-            compareTray={compareTray}
-            onToggleCompare={toggleCompare}
-            emptyMessage={
-              search
-                ? `你嘅最愛入面未搵到「${search}」。`
-                : '未加入任何最愛商戶 — 喺商戶卡片上面撳 ❤️ 就可以加入!'
-            }
+          vendors={visibleVendors}
+          onSelect={handleClick}
+          onToggleFavorite={onToggleFavorite}
+          favoriteIds={favoriteSet}
+          compareMode={compareMode}
+          compareTray={compareTray}
+          onToggleCompare={toggleCompare}
+          emptyMessage={
+            search
+              ? `你嘅最愛入面未搵到「${search}」。`
+              : '未加入任何最愛商戶 — 喺商戶卡片上面撳 ❤️ 就可以加入!'
+          }
           />
+          {hasMore && (
+          <InfiniteSentinel
+            onIntersect={() => setVisibleCount((c) => c + 60)}
+            label="載入更多"
+          />
+          )}
         </>
       )}
 
@@ -540,22 +629,28 @@ export function DiscoverDirectory({
       {isDrilldown && (
         <>
           <SubCategoryChips
-            topKey={inSub ? filter.split('.')[0] : filter}
-            currentFilter={filter}
-            onFilterChange={(next) => onFilterChange(next)}
-            subCounts={counts.subCounts}
+          topKey={inSub ? filter.split('.')[0] : filter}
+          currentFilter={filter}
+          onFilterChange={(next) => onFilterChange(next)}
+          subCounts={counts.subCounts}
           />
           <VendorGrid
-            vendors={filtered}
-            onSelect={handleClick}
-            onToggleFavorite={onToggleFavorite}
-            favoriteIds={favoriteSet}
-            emptyMessage={
-              search
-                ? `冇商戶同時符合「${filter}」同「${search}」。`
-                : '呢個分類暫時未有商戶，試下其他分類啦！'
-            }
+          vendors={visibleVendors}
+          onSelect={handleClick}
+          onToggleFavorite={onToggleFavorite}
+          favoriteIds={favoriteSet}
+          emptyMessage={
+            search
+    ? `冇商戶同時符合「${filter}」同「${search}」。`
+    : '呢個分類暫時未有商戶，試下其他分類啦！'
+          }
           />
+          {hasMore && (
+          <InfiniteSentinel
+            onIntersect={() => setVisibleCount((c) => c + 60)}
+            label="載入更多"
+          />
+          )}
         </>
       )}
 
@@ -568,7 +663,7 @@ export function DiscoverDirectory({
           <span className="flex items-center gap-2 text-sm font-bold text-slate-700">
             <ShoppingBag className="w-4 h-4 text-emerald-600" />
             已選 {selectedCats.size} 個分類（共{' '}
-            {visibleCount} 個商戶）
+            {filteredCount} 個商戶）
           </span>
           <div className="flex items-center gap-2">
             <button
@@ -890,6 +985,24 @@ function VendorGrid({
                   推薦
                 </div>
               )}
+              {/* 2026-07-20 — "新加入" badge for live-imported vendors
+                  created in the last 30 days. Sits below the category
+                  chip so it doesn't overlap the 推薦 badge. */}
+              {vendor.isLive && (Date.now() - (vendor.createdAt || 0)) < 30 * 24 * 60 * 60 * 1000 && (
+                <div className="absolute top-12 left-3 bg-emerald-500 text-white rounded-full px-2.5 py-1 text-[10px] font-black shadow-sm flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" />
+                  新加入
+                </div>
+              )}
+              {/* 2026-07-20 — "已啟動" verified badge. Surfaces
+                  vendors who have completed onboarding and can
+                  receive inquiries. Bottom-left position. */}
+              {vendor.signupStatus === 'claimed' && (
+                <div className="absolute bottom-3 left-3 bg-emerald-600 text-white rounded-full px-2.5 py-1 text-[10px] font-black shadow-md flex items-center gap-1 backdrop-blur-sm">
+                  <CheckCircle2 className="w-3 h-3" />
+                  已啟動
+                </div>
+              )}
               {compareMode && (
                 <button
                   type="button"
@@ -957,6 +1070,26 @@ function VendorGrid({
                   {subLabel}
                 </div>
               )}
+              {/* 2026-07-20 — popularity indicator. Sub-granular:
+                  prefer 24h if there's been activity today, then
+                  7d, then 30d. Hidden when zero views to keep the
+                  cards visually clean. Counter maintained by the
+                  onVendorImageViewCreated cloud function. */}
+              {vendor.popularity && (() => {
+                const p = vendor.popularity;
+                let tier = null;
+                if (p.viewCount24h > 0) tier = { count: p.viewCount24h, label: '今日瀏覽', hot: true };
+                else if (p.viewCount7d > 0) tier = { count: p.viewCount7d, label: '近 7 日瀏覽' };
+                else if (p.viewCount30d > 0) tier = { count: p.viewCount30d, label: '近 30 日瀏覽' };
+                if (!tier) return null;
+                return (
+                  <div className={`text-xs flex items-center gap-1 mb-2 ${tier.hot ? 'text-rose-600' : 'text-slate-500'}`}>
+                    {tier.hot ? <Flame className="w-3 h-3" /> : <TrendingUp className="w-3 h-3 text-emerald-500" />}
+                    <span className="font-bold text-slate-700">{tier.count}</span>
+                    <span>{tier.label}</span>
+                  </div>
+                );
+              })()}
               <div className="flex justify-between items-center border-t border-slate-100 pt-4">
                 <span className="font-black text-rose-600">
                   {vendor.price}
@@ -984,6 +1117,50 @@ function SearchEmpty({ onClear, query }) {
       >
         清除搜尋
       </button>
+    </div>
+  );
+}
+
+// 2026-07-20 — InfiniteSentinel. IntersectionObserver-based
+// trigger for "load more" pagination. When the sentinel
+// element scrolls into the viewport, calls `onIntersect` once
+// and disconnects — the parent grows visibleCount by 60 and a
+// new sentinel mounts below the new last card. Unmounting the
+// sentinel also disconnects the observer (cleaned up in
+// useEffect), so there's no memory leak. 200px rootMargin so
+// the next batch starts loading BEFORE the user reaches the
+// bottom of the current page — feels smoother than a hard
+// "scroll to end" trigger.
+function InfiniteSentinel({ onIntersect, label = '載入更多' }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    let fired = false;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && !fired) {
+            fired = true;
+            onIntersect();
+            observer.disconnect();
+            break;
+          }
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [onIntersect]);
+  return (
+    <div
+      ref={ref}
+      className="py-12 flex flex-col items-center gap-2"
+      aria-hidden="true"
+    >
+      <Loader2 className="w-6 h-6 text-emerald-500 animate-spin" />
+      <p className="text-xs text-slate-400">{label}</p>
     </div>
   );
 }

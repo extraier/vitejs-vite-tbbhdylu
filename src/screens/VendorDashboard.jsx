@@ -12,7 +12,7 @@
 // vendor name and used a hardcoded INITIAL_JOB_REQUESTS array as
 // the listing. Both now come from Firestore.
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Briefcase,
   Calendar,
@@ -31,10 +31,16 @@ import {
   PlayCircle,
   AlertTriangle,
   CalendarDays,
+  PartyPopper,
+  X,
+  History,
+  ChevronUp,
 } from 'lucide-react';
 import { getVendorCategoryLabel } from '../lib/config';
 import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 import { TaskComments } from '../components/TaskComments';
+import { VendorPortfolioAnalytics } from '../components/VendorPortfolioAnalytics';
+import { VendorInquiriesPanel } from '../components/VendorInquiriesPanel';
 import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
 
 // 2026-07-17 — task-status config. Five states. Stored on
@@ -83,6 +89,7 @@ const TASK_STATUSES = [
 const STATUS_BY_ID = Object.fromEntries(TASK_STATUSES.map((s) => [s.id, s]));
 
 export function VendorDashboard({
+  user,
   vendor,
   jobRequests,
   loading,
@@ -92,6 +99,7 @@ export function VendorDashboard({
   isAdminPreview = false,
   assignedTasks = [],
   onUpdateTaskStatus,
+  onOpenInquiry,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
@@ -102,6 +110,54 @@ export function VendorDashboard({
     ? ` · ${getVendorCategoryLabel(vendor.category, vendor.subcategory)}`
     : '';
   const hasName = Boolean(vendor?.name && vendor.name.trim().length >= 2);
+
+  // 2026-07-20 — activation banner. For vendors who claimed their
+  // seeded slot within the last 7 days, surface a friendly banner
+  // asking them to confirm their listing is ready. The banner uses
+  // sessionStorage so it dismisses per-session and doesn't pester
+  // the vendor on every visit.
+  const [activationBannerDismissed, setActivationBannerDismissed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return sessionStorage.getItem('activationBannerDismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const activationBanner = useMemo(() => {
+    if (activationBannerDismissed) return null;
+    if (!vendor?.claimedAt) return null;
+    // claimedAt may be a Firestore Timestamp, ISO string, or number.
+    let claimedMs = 0;
+    try {
+      const c = vendor.claimedAt;
+      if (typeof c === 'object' && typeof c.toMillis === 'function') claimedMs = c.toMillis();
+      else if (typeof c === 'object' && typeof c._seconds === 'number') claimedMs = c._seconds * 1000;
+      else if (typeof c === 'string') claimedMs = new Date(c).getTime();
+      else if (typeof c === 'number') claimedMs = c;
+    } catch {
+      return null;
+    }
+    if (!claimedMs) return null;
+    const ageMs = Date.now() - claimedMs;
+    if (ageMs < 0 || ageMs > 7 * 24 * 60 * 60 * 1000) return null;
+    return { ageDays: Math.floor(ageMs / (24 * 60 * 60 * 1000)), originalSlug: vendor.originalSlug || null };
+  }, [vendor?.claimedAt, vendor?.originalSlug, activationBannerDismissed]);
+
+  // 2026-07-20 — portfolio analytics collapsible. Vendor clicks
+  // "作品集分析" to expand the analytics panel. Collapsed by
+  // default — most vendor tasks (claim jobs, edit profile) don't
+  // need analytics on every visit.
+  const [showAnalytics, setShowAnalytics] = useState(false);
+
+  function dismissActivationBanner() {
+    try {
+      sessionStorage.setItem('activationBannerDismissed', '1');
+    } catch {
+      // ignore
+    }
+    setActivationBannerDismissed(true);
+  }
 
   return (
     <div className="max-w-6xl mx-auto mt-8 animate-in slide-in-from-bottom-4 duration-500">
@@ -123,6 +179,122 @@ export function VendorDashboard({
           </div>
         </div>
       )}
+      {/* 2026-07-20 — first-week activation banner. Shown to vendors
+          who claimed their seeded listing within the last 7 days;
+          helps them get oriented (edit profile, see job marketplace,
+          set up pricing). Dismisses per-session so it doesn't pester
+          repeat visitors — eventually the claimedAt threshold pushes
+          it out of view permanently. */}
+      {activationBanner && (
+        <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl p-5 mb-6 relative animate-in slide-in-from-top-2 duration-500">
+          <button
+            type="button"
+            onClick={dismissActivationBanner}
+            className="absolute top-3 right-3 text-emerald-700 hover:bg-emerald-100 rounded-lg p-1.5"
+            aria-label="關閉"
+            title="下次再顯示"
+          >
+            <X className="w-4 h-4" />
+          </button>
+          <div className="flex items-start gap-4 pr-8">
+            <div className="w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0">
+              <PartyPopper className="w-6 h-6 text-white" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h3 className="font-bold text-emerald-900 text-lg mb-1">
+                歡迎！你的商戶帳戶已啟動 ✨
+              </h3>
+              <p className="text-emerald-800 text-sm mb-4 leading-relaxed">
+                {activationBanner.ageDays === 0
+                  ? '你今日剛完成啟動，建議花幾分鐘確認下以下資料，新人搜尋時就會見到你。'
+                  : `你 ${activationBanner.ageDays} 日前完成啟動，建議盡快確認下以下資料，新人搜尋時會見到你。`}
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => onManageProfile?.()}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2"
+                >
+                  <Settings className="w-4 h-4" />
+                  編輯商戶資料
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Scroll to job marketplace area (the InboxSection is below).
+                    const el = document.getElementById('job-marketplace-anchor');
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                  className="bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 font-bold py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2"
+                >
+                  <Inbox className="w-4 h-4" />
+                  睇睇新人嘅查詢
+                </button>
+                {activationBanner.originalSlug && (
+                  <a
+                    href={`https://www.heychoices.com/products/${activationBanner.originalSlug}-好唔好`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 font-bold py-2.5 px-4 rounded-xl text-sm flex items-center justify-center gap-2"
+                    title="前往原本嘅 heychoices listing"
+                  >
+                    <Briefcase className="w-4 h-4" />
+                    原本嘅 listing
+                  </a>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 2026-07-20 — vendor inquiry inbox panel. Always visible
+          at the top of the dashboard (not collapsible like the
+          analytics one) — incoming customer messages are the most
+          time-sensitive thing a vendor sees. Subscribes to
+          /artifacts/{appId}/vendorInquiries for the current vendor,
+          shows unread badge + recent 4 inquiries + link to full
+          inbox. Click an inquiry → onOpenInquiry → App.jsx routes
+          to the shared ChatRoom. */}
+      <div className="mb-6">
+        <VendorInquiriesPanel
+          user={user}
+          onOpenInquiry={onOpenInquiry}
+        />
+      </div>
+
+      {/* 2026-07-20 — Portfolio analytics collapsible. Vendor clicks
+          the button to expand; renders VendorPortfolioAnalytics
+          which queries /vendorImageViews (firestore rule allows
+          own-vendor read). */}
+      <div className="mb-6">
+        <button
+          type="button"
+          onClick={() => setShowAnalytics((s) => !s)}
+          className="w-full bg-white border border-slate-200 hover:border-emerald-300 rounded-2xl px-5 py-3 flex items-center justify-between text-left shadow-sm transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <span className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center">
+              <History className="w-4 h-4 text-emerald-600" />
+            </span>
+            <span>
+              <span className="font-black text-slate-800">作品集瀏覽分析</span>
+              <span className="text-xs text-slate-500 ml-2">
+                邊張相最多人睇 · 訪客來源
+              </span>
+            </span>
+          </span>
+          {showAnalytics ? (
+            <ChevronUp className="w-5 h-5 text-slate-400" />
+          ) : (
+            <ChevronDown className="w-5 h-5 text-slate-400" />
+          )}
+        </button>
+        {showAnalytics && (
+          <div className="mt-3">
+            <VendorPortfolioAnalytics user={user} vendorUid={vendor?.vendorUid || vendor?.id} />
+          </div>
+        )}
+      </div>
       <div className="bg-slate-900 rounded-2xl p-8 text-white mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold flex items-center gap-3">
@@ -224,6 +396,7 @@ export function VendorDashboard({
       )}
 
       {/* Loading / empty states */}
+      <div id="job-marketplace-anchor" />
       {loading && (
         <div className="bg-white rounded-2xl p-12 text-center border border-slate-200">
           <Loader2 className="w-8 h-8 animate-spin text-emerald-500 mx-auto mb-3" />

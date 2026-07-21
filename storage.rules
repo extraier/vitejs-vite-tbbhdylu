@@ -42,18 +42,24 @@ service firebase.storage {
       allow write: if false;
     }
 
-    // 2026-07-14 — vendor portfolio uploads. Each vendor can write to
+    // 2026-07-19 — vendor portfolio uploads. Each vendor can write to
     // their own folder. The folder name MUST match the signed-in user's
     // UID; if a vendor tries to upload to someone else's folder the
-    // request is rejected. Portfolio images are served as public via
-    // getDownloadURL (which signs a token) — we use the standard SDK
-    // pattern rather than `allow read: if true` to keep the bucket
-    // surface area minimal.
+    // request is rejected.
+    //
+    // READ: open to the public by design. Every wedding directory
+    // needs vendor portfolios to be linkable from outside the SPA
+    // (think direct-image linking in chat, social previews, partner
+    // apps). The bucket's surface area is still small because each
+    // object is namespaced under `/vendors/{vendorId}/portfolio/`
+    // and shares the same path policy as the public vendor doc
+    // (`/vendors/{vendorId}` — `allow read: if true` in firestore).
+    // An object in this folder means that vendor has publicly claimed
+    // it; the read ACL on the doc itself is the moderation gate.
     match /vendors/{vendorId}/portfolio/{fileName} {
-      allow read: if request.auth != null
-        && (request.auth.uid == vendorId || isAdmin());
+      allow read: if true;
       allow write: if request.auth != null
-        && request.auth.uid == vendorId
+        && (request.auth.uid == vendorId || isAdmin())
         && request.resource.size < 8 * 1024 * 1024  // matches client-side MAX
         && request.resource.contentType.matches('image/.*');
     }

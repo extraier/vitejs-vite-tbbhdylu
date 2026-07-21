@@ -121,6 +121,12 @@ export function validateStep(stepIndex, form) {
  * Submit the wizard. Server re-validates everything; client validation is
  * purely for fast feedback.
  *
+ * If the user arrived via an invitation deep-link (?signup&venue=&token=)
+ * the wizard takes a different code path: claimAndApplyAsVendor instead
+ * of applyAsVendor. This way the existing seeded vendor's photos and
+ * data are migrated into the new auth-uid-keyed doc atomically, instead
+ * of leaving an orphan slug doc.
+ *
  * @returns {Promise<{ ok: true, vendorUid, vendorId, status: 'pending' }>}
  */
 export async function submitVendorApplication(form) {
@@ -136,7 +142,6 @@ export async function submitVendorApplication(form) {
     }
   }
 
-  const fn = httpsCallable(functions, 'applyAsVendor');
   const payload = {
     name: form.name.trim(),
     category: form.category,
@@ -151,6 +156,37 @@ export async function submitVendorApplication(form) {
     portfolio: form.portfolio,
     tags: (form.tags || []).slice(0, 10),
   };
+
+  // If there's a pending invite stashed by App.jsx (from ?signup&
+  // venue=&token= query string), route through claimAndApplyAsVendor
+  // so the seeded data merges atomically with the wizard's submission.
+  let pendingInvite = null;
+  try {
+    const raw = sessionStorage.getItem('pendingVendorInvite');
+    if (raw) pendingInvite = JSON.parse(raw);
+  } catch {
+    // ignore — treat as no invite
+  }
+
+  if (pendingInvite && pendingInvite.slug && pendingInvite.token) {
+    // Lazy import to avoid an import cycle (vendorOnboarding.js is
+    // bundled in app shell, vendorActivation is the new module).
+    const { claimAndApplyAsVendor } = await import('./vendorActivation');
+    const result = await claimAndApplyAsVendor({
+      slug: pendingInvite.slug,
+      invitationToken: pendingInvite.token,
+      ...payload,
+    });
+    // Clear the stashed invite so we don't re-claim on re-submit.
+    try {
+      sessionStorage.removeItem('pendingVendorInvite');
+    } catch {
+      // ignore
+    }
+    return result;
+  }
+
+  const fn = httpsCallable(functions, 'applyAsVendor');
   const result = await fn(payload);
   return result.data;
 }

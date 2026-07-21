@@ -503,6 +503,11 @@ export * from './vendors';
 // 2026-07-17: vendor ratings & reviews (submitRating, deleteMyRating,
 // listVendorRatings). Lives in ./ratings.ts.
 export * from './ratings';
+// 2026-07-20: vendor popularity aggregation trigger + daily
+// scheduled sweep. Maintains /vendors/{uid}.popularity.{24h,7d,30d,
+// total} counters so couples can browse the 商戶指南 without
+// loading every /vendorImageViews row.
+export * from './vendorAnalytics';
 
 export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
@@ -777,6 +782,12 @@ export const admin_listVendors = onCall({ cors: true, region: "us-central1" }, a
         status: typeof data.status === 'string' ? data.status : null,
         yearsInBusiness: typeof data.yearsInBusiness === 'number' ? data.yearsInBusiness : null,
         serviceArea: typeof data.serviceArea === 'string' ? data.serviceArea : null,
+        // 2026-07-20 — vendor activation flow: surfaced to admin UI so
+        // each row can render a status pill + activation buttons.
+        signupStatus: typeof data.signupStatus === 'string' ? data.signupStatus : 'uninvited',
+        invitationExpiresAt: data.invitationExpiresAt || null,
+        claimedByUid: typeof data.claimedByUid === 'string' ? data.claimedByUid : null,
+        claimedAt: data.claimedAt || null,
         email,
         authDisabled: disabled,
         updatedAt: data.updatedAt || null,
@@ -861,3 +872,15 @@ export const admin_deleteVendor = onCall({ cors: true, region: "us-central1" }, 
   await ref.delete();
   return { ok: true, vendorUid };
 });
+
+// 2026-07-20 — vendor activation flow: admin-only invitation tokens,
+// public claim-on-signup path, and invite-email sender. See
+// functions/src/vendorActivation.ts for the module header.
+
+export {
+  activateSeededVendor,
+  claimSeededVendor,
+  claimAndApplyAsVendor,
+  sendVendorInviteEmail,
+  bulkActivateSeededVendors,
+} from './vendorActivation';

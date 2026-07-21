@@ -225,6 +225,8 @@ function SuccessScreen({ result, logout, onComplete }) {
     window.location.href = '/';
   };
 
+  const wasClaim = typeof result.migratedStorageObjects === 'number';
+
   return (
     <div className="max-w-xl mx-auto mt-12 px-4">
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center">
@@ -234,20 +236,45 @@ function SuccessScreen({ result, logout, onComplete }) {
         <h2 className="text-2xl font-bold text-slate-800 mb-2">
           🎉 申請成功！
         </h2>
-        <p className="text-slate-600 mb-6">
-          你的商戶專頁已建立。請重新登入以啟用商戶權限，
-          <br />
-          然後就可以接單、管理作品集、回覆新人查詢。
-        </p>
+        {wasClaim ? (
+          <>
+            <p className="text-slate-600 mb-6">
+              已成功激活你嘅商戶帳戶。
+              {result.migratedStorageObjects > 0 ? (
+                <>
+                  原本嘅 <strong>{result.migratedStorageObjects}</strong> 張作品集相片已經過戶到你嘅新帳戶，無需重新上載。
+                </>
+              ) : (
+                <>原本嘅 vendor listing 資料已經過戶到你嘅新帳戶。</>
+              )}
+            </p>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-6 text-left">
+              <div className="font-bold text-emerald-900 mb-1 text-sm">下一步</div>
+              <ol className="text-sm text-emerald-800 space-y-1 list-decimal list-inside">
+                <li>登出並用同一個 email 重新登入</li>
+                <li>系統會帶你去「商戶接單大堂」</li>
+                <li>可以即刻編輯你嘅價錢、上載新作品、回覆新人查詢</li>
+              </ol>
+            </div>
+          </>
+        ) : (
+          <p className="text-slate-600 mb-6">
+            你的商戶專頁已建立。請重新登入以啟用商戶權限，
+            <br />
+            然後就可以接單、管理作品集、回覆新人查詢。
+          </p>
+        )}
 
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 text-left">
-          <div className="font-bold text-amber-900 mb-1 text-sm">下一步</div>
-          <ol className="text-sm text-amber-800 space-y-1 list-decimal list-inside">
-            <li>點擊下方按鈕登出</li>
-            <li>用同一個 email 重新登入</li>
-            <li>系統會自動帶你去「商戶接單大堂」</li>
-          </ol>
-        </div>
+        {!wasClaim && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 text-left">
+            <div className="font-bold text-amber-900 mb-1 text-sm">下一步</div>
+            <ol className="text-sm text-amber-800 space-y-1 list-decimal list-inside">
+              <li>點擊下方按鈕登出</li>
+              <li>用同一個 email 重新登入</li>
+              <li>系統會自動帶你去「商戶接單大堂」</li>
+            </ol>
+          </div>
+        )}
 
         <button
           type="button"

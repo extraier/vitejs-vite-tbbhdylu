@@ -1,4 +1,6 @@
-import { Heart, Calendar, ArrowRight, Plus, Crown } from 'lucide-react';
+import { Heart, Calendar, ArrowRight, Plus, Crown, Flame, TrendingUp } from 'lucide-react';
+import { TrendingVendors } from '../components/TrendingVendors';
+import { VENDOR_CATEGORIES } from '../lib/config';
 
 // `isAdmin` and `user` used to be passed in here so the page could embed
 // the admin KPI strip + users table below the event cards. As of 2026-07-01
@@ -7,13 +9,26 @@ import { Heart, Calendar, ArrowRight, Plus, Crown } from 'lucide-react';
 // We intentionally do NOT accept those props anymore — leaving them in
 // would invite future engineers to re-add the embed.
 
-export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate, onSelectEvent }) {
+export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate, onSelectEvent, vendors = [], onSelectVendor, onGoDiscover }) {
   return (
     <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
       <div className="text-center mb-12">
         <Heart className="w-16 h-16 text-rose-500 mx-auto mb-4 fill-rose-100" />
         <h1 className="text-4xl font-black text-slate-800 mb-2">Save The Day · 總大堂</h1>
         <p className="text-slate-500">建立或選擇你想管理的婚禮專案</p>
+      </div>
+
+      {/* 2026-07-20 — "熱門商戶" preview on the events dashboard.
+          Couples who haven't picked an event yet see what's hot
+          in the catalog so the home page never feels empty. Click
+          → onSelectVendor opens the modal. Hidden when there's no
+          trending data (early launch, no views yet). */}
+      <div className="mb-8">
+        <TrendingVendors
+          vendors={vendors}
+          onSelect={onSelectVendor}
+          onGoDiscover={onGoDiscover}
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

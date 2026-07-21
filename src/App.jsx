@@ -210,6 +210,60 @@ export default function App() {
     }
   }, [user]);
 
+  // 2026-07-20 — vendor invitation deep-link. If the user opened a
+  // `?signup&venue=<slug>&token=<token>` link, we stash the (slug,
+  // token) into sessionStorage so the vendor onboarding wizard can
+  // submit through claimAndApplyAsVendor instead of applyAsVendor.
+  //
+  // Two effects (not one): the first captures the query string the
+  // moment the page loads — it must run BEFORE the user exists, so
+  // it does NOT route into the wizard itself. The second effect
+  // (right below) watches for `user` becoming truthy and routes
+  // them in if a pending invite is stashed.
+  useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get('signup') !== '1') return;
+      const venue = sp.get('venue');
+      const token = sp.get('token');
+      if (!venue || !token) return;
+      sessionStorage.setItem(
+        'pendingVendorInvite',
+        JSON.stringify({ slug: venue, token, capturedAt: Date.now() }),
+      );
+      // Strip the query so the URL doesn't keep advertising the
+      // token on every nav. history.replaceState keeps the page
+      // from reloading.
+      const url = new URL(window.location.href);
+      url.searchParams.delete('signup');
+      url.searchParams.delete('venue');
+      url.searchParams.delete('token');
+      window.history.replaceState({}, '', url.toString());
+    } catch {
+      // ignore — query string capture is a soft path. If sessionStorage
+      // is disabled the user can still manually navigate to the wizard.
+    }
+  }, []); // mount-only
+
+  // When the user signs in (during or after the visit that brought
+  // them here), route into the wizard if a pending invite is stashed.
+  useEffect(() => {
+    if (!user || user.isAnonymous) return;
+    try {
+      const raw = sessionStorage.getItem('pendingVendorInvite');
+      if (!raw) return;
+      const pending = JSON.parse(raw);
+      if (!pending?.slug || !pending?.token) {
+        // stale or malformed — drop it
+        sessionStorage.removeItem('pendingVendorInvite');
+        return;
+      }
+      setCurrentView('vendor-onboarding');
+    } catch {
+      // ignore
+    }
+  }, [user]);
+
   // Hermes 2026-07-03: helperPerms is derived once currentEvent is declared
   // (below, around line 107). The declaration is placed there because
   // JavaScript's temporal dead zone forbids referencing consts before they
@@ -295,8 +349,89 @@ export default function App() {
   const [activeVenue, setActiveVenue] = useState(null);
   const [activeGuestPortal, setActiveGuestPortal] = useState(null);
 
-  // Vendors — static for now
-  const [vendors] = useState(DEFAULT_VENDORS);
+  // Vendors — 2026-07-20 was static DEFAULT_VENDORS. Now also
+  // subscribes to the live /vendors collection so couples browsing
+  // the 商戶指南 see the 668 imported heychoices vendors alongside
+  // the 4 demo entries. The live list is filtered to status !==
+  // 'rejected' / 'suspended' so bad docs don't leak into the
+  // catalog. The merge dedupes by doc.id so the same vendor
+  // doesn't appear twice (rare but possible if a vendor was added
+  // both to DEFAULT_VENDORS and as a seeded Firestore doc).
+  const [vendorsStatic] = useState(DEFAULT_VENDORS);
+  const [vendorsLive, setVendorsLive] = useState([]);
+  const [vendorsLiveLoading, setVendorsLiveLoading] = useState(true);
+  useEffect(() => {
+    const ref = collection(db, 'vendors');
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => {
+            const x = d.data();
+            // Filter out rejected/suspended vendors — they shouldn't
+            // appear in the public catalog. Default to 'approved'
+            // for legacy docs (pre-onboarding vendors without a
+            // status field are treated as approved per existing
+            // AdminVendors logic).
+            const status = x.status || 'approved';
+            if (status === 'rejected' || status === 'suspended') return null;
+            return {
+              id: d.id,                 // doc id (vendorUid/slug)
+              vendorUid: d.id,
+              name: x.name || d.id,
+              category: x.category || 'other',
+              subcategory: x.subcategory || null,
+              rating: typeof x.rating === 'number' ? x.rating : 0,
+              // Imported vendors don't carry price — show a friendly
+              // placeholder so the UI doesn't render empty cells.
+              price: x.price || '請查詢',
+              tags: Array.isArray(x.tags) ? x.tags : [],
+              description: x.description || '',
+              portfolio: Array.isArray(x.portfolio) ? x.portfolio : [],
+              portfolioCount: typeof x.portfolioCount === 'number' ? x.portfolioCount : (Array.isArray(x.portfolio) ? x.portfolio.length : 0),
+              featured: !!x.featured,
+              createdAt: x.createdAt?.toMillis?.() ?? Date.parse(x.createdAt) ?? 0,
+              signupStatus: x.signupStatus || 'uninvited',
+              source: x.source || null,
+              // 2026-07-20 — popularity counter, maintained by the
+              // onVendorImageViewCreated cloud function + daily
+              // sweep. We prefer the 7d count as the default
+              // 'popularity' metric — it smooths out daily noise
+              // while staying fresh enough to highlight trending
+              // vendors. Falls back to 30d if 7d is missing.
+              popularity: x.popularity || null,
+              viewCount:
+                (x.popularity?.viewCount7d ?? 0) ||
+                (x.popularity?.viewCount30d ?? 0) ||
+                (x.popularity?.viewCountTotal ?? 0),
+              isLive: true,
+            };
+          })
+          .filter(Boolean);
+        setVendorsLive(list);
+        setVendorsLiveLoading(false);
+      },
+      (err) => {
+        console.warn('[discover vendors] subscribe failed:', err?.message || err);
+        setVendorsLiveLoading(false);
+      },
+    );
+    return () => unsub();
+  }, []);
+
+  // Merged list: live vendors first (newest), then static demo
+  // entries (any not already in live — rare but possible). Couples
+  // see all 672+ vendors in the catalog.
+  const vendors = useMemo(() => {
+    const liveIds = new Set(vendorsLive.map((v) => v.id));
+    const merged = [
+      ...vendorsLive,
+      ...vendorsStatic
+        .filter((v) => !liveIds.has(v.id))
+        .map((v) => ({ ...v, isLive: false })),
+    ];
+    return merged;
+  }, [vendorsStatic, vendorsLive]);
   const [discoverFilter, setDiscoverFilter] = useState('all');
   const [jobRequests, setJobRequests] = useState(INITIAL_JOB_REQUESTS);
   const [proposalsData, setProposalsData] = useState(MOCK_PROPOSALS);
@@ -2021,6 +2156,12 @@ export default function App() {
                     setCurrentView('couple-checklist');
                   }
                 }}
+                // 2026-07-20 — wire trending strip on events
+                // dashboard. Couples see what's hot in the
+                // catalog even before they pick/create an event.
+                vendors={vendors}
+                onSelectVendor={setViewingVendorProfile}
+                onGoDiscover={() => setCurrentView('discover-vendors')}
               />
             )}
 
@@ -2070,6 +2211,12 @@ export default function App() {
                     otherName: vendor.name,
                   })
                 }
+                // 2026-07-20 — TrendingVendors click handler. Opens
+                // the vendor profile modal via the existing
+                // viewingVendorProfile state — couples can then
+                // send an inquiry (if onboarded) or browse the
+                // portfolio.
+                onSelectVendor={setViewingVendorProfile}
                 myVendorsPanel={
                   <MyVendorsPanel
                     contacts={vendorContacts}
@@ -2273,6 +2420,7 @@ export default function App() {
 
             {userRole === 'vendor' && currentView === 'vendor-dashboard' && (
               <VendorDashboard
+                user={user}
                 vendor={vendorProfile}
                 jobRequests={liveJobRequests || []}
                 loading={vendorProfileLoading || jobRequestsLoading}
@@ -2280,17 +2428,16 @@ export default function App() {
                 onManageProfile={() => setCurrentView('vendor-profile')}
                 onLogout={handleVendorLogout}
                 assignedTasks={assignedTasks}
-                // 2026-07-15 — when an admin (no `vendor: true` claim)
-                // impersonates the vendor role via the role-switcher,
-                // show a "管理員預覽模式" banner so they understand why
-                // the dashboard looks empty (no vendor doc under their
-                // own uid).
                 isAdminPreview={isAdmin && !isVendor}
-                // 2026-07-17 — vendor updates the status of a task the
-                // couple assigned to them. Only the three status fields
-                // are write-permitted by firestore.rules — defense-in-
-                // depth even though the SDK is client-side.
                 onUpdateTaskStatus={handleUpdateAssignedTaskStatus}
+                // 2026-07-20 — inquiry inbox routing. The
+                // VendorInquiriesPanel hands back a selected inquiry
+                // and we wire it to the same ChatRoom the couple
+                // uses (shared component).
+                onOpenInquiry={(inq) => {
+                  setSelectedInquiry(inq);
+                  setCurrentView('chat-room');
+                }}
               />
             )}
 
@@ -2441,3 +2588,8 @@ export default function App() {
     </div>
   );
 }
+
+
+// 2026-07-21 v0.4.0 cache bust — forces a fresh bundle hash on
+// redeploy so mobile clients pick up the new /vendors subscription.
+const VERSION_TAG = 'v0.4.0-20260721';

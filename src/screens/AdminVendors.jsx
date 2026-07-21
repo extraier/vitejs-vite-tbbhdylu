@@ -17,6 +17,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { useToast } from '../hooks/useToast';
 import {
   Store,
   Search,
@@ -36,11 +37,18 @@ import {
   CheckCircle2,
   XCircle,
   Pause,
+  Copy,
+  Mail,
+  Send,
+  History,
   // 2026-07-18 — batch CSV import CTA inside the header.
   FileSpreadsheet,
 } from 'lucide-react';
 
 import { VendorModal } from '../components/modals/VendorModal';
+import { VendorInviteLinkModal } from '../components/modals/VendorInviteLinkModal';
+import { ActivationHistoryModal } from '../components/modals/ActivationHistoryModal';
+import { BulkInviteModal } from '../components/modals/BulkInviteModal';
 import {
   VENDOR_CATEGORIES,
   getVendorCategoryLabel,
@@ -138,6 +146,51 @@ function StatusBadge({ status }) {
   );
 }
 
+// 2026-07-20 — vendor activation pill. Three states mirror the
+// signupStatus field on /vendors/{slug}:
+//   • claimed   → vendor signed up via invite link (success — green
+//                  "已激活")
+//   • invited   → token issued, vendor hasn't claimed yet (emerald
+//                  "邀請中")
+//   • uninvited → no token yet (slate "未邀請")
+function ActivationPill({ signupStatus, expiresAt }) {
+  let cfg;
+  if (signupStatus === 'claimed') {
+    cfg = {
+      Icon: CheckCircle2,
+      className: 'bg-emerald-100 text-emerald-800',
+      label: '已激活',
+      title: 'Vendor 已經透過邀請連結註冊帳戶',
+    };
+  } else if (signupStatus === 'invited') {
+    cfg = {
+      Icon: Mail,
+      className: 'bg-amber-100 text-amber-800',
+      label: '邀請中',
+      title: expiresAt
+        ? `Invitation token 仍然有效到 ${fmtDate(expiresAt)}`
+        : 'Invitation token 已發出，等待 vendor claim',
+    };
+  } else {
+    cfg = {
+      Icon: Clock,
+      className: 'bg-slate-100 text-slate-600',
+      label: '未邀請',
+      title: '尚未發出 activation 邀請 — 點擊「發邀請」生成連結',
+    };
+  }
+  const { Icon, className, label, title } = cfg;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full ${className}`}
+      title={title}
+    >
+      <Icon className="w-3 h-3" />
+      {label}
+    </span>
+  );
+}
+
 export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
   const [vendors, setVendors] = useState([]);
   const [total, setTotal] = useState(0);
@@ -158,6 +211,16 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
   const [editingVendor, setEditingVendor] = useState(null);
   const [previewingVendor, setPreviewingVendor] = useState(null);
   const [pageTokens, setPageTokens] = useState([null]); // history stack for prev page
+  const [inviteSlug, setInviteSlug] = useState(null); // 2026-07-20 — opens VendorInviteLinkModal when set
+  const [activationHistorySlug, setActivationHistorySlug] = useState(null); // 2026-07-20 — opens ActivationHistoryModal when set
+  // 2026-07-20 — bulk invite. selection is a Set<vendorUid> of
+  // currently-checked rows. bulkInviteOpen drives BulkInviteModal.
+  // signUpFilter is the new signup-status chip filter (parallel to
+  // the existing approval-status chip filter).
+  const [selection, setSelection] = useState(() => new Set());
+  const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
+  const [signUpFilter, setSignUpFilter] = useState('all'); // 'all' | 'uninvited' | 'invited' | 'claimed'
+  const { showToast } = useToast();
 
   const loadPage = useCallback(async (token) => {
     setLoading(true);
@@ -192,8 +255,17 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
           const s = v.status || 'approved';
           return s === statusFilter;
         });
-    if (!q) return byStatus;
-    return byStatus.filter((v) => {
+    // 2026-07-20 — signup-status filter (separate from approval).
+    // Refines the list further when admin wants to see only uninvited
+    // vendors, etc.
+    const bySignup = signUpFilter === 'all'
+      ? byStatus
+      : byStatus.filter((v) => {
+          const s = v.signupStatus || 'uninvited';
+          return s === signUpFilter;
+        });
+    if (!q) return bySignup;
+    return bySignup.filter((v) => {
       return (
         (v.name && v.name.toLowerCase().includes(q)) ||
         (v.email && v.email.toLowerCase().includes(q)) ||
@@ -202,7 +274,7 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
         v.vendorUid.toLowerCase().includes(q)
       );
     });
-  }, [vendors, searchQuery, statusFilter]);
+  }, [vendors, searchQuery, statusFilter, signUpFilter]);
 
   const stats = useMemo(() => {
     const t = vendors.length;
@@ -381,6 +453,43 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
         />
       </div>
 
+      {/* 2026-07-20 — signup-status filter chips (separate from
+          approval-status above). Lets admin quickly filter to "未邀請"
+          to see who still needs an invite, "邀請中" to follow up on
+          sent-but-not-claimed, "已激活" to confirm activations. */}
+      <div className="flex flex-wrap gap-2 mb-3 items-center">
+        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider mr-1">
+          啟動狀態：
+        </span>
+        <StatusChip
+          label="全部"
+          active={signUpFilter === 'all'}
+          onClick={() => setSignUpFilter('all')}
+          count={vendors.length}
+        />
+        <StatusChip
+          label="未邀請"
+          active={signUpFilter === 'uninvited'}
+          onClick={() => setSignUpFilter('uninvited')}
+          count={vendors.filter((v) => !v.signupStatus || v.signupStatus === 'uninvited').length}
+          tone="slate"
+        />
+        <StatusChip
+          label="邀請中"
+          active={signUpFilter === 'invited'}
+          onClick={() => setSignUpFilter('invited')}
+          count={vendors.filter((v) => v.signupStatus === 'invited').length}
+          tone="amber"
+        />
+        <StatusChip
+          label="已激活"
+          active={signUpFilter === 'claimed'}
+          onClick={() => setSignUpFilter('claimed')}
+          count={vendors.filter((v) => v.signupStatus === 'claimed').length}
+          tone="emerald"
+        />
+      </div>
+
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -432,6 +541,37 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
+                {/* 2026-07-20 — bulk-select checkbox. Header checkbox
+                    selects all currently filtered rows (post both
+                    status filters + search). Body checkboxes are
+                    per-row. */}
+                <th className="text-left px-4 py-3 font-semibold text-slate-700 w-10">
+                  <input
+                    type="checkbox"
+                    checked={
+                      filteredVendors.length > 0 &&
+                      filteredVendors.every((v) => selection.has(v.vendorUid))
+                    }
+                    ref={(el) => {
+                      if (el) {
+                        const allSel = filteredVendors.length > 0 &&
+                          filteredVendors.every((v) => selection.has(v.vendorUid));
+                        const someSel = filteredVendors.some((v) => selection.has(v.vendorUid));
+                        el.indeterminate = !allSel && someSel;
+                      }
+                    }}
+                    onChange={(e) => {
+                      const next = new Set(selection);
+                      if (e.target.checked) {
+                        for (const v of filteredVendors) next.add(v.vendorUid);
+                      } else {
+                        for (const v of filteredVendors) next.delete(v.vendorUid);
+                      }
+                      setSelection(next);
+                    }}
+                    title="全選/取消全選 (目前篩選結果)"
+                  />
+                </th>
                 <th className="text-left px-4 py-3 font-semibold text-slate-700">商戶</th>
                 <th className="text-left px-4 py-3 font-semibold text-slate-700 hidden md:table-cell">
                   類別
@@ -463,7 +603,7 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
               )}
               {!loading && filteredVendors.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                  <td colSpan={8} className="px-4 py-12 text-center text-slate-400">
                     {vendors.length === 0
                       ? '目前沒有任何商戶文件。請確認 Firestore /vendors/{uid} 集合下有資料。'
                       : '找不到符合的商戶。'}
@@ -472,13 +612,39 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
               )}
               {filteredVendors.map((v) => {
                 const deletePending = pendingAction === `${v.vendorUid}:delete`;
+                // 2026-07-20 — derive an activation pill state. Three cases:
+                //   'claimed'  → vendor has signed up via invite link
+                //   'invited'  → activation token issued but vendor hasn't claimed yet
+                //   'uninvited' (default) → no token yet
+                // Inline lookup avoids a second helper import — keeping
+                // this self-contained so the admin screen logic stays
+                // obvious.
+                const signupStatus = v.signupStatus || 'uninvited';
+                const isClaimed = signupStatus === 'claimed';
+                const isInvited = signupStatus === 'invited';
                 return (
                   <tr
                     key={v.vendorUid}
                     className={`hover:bg-slate-50 transition-colors ${
                       v.authDisabled ? 'opacity-60' : ''
-                    }`}
+                    } ${selection.has(v.vendorUid) ? 'bg-emerald-50/50' : ''}`}
                   >
+                    {/* 2026-07-20 — bulk-select checkbox. Disabled for
+                        already-claimed vendors (can't re-invite). */}
+                    <td className="px-4 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        checked={selection.has(v.vendorUid)}
+                        disabled={isClaimed}
+                        onChange={(e) => {
+                          const next = new Set(selection);
+                          if (e.target.checked) next.add(v.vendorUid);
+                          else next.delete(v.vendorUid);
+                          setSelection(next);
+                        }}
+                        title={isClaimed ? '已激活 — 無需再發邀請' : '加入批量邀請'}
+                      />
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         {v.portfolio && v.portfolio[0] ? (
@@ -546,12 +712,47 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
                       >
                         <StatusBadge status={v.status} />
                       </button>
+                      {/* 2026-07-20 — activation status pill. Distinct
+                          from approval status: a vendor can be
+                          approved+uninvited (most common — admin
+                          seeded it but hasn't reached out yet), or
+                          approved+invited (token issued, awaiting
+                          claim), or approved+claimed (vendor signed
+                          up via the link). */}
+                      <ActivationPill signupStatus={signupStatus} expiresAt={v.invitationExpiresAt} />
                     </td>
                     <td className="px-4 py-3 hidden xl:table-cell text-slate-600 whitespace-nowrap">
                       {fmtDate(v.updatedAt)}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
+                        {/* 2026-07-20 — activation entry point. Visible on every
+                            row that has NOT been claimed yet. Once claimed
+                            we surface the claimedByUid in the status pill
+                            and hide the action — claiming the slot ends
+                            the activation flow for this doc. */}
+                        {!isClaimed && (
+                          <button
+                            onClick={() => setInviteSlug(v.vendorUid)}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                            title={isInvited ? '重新發送邀請連結' : '生成邀請連結'}
+                          >
+                            <Send className="w-3.5 h-3.5" />
+                            {isInvited ? '重發邀請' : '發邀請'}
+                          </button>
+                        )}
+                        {/* 2026-07-20 — activation history. Always visible
+                            so admin can audit post-claim too (email
+                            failures, retry counts, etc). Reads from
+                            /vendorActivationLogs (admin-only). */}
+                        <button
+                          onClick={() => setActivationHistorySlug(v.vendorUid)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                          title="查看啟動 timeline"
+                        >
+                          <History className="w-3.5 h-3.5" />
+                          啟動紀錄
+                        </button>
                         <button
                           onClick={() => setPreviewingVendor(v)}
                           className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
@@ -631,12 +832,106 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
         />
       )}
 
+      {/* 2026-07-20 — vendor activation flow. When admin clicks
+          「發邀請」 we set inviteSlug, which renders this modal.
+          After the modal closes we want the row to refresh its
+          signupStatus pill — easiest is to reload the page. */}
+      {inviteSlug && (
+        <VendorInviteLinkModal
+          vendor={{
+            vendorUid: inviteSlug,
+            name: vendors.find((v) => v.vendorUid === inviteSlug)?.name || inviteSlug,
+            signupStatus:
+              vendors.find((v) => v.vendorUid === inviteSlug)?.signupStatus ||
+              'uninvited',
+          }}
+          onClose={() => {
+            setInviteSlug(null);
+            // Re-fetch so the activation pill reflects any token
+            // minted by the modal. This is cheap (paginated already
+            // cached) and gives the admin fresh state immediately.
+            loadPage(pageTokens[pageTokens.length - 1]);
+          }}
+        />
+      )}
+
+      {/* 2026-07-20 — activation history modal. Reads from
+          /vendorActivationLogs (admin-only per firestore.rules).
+          Shows the timeline of token_issued / email_sent / claim_*
+          / apply_* events for this vendor so admins can audit
+          "did the email go out?", "did the vendor click the link?",
+          "what error did the wizard throw?" etc. */}
+      {activationHistorySlug && (
+        <ActivationHistoryModal
+          slug={activationHistorySlug}
+          vendorName={vendors.find((v) => v.vendorUid === activationHistorySlug)?.name}
+          onClose={() => setActivationHistorySlug(null)}
+        />
+      )}
+
       {/* Restore 2026-07-02: admin-side preview modal — shows the vendor
           profile exactly as couples see it from the DiscoverDirectory. */}
       <VendorModal
         vendor={previewingVendor}
         onClose={() => setPreviewingVendor(null)}
       />
+
+      {/* 2026-07-20 — sticky bulk action bar. Visible whenever ≥1
+          row is checked. Offers the 批量發邀請 CTA + clear-selection.
+          Sticky to the bottom of the viewport so it stays in reach
+          even when scrolled deep into a long vendor list. */}
+      {selection.size > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900 text-white shadow-2xl border-t-4 border-emerald-500 animate-in slide-in-from-bottom duration-300">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="bg-emerald-500 text-slate-900 font-black px-3 py-1 rounded-full text-sm">
+                {selection.size} 個已選
+              </span>
+              <span className="text-sm text-slate-300 hidden sm:inline">
+                點擊「批量發邀請」會一次過幫全部選中嘅 vendor mint token
+                {selection.size > 500 && ' · 注意：超過 500 個需要分批'}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelection(new Set())}
+                className="px-3 py-2 text-sm font-bold text-slate-300 hover:bg-slate-800 rounded-lg"
+              >
+                清除選取
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkInviteOpen(true)}
+                className="px-4 py-2 text-sm font-black bg-emerald-500 hover:bg-emerald-400 text-slate-900 rounded-lg flex items-center gap-1"
+              >
+                <Send className="w-4 h-4" />
+                批量發邀請
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2026-07-20 — bulk invite modal. Opens when admin clicks
+          the sticky CTA. Calls bulkActivateSeededVendors cloud
+          function. After completion, refreshes the page so the
+          row pills update from "未邀請" → "邀請中". */}
+      {bulkInviteOpen && (
+        <BulkInviteModal
+          items={vendors.filter((v) => selection.has(v.vendorUid))}
+          onClose={() => {
+            setBulkInviteOpen(false);
+            setSelection(new Set());
+          }}
+          onComplete={(result) => {
+            showToast?.(
+              `批量邀請完成 · ${result.minted} 個已開啟 · ${result.emailsSent} 封 email 已寄出`,
+            );
+            loadPage(pageTokens[pageTokens.length - 1]);
+          }}
+        />
+      )}
     </div>
   );
 }
