@@ -64,6 +64,33 @@ service firebase.storage {
         && request.resource.contentType.matches('image/.*');
     }
 
+    // 2026-07-21 — payment receipts (PayMe/FPS screenshots). Couples
+    // upload screenshots to /payment-receipts/{ownerUid}/{filename}.
+    // Same privacy model as quotes: owner + admin only.
+    match /payment-receipts/{ownerUid}/{fileName} {
+      allow read: if request.auth != null
+        && (request.auth.uid == ownerUid || isAdmin());
+      allow write: if request.auth != null
+        && request.auth.uid == ownerUid
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // 2026-07-21 — custom invitation design uploads (premium feature
+    // unlocked by 5 quotes OR paid). Owner uploads SVG/PNG/JPG to
+    // /invitation-uploads/{ownerUid}/{filename}. Same owner-only rule.
+    match /invitation-uploads/{ownerUid}/{fileName} {
+      allow read: if request.auth != null
+        && (request.auth.uid == ownerUid || isAdmin());
+      allow write: if request.auth != null
+        && request.auth.uid == ownerUid
+        && request.resource.size < 2 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('image/.*')
+          || request.resource.contentType == 'image/svg+xml'
+        );
+    }
+
     // Default deny everything else (photos, vendor assets, etc. live
     // under their own owner-scoped paths in a future iteration).
     match /{path=**} {

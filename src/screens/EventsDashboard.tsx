@@ -1,13 +1,32 @@
-import { Heart, Calendar, ArrowRight, Plus, Crown, Flame, TrendingUp } from 'lucide-react';
+import { Heart, Calendar, ArrowRight, Plus, Crown, TrendingUp } from 'lucide-react';
 import { TrendingVendors } from '../components/TrendingVendors';
-import { VENDOR_CATEGORIES } from '../lib/config';
+import { RewardsBanner } from '../components/RewardsBanner';
+import { PurchaseModal } from '../components/PurchaseModal';
+import { useState, useEffect } from 'react';
+import { collection, onSnapshot } from 'firebase/firestore';
+import { db, appId } from '../lib/firebase';
 
-// `isAdmin` and `user` used to be passed in here so the page could embed
-// the admin KPI strip + users table below the event cards. As of 2026-07-01
-// admin tools live in the dark role-switcher bar at the top of the screen
-// (RoleSimulator.jsx), so this screen is back to its pre-admin-embed shape.
-// We intentionally do NOT accept those props anymore — leaving them in
-// would invite future engineers to re-add the embed.
+// 2026-07-21 — Three premium features unlockable via social proof
+// or payment:
+//   custom-template   — 1 IG/FB story OR post with @savetheday.hk tag
+//   storage-500mb     — 1 friend referral who creates an event
+//   permanent-archive — 1 Instagram Reels featuring Save The Day
+export type UnlockType = 'custom-template' | 'storage-500mb' | 'permanent-archive';
+const ALL_UNLOCK_TYPES: UnlockType[] = ['custom-template', 'storage-500mb', 'permanent-archive'];
+
+interface EventsDashboardProps {
+  events: any[];
+  newEventName: string;
+  onNewEventNameChange: (name: string) => void;
+  onCreate: (e: React.FormEvent) => void;
+  onSelectEvent: (ev: any) => void;
+  vendors?: any[];
+  onSelectVendor?: (v: any) => void;
+  onGoDiscover?: () => void;
+  user?: { uid: string } | null;
+  currentEvent?: any;
+  onOpenChat?: (v: any) => void;
+}
 
 export function EventsDashboard({
   events,
@@ -18,12 +37,29 @@ export function EventsDashboard({
   vendors = [],
   onSelectVendor,
   onGoDiscover,
-  // 2026-07-21 — passed through to <TrendingVendors> so the
-  // claim CTA can create inquiries with the couple's identity.
   user,
   currentEvent,
   onOpenChat,
-}) {
+}: EventsDashboardProps) {
+  // 2026-07-21 — Subscribe to user's unlocks subcollection so the
+  // RewardsBanner can show which features are still locked.
+  const [unlocks, setUnlocks] = useState<UnlockType[]>([]);
+  const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unlocksRef = collection(db, 'artifacts', appId, 'users', user.uid, 'unlocks');
+    const unsub = onSnapshot(unlocksRef, (snap) => {
+      const types = snap.docs
+        .map((d) => d.data().type)
+        .filter((t): t is UnlockType => ALL_UNLOCK_TYPES.includes(t as UnlockType));
+      setUnlocks(types);
+    });
+    return () => unsub();
+  }, [user?.uid]);
+
+  const lockedTypes: UnlockType[] = ALL_UNLOCK_TYPES.filter((t) => !unlocks.includes(t));
+
   return (
     <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
       <div className="text-center mb-12">
@@ -32,11 +68,19 @@ export function EventsDashboard({
         <p className="text-slate-500">建立或選擇你想管理的婚禮專案</p>
       </div>
 
-      {/* 2026-07-20 — "熱門商戶" preview on the events dashboard.
-          Couples who haven't picked an event yet see what's hot
-          in the catalog so the home page never feels empty. Click
-          → onSelectVendor opens the modal. Hidden when there's no
-          trending data (early launch, no views yet). */}
+      {/* 2026-07-21 — rewards banner. Shows social-proof unlocks
+          (IG/FB post → custom template, refer friend → +500MB,
+          reels → permanent archive) and a pay-as-alternative CTA. */}
+      <RewardsBanner
+        unlocks={unlocks}
+        onUploadClick={() => {
+          // Open the social proof modal (TODO).
+          alert('請用 IG/FB Story 標記 @savetheday.hk 或推介朋友以解鎖功能！\n\n完整版稍後推出。');
+        }}
+        onPayClick={() => setPurchaseModalOpen(true)}
+      />
+
+      {/* 2026-07-20 — "熱門商戶" preview on the events dashboard. */}
       <div className="mb-8">
         <TrendingVendors
           vendors={vendors}
@@ -76,11 +120,28 @@ export function EventsDashboard({
           </form>
         </div>
       </div>
+
+      {/* 2026-07-21 — purchase modal. Opened when user clicks
+          "或直接付款解鎖" link inside RewardsBanner. */}
+      <PurchaseModal
+        isOpen={purchaseModalOpen}
+        onClose={() => setPurchaseModalOpen(false)}
+        ownerUid={user?.uid || ''}
+        lockedTypes={lockedTypes}
+        onSuccess={() => {
+          // Modal closes itself on success.
+        }}
+      />
     </div>
   );
 }
 
-function EventCard({ event, onSelect }) {
+interface EventCardProps {
+  event: any;
+  onSelect?: (ev: any) => void;
+}
+
+function EventCard({ event, onSelect }: EventCardProps) {
   return (
     <div
       role="button"

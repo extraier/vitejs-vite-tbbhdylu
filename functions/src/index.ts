@@ -884,3 +884,20 @@ export {
   sendVendorInviteEmail,
   bulkActivateSeededVendors,
 } from './vendorActivation';
+
+// 2026-07-21 — Social-proof + payment unlock system. Couples
+// earn three premium features (custom invite template, +500MB,
+// permanent archive) by either social sharing (IG/FB post,
+// referrals, reels) OR paying. Both paths route through
+// grantUnlock() and write to /users/{uid}/unlocks/{unlockId}.
+export {
+  submitSocialProof,
+  adminVerifySocialProof,
+  claimReferral,
+  adminVerifyReferral,
+  submitPaymentReceipt,
+  adminVerifyPayment,
+  grantUnlock,
+  UNLOCK_PRICING,
+  UNLOCK_TYPES,
+} from './unlocks';

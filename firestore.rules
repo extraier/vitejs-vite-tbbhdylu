@@ -392,6 +392,84 @@ service cloud.firestore {
           allow delete: if isOwner(ownerUid);
         }
 
+        // ---- 2026-07-21: Unlock grants (feature unlocks) ---------------
+        // Records of which premium features the user has unlocked and
+        // how. Both social-proof path (IG/FB post, referrals, reels)
+        // and payment path write here. Frontend reads these to gate
+        // UI (e.g. show "premium template" option only when
+        // 'custom-template' unlock exists).
+        //
+        // Reads: owner + admin (admin for support + analytics).
+        // Writes: server-side only (Cloud Functions bypass rules via
+        // service account). Client write is denied so a malicious
+        // couple can't grant themselves premium.
+        match /unlocks/{unlockId} {
+          allow read: if isOwner(ownerUid) || isAdmin();
+          allow create, update, delete: if false;  // server-side only
+        }
+
+        // ---- 2026-07-21: Social proofs (IG/FB post submissions) ------
+        // Couples submit a public Instagram/Facebook post URL showing
+        // they tagged @savetheday.hk. Admin verifies and grants the
+        // unlock via adminVerifySocialProof(). Read by owner + admin.
+        match /socialProofs/{proofId} {
+          allow read: if isOwner(ownerUid) || isAdmin();
+          allow create: if isOwner(ownerUid)
+            && request.resource.data.keys().hasAll(['unlockType', 'postUrl', 'status', 'createdAt'])
+            && request.resource.data.unlockType in ['custom-template', 'permanent-archive']
+            && request.resource.data.postUrl is string
+            && request.resource.data.status == 'pending'
+            && request.resource.data.createdAt is timestamp;
+          allow update: if isAdmin()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'verifiedAt', 'verifiedBy', 'rejectionReason']);
+          allow delete: if isAdmin();
+        }
+
+        // ---- 2026-07-21: Referral claims (friend signup proof) -------
+        // Couple claims a friend used their referral code AND created
+        // an event. Admin verifies and grants +500MB storage unlock.
+        match /referralClaims/{claimId} {
+          allow read: if isOwner(ownerUid) || isAdmin();
+          allow create: if isOwner(ownerUid)
+            && request.resource.data.keys().hasAll(['unlockType', 'friendUid', 'status', 'createdAt'])
+            && request.resource.data.unlockType == 'storage-500mb'
+            && request.resource.data.friendUid is string
+            && request.resource.data.status == 'pending'
+            && request.resource.data.createdAt is timestamp;
+          allow update: if isAdmin()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'verifiedAt', 'verifiedBy', 'rejectionReason']);
+          allow delete: if isAdmin();
+        }
+
+        // ---- 2026-07-21: Payment receipts (PayMe / FPS manual verify) ---
+        // Couple pays via PayMe or FPS, then uploads a screenshot of
+        // the receipt. Status flows: pending → approved / rejected.
+        // While pending, the unlock is NOT granted yet (admin verifies).
+        // Reads: owner (to see their own submissions) + admin (to verify).
+        // Writes: create by owner, update by admin only.
+        match /paymentReceipts/{receiptId} {
+          allow read: if isOwner(ownerUid) || isAdmin();
+          allow create: if isOwner(ownerUid)
+            && request.resource.data.keys().hasAll([
+              'unlockType', 'amount', 'paymentMethod', 'screenshotUrl', 'status', 'createdAt'
+            ])
+            && request.resource.data.unlockType in [
+              'custom-template', 'storage-500mb', 'permanent-archive', 'bundle'
+            ]
+            && request.resource.data.amount is number
+            && request.resource.data.amount > 0
+            && request.resource.data.paymentMethod in ['payme', 'fps']
+            && request.resource.data.screenshotUrl is string
+            && request.resource.data.status == 'pending'
+            && request.resource.data.createdAt is timestamp;
+          allow update: if isAdmin()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'verifiedAt', 'verifiedBy', 'rejectionReason']);
+          allow delete: if isAdmin();
+        }
+
         // ---- 2026-07-17: Big-day orchestration suite ---------------------
         // Five parallel collections under /users/{ownerUid}:
         //   • rundown   — 大日流程 (time-slot timeline)
