@@ -885,11 +885,18 @@ export {
   bulkActivateSeededVendors,
 } from './vendorActivation';
 
-// 2026-07-21 — Social-proof + payment unlock system. Couples
-// earn three premium features (custom invite template, +500MB,
-// permanent archive) by either social sharing (IG/FB post,
-// referrals, reels) OR paying. Both paths route through
-// grantUnlock() and write to /users/{uid}/unlocks/{unlockId}.
+// 2026-07-21 — Couple-initiated vendor invite flow. When a couple
+// submits an email for a not-onboarded vendor via
+// NotOnboardedEmailModal, we write /vendors/{slug}/pendingInvites
+// and these triggers fire automatically — no couple-side Cloud
+// Function call needed. Couples get the email experience they
+// expect (just submit and forget) while admin gets full audit
+// trail + manual retry via adminRetryVendorInvite.
+export {
+  onPendingInviteCreated,
+  onPendingInviteUpdated,
+  adminRetryVendorInvite,
+} from './vendorInviteTrigger';
 export {
   submitSocialProof,
   adminVerifySocialProof,
