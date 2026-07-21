@@ -393,6 +393,13 @@ export default function App() {
               createdAt: x.createdAt?.toMillis?.() ?? Date.parse(x.createdAt) ?? 0,
               signupStatus: x.signupStatus || 'uninvited',
               source: x.source || null,
+              // 2026-07-21 — city enrichment. The
+              // scripts/enrich-vendor-cities.cjs script derives
+              // these from name/description/address for any
+              // imported vendor and writes them back. Live
+              // vendors may also set serviceAreaCity manually.
+              serviceAreaCity: x.serviceAreaCity || null,
+              serviceAreaDistrict: x.serviceAreaDistrict || null,
               // 2026-07-20 — popularity counter, maintained by the
               // onVendorImageViewCreated cloud function + daily
               // sweep. We prefer the 7d count as the default
@@ -2162,6 +2169,16 @@ export default function App() {
                 vendors={vendors}
                 onSelectVendor={setViewingVendorProfile}
                 onGoDiscover={() => setCurrentView('discover-vendors')}
+                // 2026-07-21 — pass through for the
+                // <TrendingVendors> claim CTA.
+                user={user}
+                currentEvent={currentEvent}
+                onOpenChat={(vendor) =>
+                  handleOpenChat({
+                    otherUid: vendor.id || vendor.uid,
+                    otherName: vendor.name,
+                  })
+                }
               />
             )}
 
@@ -2211,6 +2228,12 @@ export default function App() {
                     otherName: vendor.name,
                   })
                 }
+                // 2026-07-21 — pass user + currentEvent through to
+                // CoupleChecklist so <TrendingVendors> can run its
+                // claim CTA (openInquiry + auto-message) for
+                // uninvited vendors.
+                user={user}
+                currentEvent={currentEvent}
                 // 2026-07-20 — TrendingVendors click handler. Opens
                 // the vendor profile modal via the existing
                 // viewingVendorProfile state — couples can then
@@ -2252,7 +2275,7 @@ export default function App() {
               />
             )}
 
-            {userRole === 'owner' && currentEvent && currentView === 'discover-vendors' && (
+            {userRole === 'owner' && currentView === 'discover-vendors' && (
               <DiscoverDirectory
                 vendors={vendors}
                 filter={discoverFilter}

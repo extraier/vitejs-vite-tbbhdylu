@@ -354,6 +354,12 @@ export function CoupleChecklist({
   helpers = [],
   helpersLoading = false,
   currentUser,
+  // 2026-07-21 — Passed through to <TrendingVendors> so the
+  // "邀請查詢" CTA can create inquiries with the correct
+  // couple identity. Defaults to null for guest mode (claim
+  // CTA hides when user is null).
+  user,
+  currentEvent,
 }) {
   const progressPercentage = Math.round(
     (tasks.filter((t) => t.isCompleted).length / (tasks.length || 1)) * 100,
@@ -429,6 +435,14 @@ export function CoupleChecklist({
               vendors={vendors}
               onSelect={onSelectVendor}
               onGoDiscover={onGoDiscover}
+              user={user}
+              currentEvent={currentEvent}
+              onOpenChat={(vendor) =>
+                handleOpenChat({
+                  otherUid: vendor.id || vendor.uid,
+                  otherName: vendor.name,
+                })
+              }
             />
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
               {myVendorsPanel && (

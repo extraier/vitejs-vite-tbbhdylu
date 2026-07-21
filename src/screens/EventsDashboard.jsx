@@ -9,7 +9,21 @@ import { VENDOR_CATEGORIES } from '../lib/config';
 // We intentionally do NOT accept those props anymore — leaving them in
 // would invite future engineers to re-add the embed.
 
-export function EventsDashboard({ events, newEventName, onNewEventNameChange, onCreate, onSelectEvent, vendors = [], onSelectVendor, onGoDiscover }) {
+export function EventsDashboard({
+  events,
+  newEventName,
+  onNewEventNameChange,
+  onCreate,
+  onSelectEvent,
+  vendors = [],
+  onSelectVendor,
+  onGoDiscover,
+  // 2026-07-21 — passed through to <TrendingVendors> so the
+  // claim CTA can create inquiries with the couple's identity.
+  user,
+  currentEvent,
+  onOpenChat,
+}) {
   return (
     <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
       <div className="text-center mb-12">
@@ -28,6 +42,9 @@ export function EventsDashboard({ events, newEventName, onNewEventNameChange, on
           vendors={vendors}
           onSelect={onSelectVendor}
           onGoDiscover={onGoDiscover}
+          user={user}
+          currentEvent={currentEvent}
+          onOpenChat={onOpenChat}
         />
       </div>
 

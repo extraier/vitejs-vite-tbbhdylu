@@ -151,6 +151,10 @@ export function DiscoverDirectory({
 }) {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('recommended');
+  // 2026-07-21 — city filter. Empty = "all cities". When set,
+  // vendors without serviceAreaCity match OR match the chosen
+  // city. Reset when entering drilldown / favorites view.
+  const [cityFilter, setCityFilter] = useState('');
   // Multi-select category cards in default view. Cleared when entering
   // a drilldown or favorites view.
   const [selectedCats, setSelectedCats] = useState(() => new Set());
@@ -209,9 +213,18 @@ export function DiscoverDirectory({
       narrowed = narrowed.filter((v) => searchText(v).includes(q));
     }
 
+    // 2026-07-21 — city filter. When a city is picked, narrow to
+    // vendors whose serviceAreaCity matches. Vendors without
+    // a serviceAreaCity (unmapped) are included under "全部" so
+    // couples don't see an empty catalog when first using the
+    // filter before the enrichment script has run on everyone.
+    if (cityFilter) {
+      narrowed = narrowed.filter((v) => v.serviceAreaCity === cityFilter);
+    }
+
     const sorter = buildSorter(sortMode);
     return [...narrowed].sort(sorter);
-  }, [filter, vendors, search, sortMode, favoriteSet, selectedCats]);
+  }, [filter, vendors, search, sortMode, favoriteSet, selectedCats, cityFilter]);
 
   // 2026-07-20 — vendor.viewCount is now already attached at the
   // App.jsx subscription layer (sourced from popularity.viewCount7d
@@ -219,8 +232,12 @@ export function DiscoverDirectory({
   const decorated = useMemo(() => filtered, [filtered]);
 
   // 2026-07-20 — reset pagination when filter/search/sort changes.
+  // 2026-07-21 — also reset city filter so changing category
+  // doesn't strand users with a city filter that may have zero
+  // matches in the new category.
   useEffect(() => {
     setVisibleCount(60);
+    setCityFilter('');
   }, [filter, search, sortMode, selectedCats, favoriteSet]);
 
   // 2026-07-20 — the slice we actually render. IntersectionObserver
@@ -236,6 +253,9 @@ export function DiscoverDirectory({
     const visible = vendors.filter((v) => v.status !== 'pending');
     const topCounts = {};
     const subCounts = {};
+    // 2026-07-21 — per-city counts so the city filter dropdown can
+    // show "(82 個商戶)" next to each option.
+    const cityCounts = {};
     visible.forEach((v) => {
       const top = v.category || 'miscellaneous';
       topCounts[top] = (topCounts[top] || 0) + 1;
@@ -244,10 +264,19 @@ export function DiscoverDirectory({
         subCounts[top][v.subcategory] =
           (subCounts[top][v.subcategory] || 0) + 1;
       }
+      // 2026-07-21 — only count vendors with a known city. The
+      // "unmapped" group is implicit (not shown in the dropdown)
+      // and includes vendors the enrichment script hasn't
+      // touched yet.
+      if (v.serviceAreaCity) {
+        cityCounts[v.serviceAreaCity] =
+          (cityCounts[v.serviceAreaCity] || 0) + 1;
+      }
     });
     return {
       topCounts,
       subCounts,
+      cityCounts,
       total: visible.length,
       favorites: visible.filter((v) => favoriteSet.has(v.id)).length,
     };
@@ -417,6 +446,33 @@ export function DiscoverDirectory({
               <X className="w-4 h-4" />
             </button>
           )}
+        </div>
+        <div className="flex items-center gap-2 md:flex-shrink-0">
+          {/* 2026-07-21 — city filter dropdown. Sits next to the
+              sort dropdown. Empty option = "全部地區" (default).
+              Cities with zero mapped vendors are hidden so the
+              dropdown doesn't get cluttered. */}
+          <label
+            htmlFor="dd-city"
+            className="text-xs font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap"
+          >
+            地區
+          </label>
+          <select
+            id="dd-city"
+            value={cityFilter}
+            onChange={(e) => setCityFilter(e.target.value)}
+            className="px-3 py-2 rounded-full border border-slate-200 bg-white text-sm font-bold text-slate-700 focus:ring-2 focus:ring-emerald-300 focus:border-emerald-400 outline-none cursor-pointer"
+          >
+            <option value="">全部地區</option>
+            {Object.entries(counts.cityCounts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([city, n]) => (
+                <option key={city} value={city}>
+                  {city} ({n})
+                </option>
+              ))}
+          </select>
         </div>
         <div className="flex items-center gap-2 md:flex-shrink-0">
           <label
