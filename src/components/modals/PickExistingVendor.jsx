@@ -1,23 +1,34 @@
-// PickExistingVendor — search modal that filters the vendor catalog
-// (677 onboarded vendors at /vendors/{uid}) so couples can link an
-// existing platform vendor to their MyVendors address book.
+// PickExistingVendor — search modal that lets couples pick a vendor
+// from our 677-vendor catalog and link it to their MyVendors
+// address book. Two-dropdown UI: main category + subcategory
+// filters. Shows ALL matching vendors (no 50-row cap) so couples
+// can browse the full catalog by category.
 //
 // 2026-07-21 — initial release. Couples who already found a vendor
-// through the DiscoverDirectory don't need to type the contact info
-// again — we just link the existing vendor record to MyVendors via
-// linkedVendorUid. Chat opens immediately because the vendor is
-// already onboarded.
+// through the DiscoverDirectory don't need to retype contact info
+// — we just link the existing vendor record via linkedVendorUid.
+// Chat opens immediately because the vendor is already onboarded.
+//
+// 2026-07-21 (later) — switched from "search input + 50-row list"
+// to "main + sub category dropdowns + full list". Dropdowns are
+// faster than typing for browsing, and showing all matches
+// (instead of capping at 50) lets couples discover the full
+// catalog instead of "first 50 alphabetical".
 
 import { useState, useEffect, useMemo } from 'react';
-import { X, Search, Loader2, MapPin, Star } from 'lucide-react';
+import { X, MapPin, Star, Loader2 } from 'lucide-react';
 import { collection, getDocs, limit } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { VENDOR_CATEGORIES } from '../../lib/config';
 
 export function PickExistingVendor({ onPick, onClose }) {
-  const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [vendors, setVendors] = useState([]);
   const [error, setError] = useState(null);
+
+  // Two-dropdown state
+  const [topCategory, setTopCategory] = useState('all');  // 'all' or 'venue', 'styling', etc.
+  const [subCategory, setSubCategory] = useState('all');   // 'all' or 'banquet_hall', etc.
 
   // Fetch vendors once (cached in-memory for the session)
   useEffect(() => {
@@ -25,9 +36,8 @@ export function PickExistingVendor({ onPick, onClose }) {
     setLoading(true);
     (async () => {
       try {
-        // Pull from root-level /vendors collection. Limit to 1000 to
-        // avoid paying for unused rows (we currently have ~700).
-        const snap = await getDocs(collection(db, 'vendors'), limit(1000));
+        // Pull from root-level /vendors collection. We currently have ~700.
+        const snap = await getDocs(collection(db, 'vendors'), limit(2000));
         if (cancelled) return;
         const list = snap.docs.map((d) => {
           const data = d.data() || {};
@@ -35,6 +45,7 @@ export function PickExistingVendor({ onPick, onClose }) {
             id: d.id,
             name: data.name || '(無名稱)',
             category: data.category || data.serviceCategory || '',
+            subcategory: data.subcategory || data.serviceSubcategory || '',
             categoryLabel: data.categoryLabel || '',
             serviceAreaCity: data.serviceAreaCity || '',
             serviceAreaDistrict: data.serviceAreaDistrict || '',
@@ -42,7 +53,6 @@ export function PickExistingVendor({ onPick, onClose }) {
             rating: data.rating || data.avgRating || 0,
             signupStatus: data.signupStatus || '',
             claimedBy: data.claimedBy || '',
-            displayName: data.displayName || data.name || '',
           };
         });
         // Sort by name for stable UX
@@ -59,21 +69,28 @@ export function PickExistingVendor({ onPick, onClose }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Client-side filter (cheap, since <1000 items).
+  // Subcategory list depends on selected topCategory
+  const subOptions = useMemo(() => {
+    if (topCategory === 'all') return [];
+    const top = VENDOR_CATEGORIES[topCategory];
+    if (!top) return [];
+    return Object.entries(top.subs).map(([key, label]) => ({ key, label }));
+  }, [topCategory]);
+
+  // When topCategory changes, reset subCategory to 'all'
+  useEffect(() => {
+    setSubCategory('all');
+  }, [topCategory]);
+
+  // Filter vendors by selected categories (NO 50-row cap)
   const filtered = useMemo(() => {
-    if (!searchTerm.trim()) return vendors.slice(0, 50); // empty search: show first 50
-    const q = searchTerm.toLowerCase().trim();
-    return vendors
-      .filter((v) => {
-        if ((v.name || '').toLowerCase().includes(q)) return true;
-        if ((v.displayName || '').toLowerCase().includes(q)) return true;
-        if ((v.categoryLabel || '').toLowerCase().includes(q)) return true;
-        if ((v.serviceAreaCity || '').toLowerCase().includes(q)) return true;
-        if ((v.serviceAreaDistrict || '').toLowerCase().includes(q)) return true;
-        return false;
-      })
-      .slice(0, 50);
-  }, [vendors, searchTerm]);
+    if (topCategory === 'all') return vendors;  // All 677 if no filter
+    return vendors.filter((v) => {
+      if (v.category !== topCategory) return false;
+      if (subCategory !== 'all' && v.subcategory !== subCategory) return false;
+      return true;
+    });
+  }, [vendors, topCategory, subCategory]);
 
   return (
     <div
@@ -82,13 +99,12 @@ export function PickExistingVendor({ onPick, onClose }) {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl animate-in slide-in-from-bottom-4 duration-200 max-h-[90vh] flex flex-col"
+        className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl animate-in slide-in-from-bottom-4 duration-200 max-h-[90vh] flex flex-col"
       >
         {/* Header */}
         <div className="p-5 border-b border-slate-200 flex justify-between items-center flex-shrink-0">
           <h3 className="font-black text-slate-800 flex items-center gap-2 text-lg">
-            <Search className="w-5 h-5 text-emerald-600" />
-            從商戶目錄搵
+            🏪 從商戶目錄搵
           </h3>
           <button
             onClick={onClose}
@@ -98,33 +114,72 @@ export function PickExistingVendor({ onPick, onClose }) {
           </button>
         </div>
 
-        {/* Search input */}
+        {/* Two-dropdown filter bar */}
         <div className="p-4 border-b border-slate-100 flex-shrink-0">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="text"
-              autoFocus
-              placeholder="搵商戶名 / 類別 / 地區..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl outline-none focus:border-emerald-500 text-sm"
-            />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Main category */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                主類別
+              </label>
+              <select
+                value={topCategory}
+                onChange={(e) => setTopCategory(e.target.value)}
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl outline-none focus:border-emerald-500 bg-white text-sm font-bold"
               >
-                <X className="w-4 h-4" />
-              </button>
+                <option value="all">📋 所有商戶 ({vendors.length} 個)</option>
+                {Object.entries(VENDOR_CATEGORIES).map(([key, cat]) => (
+                  <option key={key} value={key}>
+                    {cat.icon} {cat.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Sub category (depends on top) */}
+            <div>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                子類別
+              </label>
+              <select
+                value={subCategory}
+                onChange={(e) => setSubCategory(e.target.value)}
+                disabled={topCategory === 'all'}
+                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl outline-none focus:border-emerald-500 bg-white text-sm font-bold disabled:bg-slate-50 disabled:text-slate-400"
+              >
+                <option value="all">
+                  {topCategory === 'all' ? '先揀主類別' : '所有子類別'}
+                </option>
+                {subOptions.map((sub) => (
+                  <option key={sub.key} value={sub.key}>
+                    ↳ {sub.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Result count + active filter chip */}
+          <div className="flex items-center gap-2 mt-3">
+            {loading ? (
+              <span className="text-[10px] text-slate-500">載入中...</span>
+            ) : (
+              <>
+                <span className="text-[11px] font-bold text-slate-700">
+                  {filtered.length} 個商戶
+                </span>
+                {topCategory !== 'all' && (
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full font-bold">
+                    {VENDOR_CATEGORIES[topCategory]?.icon} {VENDOR_CATEGORIES[topCategory]?.label}
+                    {subCategory !== 'all' && ` · ${subOptions.find((s) => s.key === subCategory)?.label}`}
+                  </span>
+                )}
+              </>
             )}
           </div>
-          <p className="text-[10px] text-slate-500 mt-2">
-            {loading ? '載入中...' : `${filtered.length} 個商戶${searchTerm ? '' : '（顯示首 50 個）'}`}
-          </p>
         </div>
 
-        {/* Results */}
+        {/* Results grid */}
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
             <div className="flex items-center justify-center py-12">
@@ -138,14 +193,14 @@ export function PickExistingVendor({ onPick, onClose }) {
             <div className="text-center py-12">
               <div className="text-3xl mb-2">🔍</div>
               <p className="text-sm text-slate-600 font-bold mb-1">
-                搵唔到「{searchTerm}」
+                呢個類別未有商戶
               </p>
               <p className="text-xs text-slate-500">
-                試下用其他關鍵字，或者用「自己新增一個商戶」自己輸入。
+                揀另一個類別，或者用「自己新增」保存佢哋嘅聯絡資料。
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
               {filtered.map((v) => (
                 <button
                   key={v.id}
@@ -153,33 +208,37 @@ export function PickExistingVendor({ onPick, onClose }) {
                   onClick={() => onPick(v)}
                   className="text-left bg-white border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 rounded-xl p-3 transition-all group"
                 >
-                  <div className="flex items-start gap-2">
-                    <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-200 flex items-center justify-center text-emerald-700 font-black text-base flex-shrink-0">
+                  <div className="flex items-start gap-2 mb-1">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-100 to-emerald-200 flex items-center justify-center text-emerald-700 font-black text-sm flex-shrink-0">
                       {v.name?.charAt(0)?.toUpperCase() || '?'}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-bold text-slate-800 text-sm truncate group-hover:text-emerald-700">
+                      <div className="font-bold text-slate-800 text-xs truncate group-hover:text-emerald-700">
                         {v.name}
                       </div>
-                      <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
-                        {v.categoryLabel && (
-                          <span className="truncate">{v.categoryLabel}</span>
-                        )}
-                        {v.serviceAreaCity && (
-                          <span className="flex items-center gap-0.5 flex-shrink-0">
-                            <MapPin className="w-3 h-3" />
-                            {v.serviceAreaCity}
-                          </span>
-                        )}
-                      </div>
+                      {v.serviceAreaCity && (
+                        <div className="flex items-center gap-0.5 text-[9px] text-slate-500 mt-0.5 truncate">
+                          <MapPin className="w-2.5 h-2.5" />
+                          {v.serviceAreaCity}
+                          {v.serviceAreaDistrict && ` · ${v.serviceAreaDistrict}`}
+                        </div>
+                      )}
                     </div>
                     {v.rating > 0 && (
-                      <div className="flex items-center gap-0.5 text-[10px] text-amber-600 flex-shrink-0">
-                        <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
+                      <div className="flex items-center gap-0.5 text-[9px] text-amber-600 flex-shrink-0">
+                        <Star className="w-2.5 h-2.5 fill-amber-500 text-amber-500" />
                         {v.rating.toFixed(1)}
                       </div>
                     )}
                   </div>
+                  {/* Category pill */}
+                  {v.category && VENDOR_CATEGORIES[v.category] && (
+                    <div className="text-[9px] text-slate-400 mt-1 truncate">
+                      {VENDOR_CATEGORIES[v.category].icon} {VENDOR_CATEGORIES[v.category].label}
+                      {v.subcategory && VENDOR_CATEGORIES[v.category].subs[v.subcategory] &&
+                        ` · ${VENDOR_CATEGORIES[v.category].subs[v.subcategory]}`}
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
