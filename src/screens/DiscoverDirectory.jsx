@@ -65,7 +65,6 @@ import {
 import { parseFormattedNumber } from '../lib/format';
 import { CompareModal } from '../components/CompareModal';
 import { shareOrCopyShortlist } from '../lib/vendorShare';
-import { useLongPressRegistry } from '../lib/useLongPress';
 
 function isSubMatch(filter) {
   return filter && filter.includes('.');
@@ -302,9 +301,10 @@ export function DiscoverDirectory({
   function clearCats() {
     setSelectedCats(new Set());
   }
-  function applySelected() {
-    onFilterChange('selected');
-  }
+  // 2026-07-21 — applySelected removed; the new "套用到篩選"
+  // button below the grid calls onFilterChange('selected')
+  // directly. Keeping clearCats for the SelectedCategoryChips
+  // "clear all" link.
 
   // ----- Compare tray helpers -----
   function toggleCompare(vendorId) {
@@ -513,24 +513,73 @@ export function DiscoverDirectory({
       {/* Default view: 13 category cards */}
       {filter === 'all' && (
         <>
+          {/* 2026-07-21 — Multi-select toggle. Single tap on a
+              category card now drills in directly (most common
+              action: "I want to see venues"). For the rarer
+              cross-category browse ("I want venues AND
+              photography"), couples tap this chip to enter
+              multi-select mode, then tap cards to add. */}
+          <div className="flex justify-center mb-4">
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedCats.size > 0) {
+                  // Already in multi-select — toggle off and clear.
+                  setSelectedCats(new Set());
+                  return;
+                }
+                // Toggle on by pre-selecting the first non-empty
+                // category (gives couples a hint of what mode does).
+                const firstNonEmpty = Object.entries(counts.topCounts)
+                  .sort((a, b) => b[1] - a[1])[0]?.[0];
+                setSelectedCats(new Set(firstNonEmpty ? [firstNonEmpty] : []));
+              }}
+              className={`text-xs font-bold px-4 py-2 rounded-full border transition-all ${
+                selectedCats.size > 0
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                  : 'bg-white text-emerald-700 border-emerald-200 hover:border-emerald-400'
+              }`}
+            >
+              {selectedCats.size > 0
+                ? `✓ 多選模式（已選 ${selectedCats.size} 個）— 按此結束`
+                : '☐ 揀多過一個分類（多選模式）'}
+            </button>
+          </div>
           <CategoryGrid
             counts={counts}
             subCounts={counts.subCounts}
-            onCardClick={(topKey) => toggleCat(topKey)}
-            onCardDrilldown={(topKey) => setFilterWithSearchReset(topKey)}
+            multiSelectMode={selectedCats.size > 0}
+            onCardClick={(topKey) => {
+              // In multi-select mode → toggle selection (no drill).
+              // Otherwise → drill straight into the category.
+              if (selectedCats.size > 0) {
+                toggleCat(topKey);
+              } else {
+                setFilterWithSearchReset(topKey);
+              }
+            }}
             selectedCats={selectedCats}
           />
+          {selectedCats.size > 0 && counts.total > 0 && (
+            <div className="mt-6 text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  // Apply the multi-select filter: switch to the
+                  // 'selected' pseudo-filter handled by the
+                  // narrowed.filter branch in the filtered memo.
+                  // We use a synthetic filter value to opt into
+                  // the multi-cat branch.
+                  onFilterChange('selected');
+                }}
+                className="bg-emerald-600 text-white font-bold px-6 py-3 rounded-full shadow-md hover:bg-emerald-700 transition-colors"
+              >
+                套用到篩選（{counts.total} 個商戶）
+              </button>
+            </div>
+          )}
           {search && filteredCount === 0 && (
             <SearchEmpty onClear={() => setSearch('')} query={search} />
-          )}
-          {/* Tip line under the grid so users discover the long-press
-              gesture. Hidden once they've favorited any vendors (no
-              need to remind). */}
-          {counts.favorites === 0 && (
-            <p className="text-center text-xs text-slate-400 mt-6">
-              💡 <span className="hidden md:inline">右撳 / </span>
-              長按商戶分類卡片直接進入（短撳係加入選擇）
-            </p>
           )}
         </>
       )}
@@ -655,37 +704,13 @@ export function DiscoverDirectory({
       )}
 
       {/* ---- Sticky bottom action tray ---- */}
-      {/* Multi-select tray — only visible in default view when
-          at least one card is selected. Stays out of the way
-          until the user picks something. */}
-      {filter === 'all' && hasAnySelection && (
-        <ActionTray>
-          <span className="flex items-center gap-2 text-sm font-bold text-slate-700">
-            <ShoppingBag className="w-4 h-4 text-emerald-600" />
-            已選 {selectedCats.size} 個分類（共{' '}
-            {filteredCount} 個商戶）
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={clearCats}
-              className="px-3 py-1.5 rounded-full text-xs font-bold text-slate-500 hover:bg-slate-100 transition-colors"
-            >
-              清除
-            </button>
-            <button
-              type="button"
-              onClick={applySelected}
-              className="px-4 py-1.5 rounded-full text-sm font-bold bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm transition-colors"
-            >
-              📥 套用到篩選
-            </button>
-          </div>
-        </ActionTray>
-      )}
-
+      {/* 2026-07-21 — Multi-select tray removed. The "☐ 揀多過
+          一個分類" toggle button at the top of the grid + the
+          "套用到篩選" button below the cards now handle multi-cat
+          selection inline. Couples no longer need to scroll down
+          to find the apply button. */}
       {/* Compare tray — visible in favorites view + compareMode,
-          only when ≥ 2 vendors in the tray. ≤ 3 by design. */}
+          only when ≥ 2 vendors in the tray. ≤ 5 by design. */}
       {inFavorites && compareMode && compareTray.size >= 2 && (
         <ActionTray>
           <span className="flex items-center gap-2 text-sm font-bold text-slate-700">
@@ -745,16 +770,9 @@ function CategoryGrid({
   counts,
   subCounts,
   onCardClick,
-  onCardDrilldown,
+  multiSelectMode = false,
   selectedCats,
 }) {
-  // Single registry hook generates handlers for any number of cards
-  // without violating the Rules of Hooks (no per-element hooks).
-  const getPressHandlers = useLongPressRegistry({
-    delayMs: 600,
-    disableContextMenu: true,
-    onLongPress: (topKey) => onCardDrilldown?.(topKey),
-  });
   const allTopKeys = Object.keys(VENDOR_CATEGORIES);
 
   return (
@@ -769,20 +787,12 @@ function CategoryGrid({
           .slice(0, 3);
         const remainingSubs = subs.length - visibleSubs.length;
         const isSelected = selectedCats.has(topKey);
-        // Long-press: hold ≥600ms to drill directly (skip multi-select).
-        // Suppresses the synthetic click that fires on pointerup via
-        // onClickCapture so the gesture doesn't accidentally toggle the
-        // selection in addition to drilling down.
-        const pressHandlers = onCardDrilldown
-          ? getPressHandlers(topKey)
-          : null;
         return (
           <button
             key={topKey}
             type="button"
             onClick={() => onCardClick(topKey)}
-            disabled={count === 0}
-            {...(pressHandlers || {})}
+            disabled={count === 0 && !multiSelectMode}
             className={`group relative rounded-2xl p-5 text-left transition-all border select-none ${
               count === 0
                 ? 'bg-slate-50 border-slate-100 opacity-50 cursor-not-allowed'
