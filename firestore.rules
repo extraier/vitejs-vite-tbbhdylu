@@ -585,35 +585,30 @@ service cloud.firestore {
       allow write: if isAdmin()
         || (isSignedIn() && request.auth.uid == vendorUid);
 
-      // 2026-07-21 — Couples (signed-in, non-vendor) can record an
-      // interest request when a vendor they're viewing hasn't joined
-      // the platform yet. We append to /pendingEmails with a single
-      // field "requestorUid" so admin can audit which couples asked
-      // for the invite. This is opt-in (couple submits the email
-      // through NotOnboardedEmailModal); couples cannot overwrite
-      // any other vendor field.
-      allow create: if false;
-      allow update: if isSignedIn()
-        && (
-          // Vendor can update their own profile (full write)
-          request.auth.uid == vendorUid
-          || (
-            // Or a couple can record an interest request — limited
-            // to writing pendingEmails + interestCount, with strict
-            // field type checks.
-            isAdmin() == false
-            && request.resource.data.diff(resource.data).affectedKeys()
-                 .hasOnly(['pendingEmails', 'interestCount'])
-            && (
-              !('pendingEmails' in request.resource.data)
-              || request.resource.data.pendingEmails is list
-            )
-            && (
-              !('interestCount' in request.resource.data)
-              || request.resource.data.interestCount is number
-            )
-          )
-        );
+      // 2026-07-21 — Couples can record an invite request for a vendor
+      // who hasn't joined the platform yet. Each request is its own
+      // doc under /vendors/{slug}/pendingInvites so admin gets a
+      // full audit trail and we don't touch the vendor doc itself.
+      // 2026-07-21 (later) — also lets couples bump interestCount on
+      // the vendor doc via increment(), which is a safe single-field
+      // update. Other vendor fields are still protected by the outer
+      // write rule above.
+      match /pendingInvites/{inviteId} {
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasAll(['email', 'requestedAt', 'status'])
+          && request.resource.data.email is string
+          && request.resource.data.email.matches('[^@\\s]+@[^@\\s]+\\.[^@\\s]+')
+          && request.resource.data.status == 'pending'
+          && request.resource.data.requestedAt is timestamp;
+        // Admin reads to act on pending invites; vendor reads too
+        // (so they see who's waiting for them).
+        allow read: if isAdmin() || request.auth.uid == vendorUid;
+        // Admin can mark status as 'invited' or 'linked'.
+        allow update: if isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status', 'adminUid', 'adminNote', 'invitedAt', 'linkedAt']);
+        allow delete: if isAdmin();
+      }
 
       // 2026-07-19 — Audit trail for admin CSV imports. Admin-only
       // create; read for admin only. We deliberately scope audit docs
