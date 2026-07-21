@@ -20,6 +20,7 @@ import {
 import { TaskComments } from '../components/TaskComments';
 import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
 import { TrendingVendors } from '../components/TrendingVendors';
+import { NotOnboardedEmailModal } from '../components/modals/NotOnboardedEmailModal';
 import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 
@@ -422,6 +423,11 @@ export function CoupleChecklist({
     return matched;
   }, [activeCategory, activeVenue, activeTaskBudget, vendors]);
 
+  // 2026-07-21 — track when a not-onboarded vendor's "索取報價"
+  // button is tapped. We open the email-request modal so the couple
+  // can give us the vendor's email; admin then invites them.
+  const [notOnboardedVendor, setNotOnboardedVendor] = useState(null);
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mt-8 animate-in slide-in-from-bottom-4 duration-500">
       <section className="lg:col-span-6 flex flex-col gap-4">
@@ -715,10 +721,22 @@ export function CoupleChecklist({
               onViewProfile={() => {}}
               onGoJobBoard={onGoJobBoard}
               onOpenChat={onOpenChat}
+              onVendorNotOnboarded={(vendor) => setNotOnboardedVendor(vendor)}
             />
           )}
         </div>
       </section>
+
+      {/* 2026-07-21 — NotOnboardedEmailModal. Opens when couple taps
+          "索取報價" on a vendor whose signupStatus !== 'claimed'.
+          Saves the email to /vendors/{slug}.pendingEmails so admin
+          can invite them. */}
+      {notOnboardedVendor && (
+        <NotOnboardedEmailModal
+          vendor={notOnboardedVendor}
+          onClose={() => setNotOnboardedVendor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1105,7 +1123,7 @@ function EmptyMatch({ onGoDiscover }) {
   );
 }
 
-function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGoJobBoard, onOpenChat }) {
+function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGoJobBoard, onOpenChat, onVendorNotOnboarded }) {
   return (
     <div className="bg-transparent animate-in slide-in-from-right-4 duration-300">
       <div className="mb-5 flex items-end justify-between">
@@ -1127,6 +1145,7 @@ function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGo
               onViewProfile={onViewProfile}
               onGoJobBoard={onGoJobBoard}
               onOpenChat={onOpenChat}
+              onVendorNotOnboarded={onVendorNotOnboarded}
             />
           ))
         ) : (
@@ -1145,9 +1164,22 @@ function VendorMatch({ activeCategory, activeVenue, vendors, onViewProfile, onGo
   );
 }
 
-function VendorCard({ vendor, activeVenue, onViewProfile, onGoJobBoard, onOpenChat }) {
+function VendorCard({ vendor, activeVenue, onViewProfile, onGoJobBoard, onOpenChat, onVendorNotOnboarded }) {
   const isPerfectMatch =
     activeVenue && vendor.tags.some((tag) => activeVenue.includes(tag) || tag.includes(activeVenue));
+  // 2026-07-21 — vendor.signupStatus === 'claimed' means they've
+  // actually signed up to Save The Day. Anything else ('invited',
+  // 'uninvited', undefined) → not onboarded yet, can't open a chat.
+  const isOnboarded = vendor.signupStatus === 'claimed';
+
+  function handleRequestQuote() {
+    if (isOnboarded) {
+      onOpenChat?.(vendor);
+    } else {
+      onVendorNotOnboarded?.(vendor);
+    }
+  }
+
   return (
     <div
       className={`bg-white rounded-2xl p-6 shadow-sm border transition-all relative ${
@@ -1170,6 +1202,13 @@ function VendorCard({ vendor, activeVenue, onViewProfile, onGoJobBoard, onOpenCh
         ))}
       </div>
       <h3 className="text-lg font-bold text-slate-800">{vendor.name}</h3>
+      {/* 2026-07-21 — show onboarded/not-onboarded pill so couples
+          know upfront which vendors they can message directly. */}
+      {!isOnboarded && (
+        <div className="inline-block mt-1 text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-bold">
+          未加入平台
+        </div>
+      )}
       <div className="flex items-center gap-3 text-sm mb-4 mt-1">
         <span className="font-bold text-slate-700 bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
           {formatVendorPrice(vendor)}
@@ -1185,21 +1224,20 @@ function VendorCard({ vendor, activeVenue, onViewProfile, onGoJobBoard, onOpenCh
         >
           查看作品集
         </button>
-        {onOpenChat && (
-          <button
-            onClick={() => onOpenChat(vendor)}
-            className="bg-white text-rose-600 border border-rose-300 px-3 py-2 rounded-xl text-sm font-bold hover:bg-rose-50 flex items-center gap-1"
-            title="向商戶查詢詳情"
-          >
-            <MessageCircle className="w-4 h-4" />
-            訊息
-          </button>
-        )}
+        {/* 2026-07-21 — 索取報價 is now smart:
+              • onboarded vendor → opens chat directly (call them)
+              • not onboarded  → opens email-request modal */}
         <button
-          onClick={onGoJobBoard}
-          className="flex-1 bg-rose-50 text-rose-700 border border-rose-200 py-2 rounded-xl text-sm font-bold hover:bg-rose-100"
+          onClick={handleRequestQuote}
+          className={`flex-1 py-2 rounded-xl text-sm font-bold flex items-center justify-center gap-1 border ${
+            isOnboarded
+              ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+              : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+          }`}
+          title={isOnboarded ? '向商戶查詢詳情' : '商戶未加入平台，需要透過電郵邀請'}
         >
-          索取報價
+          <MessageCircle className="w-4 h-4" />
+          {isOnboarded ? '訊息商戶' : '索取報價'}
         </button>
       </div>
     </div>

@@ -585,6 +585,36 @@ service cloud.firestore {
       allow write: if isAdmin()
         || (isSignedIn() && request.auth.uid == vendorUid);
 
+      // 2026-07-21 — Couples (signed-in, non-vendor) can record an
+      // interest request when a vendor they're viewing hasn't joined
+      // the platform yet. We append to /pendingEmails with a single
+      // field "requestorUid" so admin can audit which couples asked
+      // for the invite. This is opt-in (couple submits the email
+      // through NotOnboardedEmailModal); couples cannot overwrite
+      // any other vendor field.
+      allow create: if false;
+      allow update: if isSignedIn()
+        && (
+          // Vendor can update their own profile (full write)
+          request.auth.uid == vendorUid
+          || (
+            // Or a couple can record an interest request — limited
+            // to writing pendingEmails + interestCount, with strict
+            // field type checks.
+            isAdmin() == false
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['pendingEmails', 'interestCount'])
+            && (
+              !('pendingEmails' in request.resource.data)
+              || request.resource.data.pendingEmails is list
+            )
+            && (
+              !('interestCount' in request.resource.data)
+              || request.resource.data.interestCount is number
+            )
+          )
+        );
+
       // 2026-07-19 — Audit trail for admin CSV imports. Admin-only
       // create; read for admin only. We deliberately scope audit docs
       // outside /artifacts/* (no per-user isolation needed — they are
