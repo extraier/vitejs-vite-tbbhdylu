@@ -115,7 +115,13 @@ interface SendInvitationsResult {
 // this can be moved back to us-central1 if desired.
 export const sendInvitationsV2 = onCall(
   {
-    region: 'asia-east2',
+    // 2026-07-22 — Reverted to us-central1 (matches the
+    // front-end's default functions singleton region). The
+    // asia-east2 deployment was returning 403 on OPTIONS
+    // preflight because Cloud Run's edge rejects OPTIONS before
+    // the function's `cors: true` handler runs.
+    region: 'us-central1',
+    cors: true,
     timeoutSeconds: 120,
     memory: '512MiB',
     secrets: [SMTP_URL, SMTP_FROM, APP_BASE_URL, LINK_SECRET],

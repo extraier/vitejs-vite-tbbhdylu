@@ -1,22 +1,8 @@
 import { useState } from 'react';
 import { X, Mail } from 'lucide-react';
-import { httpsCallable } from 'firebase/functions';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db, functions, auth } from '../../lib/firebase';
-
-// 2026-07-22 — Calling sendInvitationsV2 via the default
-// `functions` singleton (us-central1) instead of a region-
-// specific instance. Reason: Firebase 10.x's region-specific
-// Functions instances (`getFunctions(app, 'asia-east2')`)
-// sometimes send requests with empty Authorization headers
-// when the auth state was set after the module loaded, causing
-// the server to return "The request was not authenticated".
-//
-// `sendInvitationsV2` is ACTIVE in both us-central1 and
-// asia-east2 (Firebase CLI created both during earlier failed
-// deploys). Using us-central1 via the default `functions`
-// singleton avoids the auth-attach bug. See
-// functions/src/invitations.ts:105 for the full story.
+import { db } from '../../lib/firebase';
+import { callFirebaseFn } from '../../lib/firebaseFn';
 
 export function QrCodeModal({
   guest,
@@ -59,32 +45,14 @@ export function QrCodeModal({
         },
         { merge: true }
       );
-      // 2026-07-22 — Calling sendInvitationsV2 via the default
-      // `functions` singleton (us-central1). Using the default
-      // region avoids the region-specific instance's auth-attach
-      // bug. The function exists in both us-central1 and
-      // asia-east2; both are ACTIVE.
-      //
-      // 2026-07-22b — Force the auth token to be attached.
-      // Firebase 10.x's httpsCallable() sometimes sends requests
-      // with empty Authorization headers (server returns "The
-      // request was not authenticated"). The explicit token
-      // getter + manual header sidesteps this bug.
-      const currentToken = await auth.currentUser?.getIdToken();
-      const fn = httpsCallable(functions, 'sendInvitationsV2');
-      const result = currentToken
-        ? await fn({
-            eventId: currentEventId,
-            invitationId,
-            guestIds: [guest.guestId],
-            customMessage: '',
-          }, { headers: { Authorization: 'Bearer ' + currentToken } })
-        : await fn({
-            eventId: currentEventId,
-            invitationId,
-            guestIds: [guest.guestId],
-            customMessage: '',
-          });
+      // 2026-07-22 — Using Vercel proxy (callFirebaseFn above)
+      // to bypass Cloud Run CORS preflight rejection.
+      const result = await callFirebaseFn('sendInvitationsV2', {
+        eventId: currentEventId,
+        invitationId,
+        guestIds: [guest.guestId],
+        customMessage: '',
+      });
       const sent = result.data?.sent || [];
       const ok = sent.find((s) => s.status === 'sent');
       const skipped = sent.find((s) => s.status === 'skipped');

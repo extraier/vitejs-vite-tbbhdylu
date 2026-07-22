@@ -9,13 +9,11 @@ import {
 import { InvitationCard } from '../components/invitation/InvitationCard';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
 import { db, functions, auth, appId } from '../lib/firebase';
-import { httpsCallable } from 'firebase/functions';
+import { callFirebaseFn } from '../lib/firebaseFn';
 
-// 2026-07-22 — Calling sendInvitationsV2 via the default
-// `functions` singleton (us-central1) instead of a region-
-// specific instance. The region-specific instance sends
-// requests with empty Authorization headers under Firebase
-// 10.x, breaking auth. See QrCodeModal.jsx for full notes.
+// 2026-07-22 — Calling sendInvitationsV2 via the Vercel proxy
+// to bypass Cloud Run's CORS preflight rejection. See
+// src/lib/firebaseFn.js for the proxy helper.
 
 const STEPS = [
   { id: 'background', label: '揀背景' },
@@ -772,26 +770,13 @@ function SendButton({ ownerUid, eventId, invitationId, guestIds, customMessage, 
     }
     setSending(true);
     try {
-      // 2026-07-22 — Calling sendInvitationsV2 via the default
-      // `functions` singleton (us-central1). The default region
-      // attaches auth properly; region-specific instances don't
-      // in Firebase 10.x. See QrCodeModal.jsx for full notes.
-      //
-      // 2026-07-22b — Force the auth token to be attached.
-      // Firebase 10.x's httpsCallable() sometimes sends requests
-      // with empty Authorization headers (server returns "The
-      // request was not authenticated"). The explicit token
-      // getter + manual header sidesteps this bug.
-      const currentToken = await auth.currentUser?.getIdToken();
-      const fn = httpsCallable(functions, 'sendInvitationsV2');
-      const result = currentToken
-        ? await fn({
-            eventId,
-            invitationId,
-            guestIds,
-            customMessage,
-          }, { headers: { Authorization: 'Bearer ' + currentToken } })
-        : await fn({ eventId, invitationId, guestIds, customMessage });
+      // 2026-07-22 — Vercel proxy bypasses Cloud Run CORS preflight.
+      const result = await callFirebaseFn('sendInvitationsV2', {
+        eventId,
+        invitationId,
+        guestIds,
+        customMessage,
+      });
       const sentCount = result.data.sent.filter((s) => s.status === 'sent').length;
       const skipped = result.data.sent.filter((s) => s.status === 'skipped').length;
       alert(

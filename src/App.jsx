@@ -59,6 +59,7 @@ import { useToast } from './hooks/useToast';
 import { signInAnonymously } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from './lib/firebase';
+import { callFirebaseFn } from './lib/firebaseFn';
 
 import { LoginScreen } from './screens/LoginScreen';
 import { VendorSignupCard } from './components/VendorSignupCard';
@@ -598,17 +599,8 @@ export default function App() {
         if (cancelled) return;
         // 1) Cloud Function — primary path.
         try {
-          // 2026-07-22 — Force the auth token to be attached.
-          // Firebase 10.x's getFunctions() doesn't always re-
-          // attach auth after sign-in completes, leaving
-          // requests with empty Authorization headers (server
-          // returns "The request was not authenticated"). The
-          // explicit token getter sidesteps the issue.
-          const currentToken = await auth.currentUser?.getIdToken();
-          const autoLink = httpsCallable(functions, 'autoLinkVendorContactsV2');
-          const result = currentToken
-            ? await autoLink({}, { headers: { Authorization: 'Bearer ' + currentToken } })
-            : await autoLink();
+          // 2026-07-22 — Vercel proxy bypasses Cloud Run CORS preflight.
+          const result = await callFirebaseFn('autoLinkVendorContactsV2');
           const { linked, backfilled } = result?.data || {};
           if (!cancelled && (linked || backfilled)) {
             showToast?.(
