@@ -20,7 +20,7 @@
 
 import { auth } from './firebase';
 
-export async function callFirebaseFn(fnName, data) {
+export async function callFirebaseFn(fnName, data = {}) {
   const currentToken = await auth.currentUser?.getIdToken();
   const res = await fetch(`/api/firebase-proxy?fn=${fnName}`, {
     method: 'POST',
@@ -28,6 +28,9 @@ export async function callFirebaseFn(fnName, data) {
       'Content-Type': 'application/json',
       ...(currentToken ? { Authorization: 'Bearer ' + currentToken } : {}),
     },
+    // Always send { data } wrapper. Firebase callable protocol
+    // requires it even when there are no args — sending
+    // { data: undefined } causes 400 INVALID_ARGUMENT.
     body: JSON.stringify({ data }),
   });
   const json = await res.json();

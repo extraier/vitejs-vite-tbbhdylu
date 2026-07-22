@@ -600,7 +600,10 @@ export default function App() {
         // 1) Cloud Function — primary path.
         try {
           // 2026-07-22 — Vercel proxy bypasses Cloud Run CORS preflight.
-          const result = await callFirebaseFn('autoLinkVendorContactsV2');
+          // Pass {} as data — Firebase callable functions require the
+          // {data:...} wrapper even with empty args; sending
+          // {data: undefined} causes 400 INVALID_ARGUMENT.
+          const result = await callFirebaseFn('autoLinkVendorContactsV2', {});
           const { linked, backfilled } = result?.data || {};
           if (!cancelled && (linked || backfilled)) {
             showToast?.(
