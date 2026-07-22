@@ -109,6 +109,22 @@ export default async function handler(req, res) {
         error: { code: 'UPSTREAM_NOT_JSON', message: text.slice(0, 500) },
       };
     }
+    // Firebase callable protocol: server returns
+    //   { result: <data> } on success
+    //   { error: { code, message, details } } on error
+    // The Firebase SDK unwraps `result` → `data` for callers.
+    // Since our proxy replaces the SDK, do the same here so
+    // callers can do `result.data.sent` as they would with
+    // httpsCallable().
+    if (json && typeof json === 'object' && !json.error) {
+      if (json.result !== undefined) {
+        json = { data: json.result };
+      } else if (json.data === undefined) {
+        // Some custom functions return bare data without
+        // wrapping in `result`. Preserve as-is.
+        json = { data: json };
+      }
+    }
     return res.status(upstream.status).json(json);
   } catch (err) {
     console.log('[firebase-proxy] fetch failed', { fn: fnName, err: err?.message });
