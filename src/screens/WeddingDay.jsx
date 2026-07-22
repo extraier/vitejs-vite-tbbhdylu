@@ -253,10 +253,20 @@ function HelperPicker({ helpers = [], value = [], onChange }) {
   );
 }
 
-function RundownTab({ entries, onUpsert, onDelete, onReorder, helpers }) {
+function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpers }) {
   const [editing, setEditing] = useState(null);
   const [filterGroup, setFilterGroup] = useState('all');
   const [filterAssigned, setFilterAssigned] = useState('all');
+  // 2026-07-22 — Sort mode for 大日流程. Two modes:
+  //   'time'   (default) — sort by startTime asc. The natural
+  //                        schedule-driven order; couples plan
+  //                        around actual times.
+  //   'manual'          — sort by manualPosition asc. Drag the
+  //                        rows around when the start times are
+  //                        equal (e.g. three events all at 14:00)
+  //                        or when you want a custom run-of-show.
+  // Same pattern as PlaylistTab and ResourcesTab.
+  const [sortMode, setSortMode] = useState('time');
 
   const unassignedCount = (entries || []).filter(
     (e) => !e.assignedHelpers || e.assignedHelpers.length === 0,
@@ -264,12 +274,29 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, helpers }) {
 
   const sorted = useMemo(() => {
     let s = [...(entries || [])];
-    s.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    if (sortMode === 'manual') {
+      // Sort by manualPosition asc; unpinned entries go to the
+      // bottom (so couples can still see new entries that
+      // haven't been placed yet). Within manualPosition ties,
+      // fall back to startTime for stable ordering.
+      s.sort((a, b) => {
+        const ap = a.manualPosition;
+        const bp = b.manualPosition;
+        if (ap == null && bp == null) {
+          return (a.startTime || '').localeCompare(b.startTime || '');
+        }
+        if (ap == null) return 1;
+        if (bp == null) return -1;
+        return ap - bp;
+      });
+    } else {
+      s.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    }
     if (filterGroup !== 'all') s = s.filter((e) => (e.group || 'prep') === filterGroup);
     if (filterAssigned === 'unassigned')
       s = s.filter((e) => !e.assignedHelpers || e.assignedHelpers.length === 0);
     return s;
-  }, [entries, filterGroup, filterAssigned]);
+  }, [entries, filterGroup, filterAssigned, sortMode]);
 
   const counts = useMemo(() => {
     const out = { all: (entries || []).length };
@@ -279,13 +306,60 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, helpers }) {
     return out;
   }, [entries]);
 
+  // 2026-07-22 — Drag-and-drop reorder for manual sort mode.
+  // Same algorithm as 敬茶: compute contiguous positions 1..N,
+  // diff against existing positions, write only changed rows.
+  function persistManualOrder(orderedEntries) {
+    const writes = [];
+    orderedEntries.forEach((e, idx) => {
+      const targetPos = idx + 1;
+      if ((e.manualPosition ?? null) !== targetPos) {
+        writes.push({ id: e.id, manualPosition: targetPos });
+      }
+    });
+    if (writes.length === 0) return;
+    onSetOrders?.(writes);
+  }
+
+  // 2026-07-22 — Per-row dnd-kit drag handle. Each row gets
+  // its own DragEnd handler via a ref-pattern because we need
+  // access to the local `sorted` array. We expose a wrapper
+  // that handles drag for the whole list.
+  function RundownListDnD({ list, children }) {
+    const sensors = useSensors(
+      useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+      useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
+      useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    );
+
+    function handleDragEnd(event) {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIdx = list.findIndex((e) => e.id === active.id);
+      const newIdx = list.findIndex((e) => e.id === over.id);
+      if (oldIdx < 0 || newIdx < 0) return;
+      persistManualOrder(arrayMove(list, oldIdx, newIdx));
+    }
+
+    return (
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={list.map((e) => e.id)} strategy={verticalListSortingStrategy}>
+          {children}
+        </SortableContext>
+      </DndContext>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-500">
         按時間排序嘅大日流程 — 兄弟姊妹/司儀可以即時查閱，唔使再 WhatsApp 過嚟問。
       </p>
+      <p className="text-xs text-slate-400 -mt-2">
+        💡 想自訂順序？按 <span className="font-bold">自訂</span>，然後捉住右邊嗰條拖把 <GripVertical className="inline w-3 h-3" /> 就可以拖去新位置。
+      </p>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 items-center">
         <FilterPill
           active={filterGroup === 'all'}
           onClick={() => setFilterGroup('all')}
@@ -306,6 +380,35 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, helpers }) {
             label={`⚠️ 未分配 (${unassignedCount})`}
           />
         )}
+        {/* 2026-07-22 — sort mode toggle. Same pattern as 歌單/物資. */}
+        <div className="inline-flex rounded-lg border border-slate-300 bg-white overflow-hidden text-xs ml-auto">
+          <button
+            type="button"
+            onClick={() => setSortMode('time')}
+            className={`px-2.5 py-1 flex items-center gap-1 transition-colors ${
+              sortMode === 'time'
+                ? 'bg-rose-500 text-white'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+            title="按開始時間排序"
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>時間</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortMode('manual')}
+            className={`px-2.5 py-1 flex items-center gap-1 transition-colors border-l border-slate-200 ${
+              sortMode === 'manual'
+                ? 'bg-rose-500 text-white'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+            title="按自訂順序排序（拖動重新排列）"
+          >
+            <GripVertical className="w-3.5 h-3.5" />
+            <span>自訂</span>
+          </button>
+        </div>
       </div>
 
       <NewEntryRow
@@ -315,32 +418,62 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, helpers }) {
         }}
       />
 
-      <div className="space-y-2">
-        {sorted.length === 0 && (
-          <div className="text-center py-10 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-            暫無流程。加入例如「10:00 兄弟姊妹集合」嘅項目就會喺度出現。
+      {sorted.length === 0 && (
+        <div className="text-center py-10 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+          暫無流程。加入例如「10:00 兄弟姊妹集合」嘅項目就會喺度出現。
+        </div>
+      )}
+      {sortMode === 'manual' ? (
+        <RundownListDnD list={sorted}>
+          <div className="space-y-2">
+            {sorted.map((entry, idx) => (
+              <SortableRow key={entry.id} id={entry.id}>
+                {({ dragHandleProps }) => (
+                  <RundownCard
+                    entry={entry}
+                    helpers={helpers}
+                    isFirst={idx === 0}
+                    isLast={idx === sorted.length - 1}
+                    isEditing={editing === entry.id}
+                    onEdit={() => setEditing(entry.id)}
+                    onCancel={() => setEditing(null)}
+                    onSave={(data) => {
+                      onUpsert({ ...entry, ...data });
+                      setEditing(null);
+                    }}
+                    onDelete={() => onDelete(entry.id)}
+                    onMoveUp={() => onReorder(entry.id, 'up')}
+                    onMoveDown={() => onReorder(entry.id, 'down')}
+                    dragHandleProps={dragHandleProps}
+                  />
+                )}
+              </SortableRow>
+            ))}
           </div>
-        )}
-        {sorted.map((entry, idx) => (
-          <RundownCard
-            key={entry.id}
-            entry={entry}
-            helpers={helpers}
-            isFirst={idx === 0}
-            isLast={idx === sorted.length - 1}
-            isEditing={editing === entry.id}
-            onEdit={() => setEditing(entry.id)}
-            onCancel={() => setEditing(null)}
-            onSave={(data) => {
-              onUpsert({ ...entry, ...data });
-              setEditing(null);
-            }}
-            onDelete={() => onDelete(entry.id)}
-            onMoveUp={() => onReorder(entry.id, 'up')}
-            onMoveDown={() => onReorder(entry.id, 'down')}
-          />
-        ))}
-      </div>
+        </RundownListDnD>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map((entry, idx) => (
+            <RundownCard
+              key={entry.id}
+              entry={entry}
+              helpers={helpers}
+              isFirst={idx === 0}
+              isLast={idx === sorted.length - 1}
+              isEditing={editing === entry.id}
+              onEdit={() => setEditing(entry.id)}
+              onCancel={() => setEditing(null)}
+              onSave={(data) => {
+                onUpsert({ ...entry, ...data });
+                setEditing(null);
+              }}
+              onDelete={() => onDelete(entry.id)}
+              onMoveUp={() => onReorder(entry.id, 'up')}
+              onMoveDown={() => onReorder(entry.id, 'down')}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -360,7 +493,25 @@ function FilterPill({ active, onClick, label }) {
   );
 }
 
-function RundownCard({ entry, helpers, isEditing, isFirst, isLast, onEdit, onCancel, onSave, onDelete, onMoveUp, onMoveDown }) {
+function RundownCard({
+  entry,
+  helpers,
+  isEditing,
+  isFirst,
+  isLast,
+  onEdit,
+  onCancel,
+  onSave,
+  onDelete,
+  onMoveUp,
+  onMoveDown,
+  // 2026-07-22 — dnd-kit drag handle props. When set, the card
+  // renders a GripVertical handle bound to dragHandleProps so
+  // couples can drag to reorder in manual sort mode. When
+  // undefined (time mode), the legacy ▲▼ buttons are rendered
+  // as a fallback.
+  dragHandleProps,
+}) {
   const [draft, setDraft] = useState({
     startTime: entry.startTime || '12:00',
     durationMin: entry.durationMin || 30,
@@ -452,25 +603,42 @@ function RundownCard({ entry, helpers, isEditing, isFirst, isLast, onEdit, onCan
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3.5 flex gap-3 items-start">
-      <div className="flex flex-col items-center gap-1 text-slate-300 flex-shrink-0 pt-1">
+      {/* 2026-07-22 — reorder column. In manual sort mode
+          (dragHandleProps provided), render a large drag handle
+          that initiates a dnd-kit drag. In time mode (no
+          dragHandleProps), fall back to the legacy ▲▼
+          micro-shift buttons. Same icon set, two affordances. */}
+      {dragHandleProps ? (
         <button
-          onClick={onMoveUp}
-          disabled={isFirst}
-          className="hover:text-rose-500 disabled:opacity-20"
-          title="向上移"
+          type="button"
+          {...dragHandleProps}
+          className="flex-shrink-0 self-stretch flex items-center justify-center w-9 px-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-grab active:cursor-grabbing touch-none"
+          title="捉住拖動重新排列"
+          aria-label="拖動重新排列"
         >
-          ▲
+          <GripVertical className="w-5 h-5" strokeWidth={2} />
         </button>
-        <GripVertical className="w-3 h-3" />
-        <button
-          onClick={onMoveDown}
-          disabled={isLast}
-          className="hover:text-rose-500 disabled:opacity-20"
-          title="向下移"
-        >
-          ▼
-        </button>
-      </div>
+      ) : (
+        <div className="flex flex-col items-center gap-1 text-slate-300 flex-shrink-0 pt-1">
+          <button
+            onClick={onMoveUp}
+            disabled={isFirst}
+            className="hover:text-rose-500 disabled:opacity-20"
+            title="向上移"
+          >
+            ▲
+          </button>
+          <GripVertical className="w-3 h-3" />
+          <button
+            onClick={onMoveDown}
+            disabled={isLast}
+            className="hover:text-rose-500 disabled:opacity-20"
+            title="向下移"
+          >
+            ▼
+          </button>
+        </div>
+      )}
       <div className="flex-shrink-0 text-center min-w-[68px]">
         <div className="text-lg font-black text-rose-600 font-mono">
           {entry.startTime}
@@ -652,7 +820,7 @@ const RESOURCE_CATEGORIES = {
   other: '其他',
 };
 
-function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, currentUser, helpers }) {
+function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrders, currentUser, helpers }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
   // 2026-07-22 — Sort mode toggle. Same pattern as PlaylistTab.
@@ -696,6 +864,87 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, currentU
       newOther = myPos ?? idx + 1;
     }
     onReorder?.(itemId, newMine, swapWith.id, newOther);
+  }
+
+  // 2026-07-22b — Drag-and-drop wrapper for each 物資 category.
+  // Each category (佈置 / 物資 / 食物 / etc.) gets its own
+  // dnd-kit context so couples can only drag within a category.
+  // On drop we compute contiguous manualPosition values and
+  // batch-write them to Firestore via onSetOrders.
+  function ResourcesGroupDnD({ list, children }) {
+    const sensors = useSensors(
+      useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+      useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
+      useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    );
+
+    function handleDragEnd(event) {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIdx = list.findIndex((i) => i.id === active.id);
+      const newIdx = list.findIndex((i) => i.id === over.id);
+      if (oldIdx < 0 || newIdx < 0) return;
+      const reordered = arrayMove(list, oldIdx, newIdx);
+      const writes = [];
+      reordered.forEach((i, idx) => {
+        const targetPos = idx + 1;
+        if ((i.manualPosition ?? null) !== targetPos) {
+          writes.push({ id: i.id, manualPosition: targetPos });
+        }
+      });
+      if (writes.length > 0) onSetOrders?.(writes);
+    }
+
+    if (!list || list.length === 0) return null;
+
+    return (
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={list.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+          {children}
+        </SortableContext>
+      </DndContext>
+    );
+  }
+
+  // 2026-07-22b — Extract the resource-item body (label + qty +
+  // assigned helpers + notes) into a small component so both the
+  // drag-mode and non-drag-mode rows render the same markup
+  // without duplication.
+  function ResourceItemBody({ item }) {
+    return (
+      <div className="flex-grow min-w-0">
+        <div
+          className={`font-bold ${item.checked ? 'line-through text-slate-500' : 'text-slate-800'}`}
+        >
+          {item.label}
+        </div>
+        {(item.qty || item.assignedToName || item.notes ||
+          (item.assignedHelpers && item.assignedHelpers.length > 0)) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-xs text-slate-500">
+            {item.qty && <span>數量: <b className="text-slate-700">{item.qty}</b></span>}
+            {item.assignedToName && (
+              <span className="inline-flex items-center gap-1">
+                <Users className="w-3 h-3" />
+                負責: <b className="text-rose-600">{item.assignedToName}</b>
+              </span>
+            )}
+            {item.assignedHelpers && item.assignedHelpers.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {item.assignedHelpers.map((h) => (
+                  <span
+                    key={h.id}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700"
+                  >
+                    {h.name || h.id}
+                  </span>
+                ))}
+              </div>
+            )}
+            {item.notes && <span>📝 {item.notes}</span>}
+          </div>
+        )}
+      </div>
+    );
   }
 
   const filtered = useMemo(() => {
@@ -808,97 +1057,86 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, currentU
           <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-600 uppercase tracking-wide">
             {RESOURCE_CATEGORIES[cat] || cat}
           </div>
-          <div className="divide-y divide-slate-100">
-            {list.map((item, itemIdx) => (
-              <div
-                key={item.id}
-                className={`flex items-center gap-3 px-4 py-2.5 ${
-                  item.checked ? 'bg-slate-50 opacity-60' : ''
-                }`}
-              >
-                <button
-                  onClick={() => onToggle(item.id, !item.checked)}
-                  className="flex-shrink-0"
-                >
-                  {item.checked ? (
-                    <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-                  ) : (
-                    <Circle className="w-5 h-5 text-slate-300" />
-                  )}
-                </button>
-                {/* 2026-07-22 — reorder column. Same pattern as
-                    SongRow in PlaylistTab. Visible only in manual
-                    sort mode so the default 時間 view stays
-                    uncluttered.
-                    2026-07-22b — larger rose-colored buttons so
-                    couples notice them. User reported missing the
-                    arrows in 敬茶. Apply same fix here for
-                    consistency. */}
-                {sortMode === 'manual' && (
-                  <div className="flex-shrink-0 flex flex-col gap-0.5 bg-slate-100 rounded-lg p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => handleReorder(item.id, 'up')}
-                      disabled={itemIdx === 0}
-                      className="p-1 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                      title="向上移一個位置"
-                      aria-label="向上移"
-                    >
-                      <ChevronUp className="w-4 h-4" strokeWidth={2.5} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleReorder(item.id, 'down')}
-                      disabled={itemIdx === list.length - 1}
-                      className="p-1 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                      title="向下移一個位置"
-                      aria-label="向下移"
-                    >
-                      <ChevronDown className="w-4 h-4" strokeWidth={2.5} />
-                    </button>
-                  </div>
-                )}
-                <div className="flex-grow min-w-0">
-                  <div
-                    className={`font-bold ${item.checked ? 'line-through text-slate-500' : 'text-slate-800'}`}
-                  >
-                    {item.label}
-                  </div>
-                  {(item.qty || item.assignedToName || item.notes ||
-                    (item.assignedHelpers && item.assignedHelpers.length > 0)) && (
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-xs text-slate-500">
-                      {item.qty && <span>數量: <b className="text-slate-700">{item.qty}</b></span>}
-                      {item.assignedToName && (
-                        <span className="inline-flex items-center gap-1">
-                          <Users className="w-3 h-3" />
-                          負責: <b className="text-rose-600">{item.assignedToName}</b>
-                        </span>
-                      )}
-                      {item.assignedHelpers && item.assignedHelpers.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {item.assignedHelpers.map((h) => (
-                            <span
-                              key={h.id}
-                              className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-700"
-                            >
-                              {h.name || h.id}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {item.notes && <span>📝 {item.notes}</span>}
-                    </div>
-                  )}
-                </div>
-                <button
-                  onClick={() => onDelete(item.id)}
-                  className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded flex-shrink-0"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+          {/* 2026-07-22b — Wrap each category in ResourcesGroupDnD
+              when in manual sort mode. Couples can drag items
+              within a category (e.g. 佈置 items reorder within
+              佈置) but not across categories. In default 時間
+              mode we render the legacy non-draggable list. */}
+          {sortMode === 'manual' ? (
+            <ResourcesGroupDnD list={list}>
+              <div className="divide-y divide-slate-100">
+                {list.map((item) => (
+                  <SortableRow key={item.id} id={item.id}>
+                    {({ dragHandleProps }) => (
+                      <div
+                        className={`flex items-center gap-3 px-4 py-2.5 ${
+                          item.checked ? 'bg-slate-50 opacity-60' : ''
+                        }`}
+                      >
+                        <button
+                          onClick={() => onToggle(item.id, !item.checked)}
+                          className="flex-shrink-0"
+                        >
+                          {item.checked ? (
+                            <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                          ) : (
+                            <Circle className="w-5 h-5 text-slate-300" />
+                          )}
+                        </button>
+                        {/* Drag handle. Same style as 大日流程
+                            and 敬茶 handles. */}
+                        <button
+                          type="button"
+                          {...dragHandleProps}
+                          className="flex-shrink-0 self-stretch flex items-center justify-center w-8 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-grab active:cursor-grabbing touch-none"
+                          title="捉住拖動重新排列"
+                          aria-label="拖動重新排列"
+                        >
+                          <GripVertical className="w-4 h-4" strokeWidth={2} />
+                        </button>
+                        <ResourceItemBody item={item} />
+                        <button
+                          onClick={() => onDelete(item.id)}
+                          className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded flex-shrink-0"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                  </SortableRow>
+                ))}
               </div>
-            ))}
-          </div>
+            </ResourcesGroupDnD>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {list.map((item) => (
+                <div
+                  key={item.id}
+                  className={`flex items-center gap-3 px-4 py-2.5 ${
+                    item.checked ? 'bg-slate-50 opacity-60' : ''
+                  }`}
+                >
+                  <button
+                    onClick={() => onToggle(item.id, !item.checked)}
+                    className="flex-shrink-0"
+                  >
+                    {item.checked ? (
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                    ) : (
+                      <Circle className="w-5 h-5 text-slate-300" />
+                    )}
+                  </button>
+                  <ResourceItemBody item={item} />
+                  <button
+                    onClick={() => onDelete(item.id)}
+                    className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded flex-shrink-0"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ))}
 
@@ -1533,7 +1771,7 @@ function youtubeId(url) {
   return null;
 }
 
-function PlaylistTab({ songs, onUpsert, onDelete, onReorder, currentUserUid }) {
+function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, currentUserUid }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -1617,6 +1855,58 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, currentUserUid }) {
   // If the song above/below is unpinned (manualPosition = null)
   // we assign the next free position so the moved song is
   // guaranteed to move into a defined slot.
+  // 2026-07-22b — Drag-and-drop reorder for 歌單. Each moment
+  // group has its own dnd-kit context; couples can only drag
+  // within the same group (e.g. 入場 songs can never tangle
+  // with 敬茶 songs). The drop handler calls arrayMove on the
+  // sorted list, then asks the parent to persist the new
+  // manualPosition values for any rows whose position changed.
+  //
+  // In 自訂 mode we wrap each group in <PlaylistGroupDnD>
+  // which provides the DndContext + SortableContext. The
+  // SongRow receives dragHandleProps via render prop and
+  // attaches them to its GripVertical button.
+  function PlaylistGroupDnD({ groupId, list, children }) {
+    const sensors = useSensors(
+      useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+      useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
+      useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    );
+
+    function handleDragEnd(event) {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIdx = list.findIndex((s) => s.id === active.id);
+      const newIdx = list.findIndex((s) => s.id === over.id);
+      if (oldIdx < 0 || newIdx < 0) return;
+      const reordered = arrayMove(list, oldIdx, newIdx);
+      // Assign contiguous manualPosition values starting from 1,
+      // but only write rows whose position actually changed.
+      const writes = [];
+      reordered.forEach((s, idx) => {
+        const targetPos = idx + 1;
+        if ((s.manualPosition ?? null) !== targetPos) {
+          writes.push({ id: s.id, manualPosition: targetPos });
+        }
+      });
+      if (writes.length > 0) onSetOrders?.(writes);
+    }
+
+    if (!list || list.length === 0) return null;
+
+    return (
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={list.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+          {children}
+        </SortableContext>
+      </DndContext>
+    );
+  }
+
+  // 2026-07-22 — Legacy ▲▼ reorder kept for backward compatibility.
+  // The new drag-and-drop is the primary UX; this swap handler
+  // remains in case any code path still calls it (and as a
+  // fallback if dnd-kit sensors fail on some browsers).
   function handleReorder(songId, direction) {
     const song = (songs || []).find((s) => s.id === songId);
     if (!song) return;
@@ -1626,30 +1916,18 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, currentUserUid }) {
     if (idx < 0) return;
     const delta = direction === 'up' ? -1 : 1;
     const swapWith = groupList[idx + delta];
-    if (!swapWith) return; // already at top/bottom
-
-    // Compute the two new positions. If the neighbour is unpinned
-    // (manualPosition == null), we use the current song's position
-    // shifted by direction; otherwise we just swap.
+    if (!swapWith) return;
     const myPos = song.manualPosition;
     const otherPos = swapWith.manualPosition;
     let newMine, newOther;
     if (myPos != null && otherPos != null) {
-      // Both pinned → simple swap.
       newMine = otherPos;
       newOther = myPos;
     } else if (myPos == null && otherPos == null) {
-      // Both unpinned → give them contiguous positions starting
-      // from the current size of the manual list.
-      const base = groupList.filter(
-        (s) => s.manualPosition != null,
-      ).length;
-      newMine = base;          // current song
-      newOther = base + 1;     // neighbour
+      const base = groupList.filter((s) => s.manualPosition != null).length;
+      newMine = base;
+      newOther = base + 1;
     } else {
-      // One pinned, one not. Pin the moved song in the neighbour's
-      // slot, and bump the unpinned song to the moved song's slot
-      // (or just below it).
       newMine = otherPos ?? idx;
       newOther = myPos ?? idx + 1;
     }
@@ -1739,38 +2017,65 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, currentUserUid }) {
                 {grouped[id].length} 首
               </span>
             </div>
-            <div className="divide-y divide-slate-100">
-              {grouped[id].map((song, songIdx) => (
-                <SongRow
-                  key={song.id}
-                  song={song}
-                  currentUserUid={currentUserUid}
-                  // 2026-07-22 — reorder props. Only meaningful
-                  // when sortMode === 'manual'; the SongRow itself
-                  // gates visibility on that flag so we don't
-                  // litter the hot-mode UI with arrow buttons.
-                  sortMode={sortMode}
-                  isFirst={songIdx === 0}
-                  isLast={songIdx === grouped[id].length - 1}
-                  onMoveUp={() => handleReorder(song.id, 'up')}
-                  onMoveDown={() => handleReorder(song.id, 'down')}
-                  // 2026-07-18 — P1 inline preview wiring: SongRow
-                  // reports its own playing state up; PlaylistTab
-                  // flips off whichever row was playing before.
-                  isPlaying={playingYtId === song.id}
-                  onTogglePlay={(ytId) =>
-                    setPlayingYtId((prev) => (prev === ytId ? null : ytId))
-                  }
-                  onVote={() => {
-                    const votes = new Set(song.votes || []);
-                    if (votes.has(currentUserUid)) votes.delete(currentUserUid);
-                    else votes.add(currentUserUid);
-                    onUpsert({ ...song, votes: Array.from(votes) });
-                  }}
-                  onDelete={() => onDelete(song.id)}
-                />
-              ))}
-            </div>
+            {/* 2026-07-22b — Wrap each moment's list in
+                PlaylistGroupDnD when in manual sort mode. The
+                SortableContext + DndContext are scoped to this
+                group so couples can only drag within (e.g. 入場
+                songs stay within 入場). In hot mode (sortMode
+                !== 'manual') we render the legacy non-draggable
+                list — couples who want votes-based ranking
+                shouldn't see drag handles cluttering the UI. */}
+            {sortMode === 'manual' ? (
+              <PlaylistGroupDnD groupId={id} list={grouped[id]}>
+                <div className="divide-y divide-slate-100">
+                  {grouped[id].map((song) => (
+                    <SortableRow key={song.id} id={song.id}>
+                      {({ dragHandleProps }) => (
+                        <SongRow
+                          song={song}
+                          currentUserUid={currentUserUid}
+                          sortMode={sortMode}
+                          dragHandleProps={dragHandleProps}
+                          isPlaying={playingYtId === song.id}
+                          onTogglePlay={(ytId) =>
+                            setPlayingYtId((prev) => (prev === ytId ? null : ytId))
+                          }
+                          onVote={() => {
+                            const votes = new Set(song.votes || []);
+                            if (votes.has(currentUserUid)) votes.delete(currentUserUid);
+                            else votes.add(currentUserUid);
+                            onUpsert({ ...song, votes: Array.from(votes) });
+                          }}
+                          onDelete={() => onDelete(song.id)}
+                        />
+                      )}
+                    </SortableRow>
+                  ))}
+                </div>
+              </PlaylistGroupDnD>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {grouped[id].map((song) => (
+                  <SongRow
+                    key={song.id}
+                    song={song}
+                    currentUserUid={currentUserUid}
+                    sortMode={sortMode}
+                    isPlaying={playingYtId === song.id}
+                    onTogglePlay={(ytId) =>
+                      setPlayingYtId((prev) => (prev === ytId ? null : ytId))
+                    }
+                    onVote={() => {
+                      const votes = new Set(song.votes || []);
+                      if (votes.has(currentUserUid)) votes.delete(currentUserUid);
+                      else votes.add(currentUserUid);
+                      onUpsert({ ...song, votes: Array.from(votes) });
+                    }}
+                    onDelete={() => onDelete(song.id)}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )
       ))}
@@ -1791,31 +2096,43 @@ function SongRow({
   onTogglePlay,
   onVote,
   onDelete,
-  // 2026-07-22 — reorder props. All four are only consulted when
-  // sortMode === 'manual'; otherwise the arrow column is hidden.
-  // The first/last booleans disable the corresponding button so
-  // the UI communicates "you can't move further" without us
-  // needing extra clicks or toasts.
+  // 2026-07-22 — sortMode + legacy ▲▼ reorder props. Kept for
+  // backward compatibility (some code paths still pass them).
+  // 2026-07-22b — dragHandleProps replaces ▲▼ in manual sort
+  // mode. dnd-kit's listeners + ARIA attributes; we spread them
+  // onto a GripVertical button so only that element initiates
+  // a drag. Couples can still tap the thumbnail to play/pause
+  // and the heart to vote without triggering a drag.
   sortMode,
   isFirst,
   isLast,
   onMoveUp,
   onMoveDown,
+  dragHandleProps,
 }) {
   const voted = (song.votes || []).includes(currentUserUid);
   const ytId = youtubeId(song.link);
 
   return (
     <div className="px-4 py-3 flex gap-3 items-start">
-      {/* 2026-07-22 — Reorder column. Only rendered when the
-          tab is in manual mode so the hot/votes view stays
-          clean. Stacked ▲▼ buttons; tapping swaps the
-          manualPosition with the neighbour via handleReorder
-          in the parent.
-          2026-07-22b — bigger rose-colored buttons so couples
-          notice them on phone screens. User reported missing
-          the arrows in 敬茶; applying the same fix here. */}
-      {sortMode === 'manual' && (
+      {/* 2026-07-22b — Reorder column. In manual sort mode +
+          dragHandleProps provided → drag handle (new dnd-kit UX).
+          In manual sort mode + no dragHandleProps → legacy ▲▼
+          (fallback for callers that don't use the new pattern).
+          In any other sortMode → column hidden entirely.
+          Same logic as the 大日流程 RundownCard. */}
+      {sortMode === 'manual' && dragHandleProps && (
+        <button
+          type="button"
+          {...dragHandleProps}
+          className="flex-shrink-0 self-center flex items-center justify-center w-9 h-12 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-grab active:cursor-grabbing touch-none"
+          title="捉住拖動重新排列"
+          aria-label="拖動重新排列"
+        >
+          <GripVertical className="w-5 h-5" strokeWidth={2} />
+        </button>
+      )}
+      {sortMode === 'manual' && !dragHandleProps && (
         <div className="flex-shrink-0 flex flex-col gap-0.5 bg-slate-100 rounded-lg p-0.5 self-center">
           <button
             type="button"
@@ -2030,10 +2347,12 @@ export function WeddingDay({
   onUpsertRundown,
   onDeleteRundown,
   onReorderRundown,
+  onSetRundownPositions,
   onUpsertResource,
   onDeleteResource,
   onToggleResource,
   onReorderResource,
+  onSetResourcePositions,
   onUpsertTeaCeremony,
   onDeleteTeaCeremony,
   // 2026-07-22b — Bulk order setter for drag-and-drop reorder.
@@ -2045,6 +2364,7 @@ export function WeddingDay({
   // sort mode). Optional so WeddingDay keeps working in test/
   // preview environments without it.
   onReorderPlaylist,
+  onSetPlaylistPositions,
   currentUser,
   // 2026-07-18 — pass the active helper list down so rundown and
   // resources tabs can offer a 兄弟姊妹 picker for each item.
@@ -2075,12 +2395,10 @@ export function WeddingDay({
             onUpsert={onUpsertRundown}
             onDelete={onDeleteRundown}
             onReorder={onReorderRundown}
-            // 2026-07-22 — pass helpers down so the dropdown inside
-            // 大日流程 items actually shows invited helpers. Was
-            // missing here (ResourcesTab already had it). Without
-            // this, the HelperPicker fell back to the
-            // "未邀請任何兄弟姊妹" empty-state even when helpers
-            // had been invited.
+            // 2026-07-22b — drag-and-drop reorder. Used in
+            // 自訂 sort mode to write batched manualPosition
+            // updates for the dragged entries.
+            onSetOrders={onSetRundownPositions}
             helpers={helpers}
           />
         )}
@@ -2090,9 +2408,9 @@ export function WeddingDay({
             onUpsert={onUpsertResource}
             onDelete={onDeleteResource}
             onToggle={onToggleResource}
-            // 2026-07-22 — manualPosition swap handler. Driven by
-            // ▲▼ buttons in each item row when sortMode === 'manual'.
             onReorder={onReorderResource}
+            // 2026-07-22b — drag-and-drop reorder in 物資.
+            onSetOrders={onSetResourcePositions}
             currentUser={currentUser}
             helpers={helpers}
           />
@@ -2114,11 +2432,9 @@ export function WeddingDay({
             songs={playlist}
             onUpsert={onUpsertPlaylist}
             onDelete={onDeletePlaylist}
-            // 2026-07-22 — manualPosition swap handler. Driven by
-            // ▲▼ buttons in each SongRow when sortMode === 'manual'.
-            // Optional in PlaylistTab (default no-op) so the screen
-            // still works in tests / preview without breaking.
             onReorder={onReorderPlaylist}
+            // 2026-07-22b — drag-and-drop reorder in 歌單.
+            onSetOrders={onSetPlaylistPositions}
             currentUserUid={currentUser?.uid}
           />
         )}

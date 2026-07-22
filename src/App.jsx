@@ -1536,6 +1536,19 @@ export default function App() {
     const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'rundown', id);
     await setDoc(ref, { startTime: `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}` }, { merge: true });
   };
+  // 2026-07-22b — Bulk manualPosition setter for 大日流程 drag-
+  // and-drop reorder. Writes all affected positions in parallel.
+  const handleSetRundownPositions = async (writes) => {
+    if (!user || !writes || writes.length === 0) return;
+    const refs = writes.map(({ id, manualPosition }) =>
+      setDoc(
+        doc(db, 'artifacts', appId, 'users', user.uid, 'rundown', id),
+        { manualPosition },
+        { merge: true },
+      ),
+    );
+    await Promise.all(refs);
+  };
   const handleUpsertResource = (d) => upsertWeddingDoc('resources', d);
   const handleDeleteResource = (id) => deleteWeddingDoc('resources', id);
   const handleToggleResource = async (id, checked) => {
@@ -1554,6 +1567,20 @@ export default function App() {
       setDoc(a, { manualPosition: posA }, { merge: true }),
       setDoc(b, { manualPosition: posB }, { merge: true }),
     ]);
+  };
+  // 2026-07-22b — Bulk manualPosition setter for drag-and-drop
+  // reorder. Takes [{id, manualPosition}, ...] and writes them
+  // in parallel. Used by both 物資 and 歌單.
+  const handleSetResourcePositions = async (writes) => {
+    if (!user || !writes || writes.length === 0) return;
+    const refs = writes.map(({ id, manualPosition }) =>
+      setDoc(
+        doc(db, 'artifacts', appId, 'users', user.uid, 'resources', id),
+        { manualPosition },
+        { merge: true },
+      ),
+    );
+    await Promise.all(refs);
   };
   const handleUpsertTeaCeremony = (d) => upsertWeddingDoc('teaCeremony', d);
   const handleDeleteTeaCeremony = (id) => deleteWeddingDoc('teaCeremony', id);
@@ -1606,6 +1633,19 @@ export default function App() {
       setDoc(a, { manualPosition: posA }, { merge: true }),
       setDoc(b, { manualPosition: posB }, { merge: true }),
     ]);
+  };
+  // 2026-07-22b — Bulk manualPosition setter for 歌單 drag-and-
+  // drop reorder. Same parallel-write pattern as the others.
+  const handleSetPlaylistPositions = async (writes) => {
+    if (!user || !writes || writes.length === 0) return;
+    const refs = writes.map(({ id, manualPosition }) =>
+      setDoc(
+        doc(db, 'artifacts', appId, 'users', user.uid, 'playlist', id),
+        { manualPosition },
+        { merge: true },
+      ),
+    );
+    await Promise.all(refs);
   };
 
   const handleAddGuest = async (e) => {
@@ -2465,13 +2505,15 @@ export default function App() {
                 onUpsertRundown={handleUpsertRundown}
                 onDeleteRundown={handleDeleteRundown}
                 onReorderRundown={handleReorderRundown}
+                // 2026-07-22b — drag-and-drop reorder for
+                // 大日流程.
+                onSetRundownPositions={handleSetRundownPositions}
                 onUpsertResource={handleUpsertResource}
                 onDeleteResource={handleDeleteResource}
                 onToggleResource={handleToggleResource}
-                // 2026-07-22 — ▲▼ reorder in the 物資 tab manual
-                // sort mode swaps manualPosition between adjacent
-                // items in the same category.
                 onReorderResource={handleReorderResource}
+                // 2026-07-22b — drag-and-drop reorder for 物資.
+                onSetResourcePositions={handleSetResourcePositions}
                 onUpsertTeaCeremony={handleUpsertTeaCeremony}
                 onDeleteTeaCeremony={handleDeleteTeaCeremony}
                 // 2026-07-22b — Bulk order setter for drag-and-drop
@@ -2480,10 +2522,9 @@ export default function App() {
                 onSetTeaCeremonyOrders={handleSetTeaCeremonyOrders}
                 onUpsertPlaylist={handleUpsertPlaylist}
                 onDeletePlaylist={handleDeletePlaylist}
-                // 2026-07-22 — playlist reorder. ▲▼ in the manual
-                // sort mode of 歌單 tab swap manualPosition between
-                // adjacent songs.
                 onReorderPlaylist={handleReorderPlaylist}
+                // 2026-07-22b — drag-and-drop reorder for 歌單.
+                onSetPlaylistPositions={handleSetPlaylistPositions}
                 currentUser={user}
                 // 2026-07-18 — pass the active helpers list down so
                 // 大日流程/物資 can offer a 兄弟姊妹 picker. Already
