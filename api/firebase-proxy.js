@@ -84,6 +84,14 @@ export default async function handler(req, res) {
       headers: {
         'Content-Type': 'application/json',
         ...(authHeader ? { Authorization: authHeader } : {}),
+        // 2026-07-22 — Forward User-Agent so Cloud Run can
+        // recognize the request as coming from the Firebase SDK
+        // (or a similar browser client). Without this, Cloud
+        // Run's edge rejects Bearer tokens with
+        // "access token could not be verified" because it
+        // can't tell the difference between a Firebase ID
+        // token and a Google OAuth access token.
+        'User-Agent': req.headers['user-agent'] || 'savetheday-proxy/1.0',
       },
       body,
     });
