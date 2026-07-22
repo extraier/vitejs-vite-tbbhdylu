@@ -598,13 +598,17 @@ export default function App() {
         if (cancelled) return;
         // 1) Cloud Function — primary path.
         try {
-          // 2026-07-22 — Calling autoLinkVendorContactsV2.
-          // Renamed from autoLinkVendorContacts to bypass a
-          // stuck 409 on the original resource. Now also in
-          // us-central1 (matching the default functions
-          // singleton) instead of asia-east1.
+          // 2026-07-22 — Force the auth token to be attached.
+          // Firebase 10.x's getFunctions() doesn't always re-
+          // attach auth after sign-in completes, leaving
+          // requests with empty Authorization headers (server
+          // returns "The request was not authenticated"). The
+          // explicit token getter sidesteps the issue.
+          const currentToken = await auth.currentUser?.getIdToken();
           const autoLink = httpsCallable(functions, 'autoLinkVendorContactsV2');
-          const result = await autoLink();
+          const result = currentToken
+            ? await autoLink({}, { headers: { Authorization: 'Bearer ' + currentToken } })
+            : await autoLink();
           const { linked, backfilled } = result?.data || {};
           if (!cancelled && (linked || backfilled)) {
             showToast?.(

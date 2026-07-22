@@ -8,7 +8,7 @@ import {
 } from '../components/invitation/templates';
 import { InvitationCard } from '../components/invitation/InvitationCard';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
-import { db, functions, appId } from '../lib/firebase';
+import { db, functions, auth, appId } from '../lib/firebase';
 import { httpsCallable } from 'firebase/functions';
 
 // 2026-07-22 — Calling sendInvitationsV2 via the default
@@ -776,8 +776,22 @@ function SendButton({ ownerUid, eventId, invitationId, guestIds, customMessage, 
       // `functions` singleton (us-central1). The default region
       // attaches auth properly; region-specific instances don't
       // in Firebase 10.x. See QrCodeModal.jsx for full notes.
+      //
+      // 2026-07-22b — Force the auth token to be attached.
+      // Firebase 10.x's httpsCallable() sometimes sends requests
+      // with empty Authorization headers (server returns "The
+      // request was not authenticated"). The explicit token
+      // getter + manual header sidesteps this bug.
+      const currentToken = await auth.currentUser?.getIdToken();
       const fn = httpsCallable(functions, 'sendInvitationsV2');
-      const result = await fn({ eventId, invitationId, guestIds, customMessage });
+      const result = currentToken
+        ? await fn({
+            eventId,
+            invitationId,
+            guestIds,
+            customMessage,
+          }, { headers: { Authorization: 'Bearer ' + currentToken } })
+        : await fn({ eventId, invitationId, guestIds, customMessage });
       const sentCount = result.data.sent.filter((s) => s.status === 'sent').length;
       const skipped = result.data.sent.filter((s) => s.status === 'skipped').length;
       alert(
