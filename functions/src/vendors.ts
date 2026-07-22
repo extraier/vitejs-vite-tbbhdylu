@@ -351,8 +351,16 @@ export const uploadVendorPortfolio = onCall(
 // Returns { linked: number, backfilled: number, ownersTouched: number }.
 // =============================================================================
 
-export const autoLinkVendorContacts = onCall(
-  { region: 'asia-east1' },
+// 2026-07-22 — Renamed to autoLinkVendorContactsV2 AND pinned
+// to us-central1. The original was in asia-east1 but the front-
+// end's default `functions` singleton points at us-central1, so
+// the SDK was hitting the wrong URL → CORS error / 404. A stuck
+// 409 on the original resource in us-central1 (queued operation
+// from an earlier deploy) prevented an in-place update, so we
+// renamed to bypass it. The front-end callsite in App.jsx has
+// been updated to call autoLinkVendorContactsV2.
+export const autoLinkVendorContactsV2 = onCall(
+  { region: 'us-central1', cors: true },
   async (req) => {
     if (!req.auth) {
       throw new HttpsError('unauthenticated', '請先登入 (must be signed in).');

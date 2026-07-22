@@ -598,7 +598,12 @@ export default function App() {
         if (cancelled) return;
         // 1) Cloud Function — primary path.
         try {
-          const autoLink = httpsCallable(functions, 'autoLinkVendorContacts');
+          // 2026-07-22 — Calling autoLinkVendorContactsV2.
+          // Renamed from autoLinkVendorContacts to bypass a
+          // stuck 409 on the original resource. Now also in
+          // us-central1 (matching the default functions
+          // singleton) instead of asia-east1.
+          const autoLink = httpsCallable(functions, 'autoLinkVendorContactsV2');
           const result = await autoLink();
           const { linked, backfilled } = result?.data || {};
           if (!cancelled && (linked || backfilled)) {
