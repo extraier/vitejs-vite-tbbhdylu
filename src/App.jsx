@@ -1569,6 +1569,23 @@ export default function App() {
       setDoc(b, { order: orderB }, { merge: true }),
     ]);
   };
+  // 2026-07-22b — Single-row order setter. Used by drag-and-drop
+  // reorder, which can affect N rows at once when the user drags
+  // a row across the list (everyone in between shifts by one).
+  // We batch the writes into Promise.all for a single network
+  // round-trip. The swap-pair handler above is kept for any
+  // callers still using the older ▲▼ semantics.
+  const handleSetTeaCeremonyOrders = async (writes) => {
+    if (!user || !writes || writes.length === 0) return;
+    const refs = writes.map(({ id, order }) =>
+      setDoc(
+        doc(db, 'artifacts', appId, 'users', user.uid, 'teaCeremony', id),
+        { order },
+        { merge: true },
+      ),
+    );
+    await Promise.all(refs);
+  };
   const handleUpsertPlaylist = (d) => upsertWeddingDoc('playlist', d);
   const handleDeletePlaylist = (id) => deleteWeddingDoc('playlist', id);
   // 2026-07-22 — playlist reorder. Couples tap ▲▼ in the manual
@@ -2457,10 +2474,10 @@ export default function App() {
                 onReorderResource={handleReorderResource}
                 onUpsertTeaCeremony={handleUpsertTeaCeremony}
                 onDeleteTeaCeremony={handleDeleteTeaCeremony}
-                // 2026-07-22 — ▲▼ reorder in the 敬茶名單 tab
-                // swaps the existing `order` field between adjacent
-                // people in the same group.
-                onReorderTeaCeremony={handleReorderTeaCeremony}
+                // 2026-07-22b — Bulk order setter for drag-and-drop
+                // reorder in the 敬茶 tab. Writes all affected
+                // orders in parallel.
+                onSetTeaCeremonyOrders={handleSetTeaCeremonyOrders}
                 onUpsertPlaylist={handleUpsertPlaylist}
                 onDeletePlaylist={handleDeletePlaylist}
                 // 2026-07-22 — playlist reorder. ▲▼ in the manual

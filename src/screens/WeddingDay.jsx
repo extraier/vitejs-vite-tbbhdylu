@@ -1,5 +1,22 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import {
   Clock,
   ClipboardList,
   Coffee,
@@ -1020,7 +1037,51 @@ const CEREMONY_GROUPS = [
   { id: 'groom_friends', label: '新郎朋友', e: '🤵' },
 ];
 
-function TeaCeremonyTab({ people, onUpsert, onDelete, onReorder }) {
+// 2026-07-22 — Shared sortable row wrapper. Powers drag-and-drop
+// reorder for 敬茶・影相, 物資分配, and 歌單建議. Each row calls
+// useSortable to participate in the parent SortableContext, then
+// applies the dnd-kit transform style so the row animates as it
+// lifts. The drag handle (a GripVertical button) is the only
+// thing that initiates a drag — couples can still tap the row
+// body for other interactions (checkbox toggle, vote, delete).
+//
+// Why dnd-kit: HTML5 native drag is unreliable on mobile (no
+// haptic, no native drag preview, requires long-press on most
+// browsers). dnd-kit's PointerSensor + TouchSensor combo gives
+// us proper touch-drag with auto-scroll, sensor activation
+// constraints, and keyboard accessibility for free. ~30kb
+// gzipped, well under budget.
+function SortableRow({ id, disabled = false, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled,
+  });
+
+  // dnd-kit gives us transform/transition CSS values; apply them
+  // to the row so it animates smoothly while being dragged. When
+  // the row is being dragged, lift it visually (z-index, opacity,
+  // shadow) so the user can see what they're moving.
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1,
+    zIndex: isDragging ? 10 : 'auto',
+    boxShadow: isDragging ? '0 8px 16px rgba(0,0,0,0.15)' : 'none',
+  };
+
+  // The drag handle is provided as a slot — children pass it the
+  // listeners + attributes to attach to whatever element should
+  // initiate the drag (typically a GripVertical icon button).
+  return (
+    <div ref={setNodeRef} style={style} className="touch-none">
+      {typeof children === 'function'
+        ? children({ dragHandleProps: { ...attributes, ...listeners } })
+        : children}
+    </div>
+  );
+}
+
+function TeaCeremonyTab({ people, onUpsert, onDelete, onSetOrders }) {
   const [editing, setEditing] = useState(null);
 
   const grouped = useMemo(() => {
@@ -1036,32 +1097,25 @@ function TeaCeremonyTab({ people, onUpsert, onDelete, onReorder }) {
     return out;
   }, [people]);
 
-  // 2026-07-22 — swap handler for the new ▲▼ reorder column.
-  // The 敬茶名單 list already has an `order` field (defaults to
-  // 99 if not set) and is sorted by (completed desc, order asc).
-  // Couples tap ▲/▼ to swap the `order` field with the neighbour
-  // in the same group (husband / wife / both-parents / etc.).
-  // Same swap-on-neighbour pattern as PlaylistTab's
-  // handleReorder — O(1) writes, robust to rapid tapping,
-  // ▲ then ▼ returns to the original position.
-  function handleReorder(personId, direction) {
-    const person = (people || []).find((p) => p.id === personId);
-    if (!person) return;
-    const group = person.group || 'husband';
-    // Re-derive the same sort the grouped useMemo does so we're
-    // swapping with the row the user actually sees above/below.
-    // groupList is already sorted by (completed desc, order asc),
-    // matching the rendered order.
-    const groupList = grouped[group] || [];
-    const idx = groupList.findIndex((p) => p.id === personId);
-    if (idx < 0) return;
-    const delta = direction === 'up' ? -1 : 1;
-    const swapWith = groupList[idx + delta];
-    if (!swapWith) return;
-    const myOrder = person.order ?? 99;
-    const otherOrder = swapWith.order ?? 99;
-    // Both rows always have a numeric order after the swap.
-    onReorder?.(personId, otherOrder, swapWith.id, myOrder);
+  // 2026-07-22 — Drag-and-drop reorder. Compute the new order
+  // positions for every person in the affected group, then call
+  // onSetOrders with the full list of writes. dnd-kit's arrayMove
+  // gives us the new ordering; onSetOrders does the persistence
+  // in a single batched Promise.all (one round-trip instead of N).
+  //
+  // We skip writes for rows whose order is already correct to
+  // minimize traffic on common cases (e.g. dragging the last
+  // person to the top only renumbers two people).
+  function persistGroupOrder(groupId, orderedPeople) {
+    const writes = [];
+    orderedPeople.forEach((p, idx) => {
+      const targetOrder = idx + 1;
+      if ((p.order ?? 99) !== targetOrder) {
+        writes.push({ id: p.id, order: targetOrder });
+      }
+    });
+    if (writes.length === 0) return;
+    onSetOrders?.(writes);
   }
 
   const totals = useMemo(() => {
@@ -1072,10 +1126,67 @@ function TeaCeremonyTab({ people, onUpsert, onDelete, onReorder }) {
     return { total, done, photosTaken, giftReceived };
   }, [people]);
 
+  // 2026-07-22 — Per-group drag-and-drop. Each group has its own
+  // SortableContext so couples can only reorder within the same
+  // group (夫家 can never get tangled with 娘家). When a drag ends
+  // we persist the new order via persistGroupOrder above.
+  // Sensors: PointerSensor for mouse + desktop touch screens,
+  // TouchSensor with a short activation delay for mobile (so a
+  // brief tap doesn't accidentally start a drag), KeyboardSensor
+  // for keyboard-only users with screen readers.
+  function TeaCeremonyGroupList({ groupId, list, editing, setEditing, onUpsert, onDelete, onPersist }) {
+    const sensors = useSensors(
+      useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+      useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
+      useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    );
+
+    function handleDragEnd(event) {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const oldIdx = list.findIndex((p) => p.id === active.id);
+      const newIdx = list.findIndex((p) => p.id === over.id);
+      if (oldIdx < 0 || newIdx < 0) return;
+      const reordered = arrayMove(list, oldIdx, newIdx);
+      onPersist(groupId, reordered);
+    }
+
+    if (!list || list.length === 0) return null;
+
+    return (
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={list.map((p) => p.id)} strategy={verticalListSortingStrategy}>
+          <div className="divide-y divide-slate-100">
+            {list.map((person, personIdx) => (
+              <SortableRow key={person.id} id={person.id}>
+                {({ dragHandleProps }) => (
+                  <PersonRow
+                    person={person}
+                    onUpsert={(data) => onUpsert({ ...person, ...data })}
+                    onDelete={() => onDelete(person.id)}
+                    isEditing={editing === person.id}
+                    onEditToggle={() => setEditing(editing === person.id ? null : person.id)}
+                    // 2026-07-22 — drag handle replaces ▲▼. User
+                    // can grab this with mouse / touch and drag
+                    // the row to a new position.
+                    dragHandleProps={dragHandleProps}
+                  />
+                )}
+              </SortableRow>
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-slate-500">
         逐位長輩／賓客 — 記低「敬茶」、「大影相」、「收到利是」嘅狀態，大日當日可以快速 pass 俾「左邊嗰位未影相」。
+      </p>
+      <p className="text-xs text-slate-400 -mt-2">
+        💡 想重新排列順序？捉住右邊嗰條 <GripVertical className="inline w-3 h-3" /> 就可以拖去新位置。
       </p>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -1101,25 +1212,15 @@ function TeaCeremonyTab({ people, onUpsert, onDelete, onReorder }) {
               尚未加入任何{label}成員
             </div>
           )}
-          <div className="divide-y divide-slate-100">
-            {(grouped[id] || []).map((person, personIdx) => (
-              <PersonRow
-                key={person.id}
-                person={person}
-                onUpsert={(data) => onUpsert({ ...person, ...data })}
-                onDelete={() => onDelete(person.id)}
-                isEditing={editing === person.id}
-                onEditToggle={() => setEditing(editing === person.id ? null : person.id)}
-                // 2026-07-22 — reorder wiring. Same pattern as
-                // SongRow in PlaylistTab: boundary buttons disabled,
-                // tap swaps with neighbour in the same group.
-                isFirst={personIdx === 0}
-                isLast={personIdx === (grouped[id]?.length || 0) - 1}
-                onMoveUp={() => handleReorder(person.id, 'up')}
-                onMoveDown={() => handleReorder(person.id, 'down')}
-              />
-            ))}
-          </div>
+          <TeaCeremonyGroupList
+            groupId={id}
+            list={grouped[id] || []}
+            editing={editing}
+            setEditing={setEditing}
+            onUpsert={onUpsert}
+            onDelete={onDelete}
+            onPersist={persistGroupOrder}
+          />
         </div>
       ))}
     </div>
@@ -1147,12 +1248,12 @@ function PersonRow({
   onDelete,
   isEditing,
   onEditToggle,
-  // 2026-07-22 — reorder props for the ▲▼ column. isFirst/isLast
-  // disable the corresponding button at the boundary.
-  isFirst,
-  isLast,
-  onMoveUp,
-  onMoveDown,
+  // 2026-07-22 — drag-and-drop replaces ▲▼ reorder. dragHandleProps
+  // contains the dnd-kit listeners + attributes; we spread them
+  // onto the GripVertical icon button so only that element
+  // initiates a drag. Couples can still tap the rest of the row
+  // for checkbox toggle, edit, etc.
+  dragHandleProps,
 }) {
   const [draft, setDraft] = useState({
     name: person.name || '',
@@ -1228,36 +1329,24 @@ function PersonRow({
           <Circle className="w-5 h-5 text-slate-300" />
         )}
       </button>
-      {/* 2026-07-22 — Reorder column. Stacked ▲▼ buttons; tap
-          swaps the person's `order` field with the neighbour's
-          via handleReorder in the parent. Same pattern as the
-          SongRow reorder column in PlaylistTab.
-          2026-07-22b — made buttons much larger and rose-colored
-          so couples actually notice them. Previous w-3.5 + slate-400
-          was easy to miss on phone screens; user reported not
-          seeing the arrows at all. */}
-      <div className="flex-shrink-0 flex flex-col gap-0.5 bg-slate-100 rounded-lg p-0.5">
-        <button
-          type="button"
-          onClick={onMoveUp}
-          disabled={isFirst}
-          className="p-1.5 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          title="向上移一個位置"
-          aria-label="向上移"
-        >
-          <ChevronUp className="w-5 h-5" strokeWidth={2.5} />
-        </button>
-        <button
-          type="button"
-          onClick={onMoveDown}
-          disabled={isLast}
-          className="p-1.5 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          title="向下移一個位置"
-          aria-label="向下移"
-        >
-          <ChevronDown className="w-5 h-5" strokeWidth={2.5} />
-        </button>
-      </div>
+      {/* 2026-07-22 — Drag handle. Replaces ▲▼ column entirely.
+          Touch-and-hold (or click-and-drag on desktop) to grab
+          the row and reorder. dnd-kit's dragHandleProps contain
+          the listeners + ARIA attributes; we spread them onto
+          this GripVertical button so only the handle initiates
+          drag — couples can still tap the rest of the row for
+          checkbox / edit / photo / gift toggles.
+          Cursor is 'grab' so users know it's draggable; switches
+          to 'grabbing' while actively dragged. */}
+      <button
+        type="button"
+        {...dragHandleProps}
+        className="flex-shrink-0 self-stretch flex items-center justify-center w-9 px-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-grab active:cursor-grabbing touch-none"
+        title="捉住拖動重新排列"
+        aria-label="拖動重新排列"
+      >
+        <GripVertical className="w-5 h-5" strokeWidth={2} />
+      </button>
       <div className="flex-grow min-w-0">
         <div className={`font-bold ${person.completed ? 'line-through text-slate-500' : 'text-slate-800'}`}>
           {person.name || '未命名'}
@@ -1947,7 +2036,9 @@ export function WeddingDay({
   onReorderResource,
   onUpsertTeaCeremony,
   onDeleteTeaCeremony,
-  onReorderTeaCeremony,
+  // 2026-07-22b — Bulk order setter for drag-and-drop reorder.
+  // Takes [{id, order}, ...] and writes them all in parallel.
+  onSetTeaCeremonyOrders,
   onUpsertPlaylist,
   onDeletePlaylist,
   // 2026-07-22 — playlist reorder handler (▲▼ buttons in manual
@@ -2011,11 +2102,11 @@ export function WeddingDay({
             people={teaCeremony}
             onUpsert={onUpsertTeaCeremony}
             onDelete={onDeleteTeaCeremony}
-            // 2026-07-22 — ▲▼ reorder swaps the existing `order`
-            // field on the two adjacent people. Already had the
-            // field; now couples can edit it without opening
-            // each person's edit modal.
-            onReorder={onReorderTeaCeremony}
+            // 2026-07-22b — Bulk order setter for drag-and-drop
+            // reorder. Takes [{id, order}, ...] and writes them
+            // all in parallel. Replaces the older onReorder
+            // swap-pair handler.
+            onSetOrders={onSetTeaCeremonyOrders}
           />
         )}
         {active === 'playlist' && (
