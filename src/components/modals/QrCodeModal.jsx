@@ -1,20 +1,22 @@
 import { useState } from 'react';
 import { X, Mail } from 'lucide-react';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db, app, appId } from '../../lib/firebase';
+import { db, functions } from '../../lib/firebase';
 
-// 2026-07-22 — Cache the asia-east2 functions instance at module
-// level. Previously we called `httpsCallable(getFunctions('asia-east2'), ...)`
-// on every send, which Firebase 10.x handles inconsistently — the
-// internal provider cache can return undefined for `getProvider()`
-// when the same app gets both default and region-specific instances,
-// surfacing as `code: UNKNOWN, message: Cannot read properties of
-// undefined (reading 'getProvider')`.
+// 2026-07-22 — Calling sendInvitationsV2 via the default
+// `functions` singleton (us-central1) instead of a region-
+// specific instance. Reason: Firebase 10.x's region-specific
+// Functions instances (`getFunctions(app, 'asia-east2')`)
+// sometimes send requests with empty Authorization headers
+// when the auth state was set after the module loaded, causing
+// the server to return "The request was not authenticated".
 //
-// Module-level singleton sidesteps the issue: same Functions
-// instance returned every time.
-const functionsAsiaEast2 = getFunctions(app, 'asia-east2');
+// `sendInvitationsV2` is ACTIVE in both us-central1 and
+// asia-east2 (Firebase CLI created both during earlier failed
+// deploys). Using us-central1 via the default `functions`
+// singleton avoids the auth-attach bug. See
+// functions/src/invitations.ts:105 for the full story.
 
 export function QrCodeModal({
   guest,
@@ -57,13 +59,12 @@ export function QrCodeModal({
         },
         { merge: true }
       );
-      // 2026-07-22 — Calling sendInvitationsV2 in asia-east2
-      // instead of sendInvitations (us-central1) to bypass a
-      // stuck 409 on the original function resource. See
-      // functions/src/invitations.ts:105 for the full story.
-      // Uses a cached module-level Functions instance to avoid
-      // Firebase 10.x's `getProvider` undefined bug.
-      const fn = httpsCallable(functionsAsiaEast2, 'sendInvitationsV2');
+      // 2026-07-22 — Calling sendInvitationsV2 via the default
+      // `functions` singleton (us-central1). Using the default
+      // region avoids the region-specific instance's auth-attach
+      // bug. The function exists in both us-central1 and
+      // asia-east2; both are ACTIVE.
+      const fn = httpsCallable(functions, 'sendInvitationsV2');
       const result = await fn({
         eventId: currentEventId,
         invitationId,

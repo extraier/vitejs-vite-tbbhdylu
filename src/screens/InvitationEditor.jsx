@@ -8,16 +8,14 @@ import {
 } from '../components/invitation/templates';
 import { InvitationCard } from '../components/invitation/InvitationCard';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
-import { db, app, appId } from '../lib/firebase';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { db, functions, appId } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
 
-// 2026-07-22 — Cache the asia-east2 functions instance at module
-// level. Firebase 10.x's `getProvider` returns undefined when
-// getFunctions(region) is called per-request alongside the
-// default getFunctions(), causing code: UNKNOWN errors. Module
-// singleton sidesteps the issue. See QrCodeModal.jsx for full
-// notes.
-const functionsAsiaEast2 = getFunctions(app, 'asia-east2');
+// 2026-07-22 — Calling sendInvitationsV2 via the default
+// `functions` singleton (us-central1) instead of a region-
+// specific instance. The region-specific instance sends
+// requests with empty Authorization headers under Firebase
+// 10.x, breaking auth. See QrCodeModal.jsx for full notes.
 
 const STEPS = [
   { id: 'background', label: '揀背景' },
@@ -774,12 +772,11 @@ function SendButton({ ownerUid, eventId, invitationId, guestIds, customMessage, 
     }
     setSending(true);
     try {
-      // 2026-07-22 — Calling sendInvitationsV2 in asia-east2
-      // instead of sendInvitations (us-central1). See
-      // functions/src/invitations.ts:105 for the full story.
-      // Uses a cached module-level Functions instance to avoid
-      // Firebase 10.x's `getProvider` undefined bug.
-      const fn = httpsCallable(functionsAsiaEast2, 'sendInvitationsV2');
+      // 2026-07-22 — Calling sendInvitationsV2 via the default
+      // `functions` singleton (us-central1). The default region
+      // attaches auth properly; region-specific instances don't
+      // in Firebase 10.x. See QrCodeModal.jsx for full notes.
+      const fn = httpsCallable(functions, 'sendInvitationsV2');
       const result = await fn({ eventId, invitationId, guestIds, customMessage });
       const sentCount = result.data.sent.filter((s) => s.status === 'sent').length;
       const skipped = result.data.sent.filter((s) => s.status === 'skipped').length;
