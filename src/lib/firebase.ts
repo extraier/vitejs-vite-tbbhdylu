@@ -43,7 +43,15 @@ function resolveAppId(): string {
 
 // Vite HMR can re-execute this module — guard with getApps() so we don't
 // double-initialize.
+// 2026-07-22 — Export the app instance too. Was previously
+// module-private; needed by callers that want to create
+// region-specific Functions instances (sendInvitationsV2 in
+// asia-east2) without depending on the default `functions`
+// singleton. Without this, callers had to either re-import
+// the `initializeApp` machinery or call getApp() which fails
+// when initializeApp was already called from this module.
 const app: FirebaseApp = getApps().length === 0 ? initializeApp(resolveFirebaseConfig()) : getApp();
+export { app };
 
 export const auth: Auth = getAuth(app);
 export const db: Firestore = getFirestore(app);
