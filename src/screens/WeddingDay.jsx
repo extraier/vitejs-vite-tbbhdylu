@@ -812,28 +812,32 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, currentU
                 {/* 2026-07-22 — reorder column. Same pattern as
                     SongRow in PlaylistTab. Visible only in manual
                     sort mode so the default 時間 view stays
-                    uncluttered. */}
+                    uncluttered.
+                    2026-07-22b — larger rose-colored buttons so
+                    couples notice them. User reported missing the
+                    arrows in 敬茶. Apply same fix here for
+                    consistency. */}
                 {sortMode === 'manual' && (
-                  <div className="flex-shrink-0 flex flex-col gap-0.5">
+                  <div className="flex-shrink-0 flex flex-col gap-0.5 bg-slate-100 rounded-lg p-0.5">
                     <button
                       type="button"
                       onClick={() => handleReorder(item.id, 'up')}
                       disabled={itemIdx === 0}
-                      className="p-0.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                      className="p-1 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                       title="向上移一個位置"
                       aria-label="向上移"
                     >
-                      <ChevronUp className="w-3.5 h-3.5" />
+                      <ChevronUp className="w-4 h-4" strokeWidth={2.5} />
                     </button>
                     <button
                       type="button"
                       onClick={() => handleReorder(item.id, 'down')}
                       disabled={itemIdx === list.length - 1}
-                      className="p-0.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                      className="p-1 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                       title="向下移一個位置"
                       aria-label="向下移"
                     >
-                      <ChevronDown className="w-3.5 h-3.5" />
+                      <ChevronDown className="w-4 h-4" strokeWidth={2.5} />
                     </button>
                   </div>
                 )}
@@ -1227,27 +1231,31 @@ function PersonRow({
       {/* 2026-07-22 — Reorder column. Stacked ▲▼ buttons; tap
           swaps the person's `order` field with the neighbour's
           via handleReorder in the parent. Same pattern as the
-          SongRow reorder column in PlaylistTab. */}
-      <div className="flex-shrink-0 flex flex-col gap-0.5">
+          SongRow reorder column in PlaylistTab.
+          2026-07-22b — made buttons much larger and rose-colored
+          so couples actually notice them. Previous w-3.5 + slate-400
+          was easy to miss on phone screens; user reported not
+          seeing the arrows at all. */}
+      <div className="flex-shrink-0 flex flex-col gap-0.5 bg-slate-100 rounded-lg p-0.5">
         <button
           type="button"
           onClick={onMoveUp}
           disabled={isFirst}
-          className="p-0.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+          className="p-1.5 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           title="向上移一個位置"
           aria-label="向上移"
         >
-          <ChevronUp className="w-3.5 h-3.5" />
+          <ChevronUp className="w-5 h-5" strokeWidth={2.5} />
         </button>
         <button
           type="button"
           onClick={onMoveDown}
           disabled={isLast}
-          className="p-0.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+          className="p-1.5 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           title="向下移一個位置"
           aria-label="向下移"
         >
-          <ChevronDown className="w-3.5 h-3.5" />
+          <ChevronDown className="w-5 h-5" strokeWidth={2.5} />
         </button>
       </div>
       <div className="flex-grow min-w-0">
@@ -1714,28 +1722,31 @@ function SongRow({
           tab is in manual mode so the hot/votes view stays
           clean. Stacked ▲▼ buttons; tapping swaps the
           manualPosition with the neighbour via handleReorder
-          in the parent. */}
+          in the parent.
+          2026-07-22b — bigger rose-colored buttons so couples
+          notice them on phone screens. User reported missing
+          the arrows in 敬茶; applying the same fix here. */}
       {sortMode === 'manual' && (
-        <div className="flex-shrink-0 flex flex-col gap-0.5 self-center">
+        <div className="flex-shrink-0 flex flex-col gap-0.5 bg-slate-100 rounded-lg p-0.5 self-center">
           <button
             type="button"
             onClick={onMoveUp}
             disabled={isFirst}
-            className="p-1 rounded hover:bg-rose-100 text-slate-500 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+            className="p-1.5 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title="向上移一個位置"
             aria-label="向上移"
           >
-            <ChevronUp className="w-4 h-4" />
+            <ChevronUp className="w-5 h-5" strokeWidth={2.5} />
           </button>
           <button
             type="button"
             onClick={onMoveDown}
             disabled={isLast}
-            className="p-1 rounded hover:bg-rose-100 text-slate-500 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+            className="p-1.5 rounded-md hover:bg-rose-500 text-slate-600 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             title="向下移一個位置"
             aria-label="向下移"
           >
-            <ChevronDown className="w-4 h-4" />
+            <ChevronDown className="w-5 h-5" strokeWidth={2.5} />
           </button>
         </div>
       )}
