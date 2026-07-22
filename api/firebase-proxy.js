@@ -70,6 +70,14 @@ export default async function handler(req, res) {
 
   const targetUrl = `https://${REGION}-${PROJECT_ID}.cloudfunctions.net/${fnName}`;
 
+  // 2026-07-22 — Debug: log what we're forwarding.
+  console.log('[firebase-proxy]', {
+    fn: fnName,
+    hasAuthHeader: !!authHeader,
+    authHeaderPrefix: authHeader.slice(0, 20),
+    bodyPreview: body.slice(0, 100),
+  });
+
   try {
     const upstream = await fetch(targetUrl, {
       method: 'POST',
@@ -80,6 +88,11 @@ export default async function handler(req, res) {
       body,
     });
     const text = await upstream.text();
+    console.log('[firebase-proxy] upstream response', {
+      fn: fnName,
+      status: upstream.status,
+      bodyPreview: text.slice(0, 200),
+    });
     let json;
     try {
       json = JSON.parse(text);
@@ -90,6 +103,7 @@ export default async function handler(req, res) {
     }
     return res.status(upstream.status).json(json);
   } catch (err) {
+    console.log('[firebase-proxy] fetch failed', { fn: fnName, err: err?.message });
     return res.status(502).json({
       error: {
         code: 'PROXY_FAILED',
