@@ -68,9 +68,37 @@ export function EventsDashboard({
         <p className="text-slate-500">建立或選擇你想管理的婚禮專案</p>
       </div>
 
+      {/* 2026-07-22 — Reordered per user request. Existing projects
+          (the user's actual weddings they're managing) come FIRST,
+          so the primary CTA of "open my wedding" is at the top.
+          The RewardsBanner moves below so couples see their projects
+          immediately before the marketing layer. */}
+      <section className="mb-8">
+        <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
+          📂 你的婚禮專案
+          <span className="text-xs font-bold text-slate-400">
+            ({events.length})
+          </span>
+        </h2>
+        {events.length === 0 ? (
+          <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center">
+            <div className="text-2xl mb-1">💌</div>
+            <p className="text-sm text-slate-500">你仲未有婚禮專案，喺下面建立一個啦。</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {events.map((ev) => (
+              <EventCard key={ev.id} event={ev} onSelect={onSelectEvent} />
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* 2026-07-21 — rewards banner. Shows social-proof unlocks
           (IG/FB post → custom template, refer friend → +500MB,
-          reels → permanent archive) and a pay-as-alternative CTA. */}
+          reels → permanent archive) and a pay-as-alternative CTA.
+          Sits BELOW the existing-projects section so couples see
+          their actual work first, not the marketing banner. */}
       <RewardsBanner
         unlocks={unlocks}
         onUploadClick={() => {
@@ -81,7 +109,7 @@ export function EventsDashboard({
       />
 
       {/* 2026-07-20 — "熱門商戶" preview on the events dashboard. */}
-      <div className="mb-8">
+      <div className="mb-8 mt-8">
         <TrendingVendors
           vendors={vendors}
           onSelect={onSelectVendor}
@@ -92,22 +120,22 @@ export function EventsDashboard({
         />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {events.map((ev) => (
-          <EventCard key={ev.id} event={ev} onSelect={onSelectEvent} />
-        ))}
-
-        <div className="bg-rose-50 p-6 rounded-2xl border-2 border-dashed border-rose-200 hover:border-rose-400 transition-all flex flex-col items-center justify-center text-center min-h-[200px]">
-          <form onSubmit={onCreate} className="w-full flex flex-col items-center">
-            <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center mb-3 shadow-sm">
-              <Plus className="w-6 h-6 text-rose-500" />
+      {/* 2026-07-22 — 建立新婚禮 sits at the bottom now. We don't
+          want a giant pink CTA at the top fighting for attention
+          with the existing projects; this is the "add another one"
+          action which is secondary. */}
+      <section>
+        <div className="bg-rose-50 p-6 rounded-2xl border-2 border-dashed border-rose-200 hover:border-rose-400 transition-all flex flex-col items-center justify-center text-center">
+          <form onSubmit={onCreate} className="w-full flex flex-col items-center max-w-xs">
+            <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mb-2 shadow-sm">
+              <Plus className="w-5 h-5 text-rose-500" />
             </div>
-            <h3 className="text-lg font-bold text-slate-800 mb-2">建立新婚禮</h3>
+            <h3 className="text-base font-bold text-slate-800 mb-2">➕ 再建立一個婚禮</h3>
             <input
               type="text"
               required
               placeholder="例如: 志明 & 春嬌"
-              className="w-full max-w-[200px] p-2 text-center border border-rose-200 rounded-lg outline-none focus:ring-2 focus:ring-rose-400 mb-3 bg-white"
+              className="w-full p-2 text-center border border-rose-200 rounded-lg outline-none focus:ring-2 focus:ring-rose-400 mb-2 bg-white text-sm"
               value={newEventName}
               onChange={(e) => onNewEventNameChange(e.target.value)}
             />
@@ -119,7 +147,7 @@ export function EventsDashboard({
             </button>
           </form>
         </div>
-      </div>
+      </section>
 
       {/* 2026-07-21 — purchase modal. Opened when user clicks
           "或直接付款解鎖" link inside RewardsBanner. */}
