@@ -2266,6 +2266,21 @@ export default function App() {
                         otherName: contact.vendorName,
                       })
                     }
+                    // 2026-07-22 — wire catalog + handlers so the
+                    // trending strip shows at the top of the catalog
+                    // picker modal. Same data + handlers used by
+                    // TrendingVendors elsewhere on this screen.
+                    catalog={vendors}
+                    onSelectVendor={setViewingVendorProfile}
+                    onGoDiscover={() => setCurrentView('discover-vendors')}
+                    user={user}
+                    currentEvent={currentEvent}
+                    onOpenChat={(vendor) =>
+                      handleOpenChat({
+                        otherUid: vendor.id || vendor.uid,
+                        otherName: vendor.name,
+                      })
+                    }
                   />
                 }
                 vendorContacts={vendorContacts}

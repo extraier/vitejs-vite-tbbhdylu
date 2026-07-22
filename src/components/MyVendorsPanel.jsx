@@ -41,6 +41,16 @@ export function MyVendorsPanel({
   onDeleteContact,
   onLinkContact, // (contact) => void; manual uid-based link fallback
   onChatContact, // (contact) => void; called for contacts with linkedVendorUid
+  // 2026-07-22 — props forwarded to AddVendorPicker → PickExistingVendor
+  // so the trending strip appears at the top of the catalog picker.
+  // All optional so the panel still works in guest mode / settings pages
+  // where we don't have a currentEvent context.
+  catalog,
+  onSelectVendor,
+  onGoDiscover,
+  user,
+  currentEvent,
+  onOpenChat,
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
@@ -159,6 +169,12 @@ export function MyVendorsPanel({
 
       {pickerOpen && (
         <AddVendorPicker
+          catalog={catalog}
+          onSelectVendor={onSelectVendor}
+          onGoDiscover={onGoDiscover}
+          user={user}
+          currentEvent={currentEvent}
+          onOpenChat={onOpenChat}
           onPickExisting={handlePickExisting}
           onAddCustom={handleAddCustom}
           onClose={() => setPickerOpen(false)}

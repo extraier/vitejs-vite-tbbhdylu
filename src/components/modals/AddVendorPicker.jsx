@@ -14,7 +14,21 @@ import { useState } from 'react';
 import { X, Search, UserPlus, Building2 } from 'lucide-react';
 import { PickExistingVendor } from './PickExistingVendor';
 
-export function AddVendorPicker({ onPickExisting, onAddCustom, onClose }) {
+export function AddVendorPicker({
+  onPickExisting,
+  onAddCustom,
+  onClose,
+  // 2026-07-22 — TrendingVendors props forwarded to PickExistingVendor.
+  // When set, PickExistingVendor mounts the trending strip at the
+  // top of the catalog picker. When unset, the strip is hidden and
+  // the modal works in compact dropdown-only browse mode.
+  catalog,
+  onSelectVendor,
+  onGoDiscover,
+  user,
+  currentEvent,
+  onOpenChat,
+}) {
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
@@ -108,6 +122,12 @@ export function AddVendorPicker({ onPickExisting, onAddCustom, onClose }) {
       {/* Search modal (nested) */}
       {searchOpen && (
         <PickExistingVendor
+          catalog={catalog}
+          onSelectVendor={onSelectVendor}
+          onGoDiscover={onGoDiscover}
+          user={user}
+          currentEvent={currentEvent}
+          onOpenChat={onOpenChat}
           onPick={(vendor) => {
             setSearchOpen(false);
             onPickExisting(vendor);

@@ -14,14 +14,38 @@
 // faster than typing for browsing, and showing all matches
 // (instead of capping at 50) lets couples discover the full
 // catalog instead of "first 50 alphabetical".
+//
+// 2026-07-22 — Mounted <TrendingVendors> at the top of this modal.
+// Couples now only see the trending strip here (we removed it
+// from the main checklist column to avoid showing the same
+// content twice). The strip works as a "people also viewed"
+// affordance — couples browsing the catalog by category can see
+// what's currently hot right above the dropdowns.
 
 import { useState, useEffect, useMemo } from 'react';
 import { X, MapPin, Star, Loader2 } from 'lucide-react';
 import { collection, getDocs, limit } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { VENDOR_CATEGORIES } from '../../lib/config';
+import { TrendingVendors } from '../TrendingVendors';
 
-export function PickExistingVendor({ onPick, onClose }) {
+export function PickExistingVendor({
+  onPick,
+  onClose,
+  // 2026-07-22 — TrendingVendors props (passed down from
+  // MyVendorsPanel → AddVendorPicker → here). Optional so the
+  // modal can still be reused in screens where we don't have
+  // a currentEvent (e.g. settings page) — in that case we just
+  // skip rendering the trending strip. Renamed to `catalog`
+  // so we don't shadow the inner `vendors` state which holds
+  // the full 677-vendor fetch result.
+  catalog = [],
+  onSelectVendor,
+  onGoDiscover,
+  user,
+  currentEvent,
+  onOpenChat,
+}) {
   const [loading, setLoading] = useState(true);
   const [vendors, setVendors] = useState([]);
   const [error, setError] = useState(null);
@@ -113,6 +137,27 @@ export function PickExistingVendor({ onPick, onClose }) {
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* 2026-07-22 — TrendingVendors strip at the top of the modal.
+            Acts as a "people also viewed" affordance — couples
+            browsing the catalog by category can see what's currently
+            hot without having to leave the picker. We only render
+            this when the parent passes catalog + handlers (i.e.
+            we're being used from the MyVendorsPanel flow inside a
+            wedding project). On the dropdown-only browse mode, we
+            skip it to keep the modal compact. */}
+        {catalog.length > 0 && onSelectVendor && (
+          <div className="border-b border-slate-100 bg-gradient-to-b from-rose-50/40 to-transparent flex-shrink-0">
+            <TrendingVendors
+              vendors={catalog}
+              onSelect={onSelectVendor}
+              onGoDiscover={onGoDiscover}
+              user={user}
+              currentEvent={currentEvent}
+              onOpenChat={onOpenChat}
+            />
+          </div>
+        )}
 
         {/* Two-dropdown filter bar */}
         <div className="p-4 border-b border-slate-100 flex-shrink-0">

@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import { TaskComments } from '../components/TaskComments';
 import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
-import { TrendingVendors } from '../components/TrendingVendors';
 import { NotOnboardedEmailModal } from '../components/modals/NotOnboardedEmailModal';
 import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
@@ -464,31 +463,18 @@ export function CoupleChecklist({
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
       <section className="lg:col-span-6 flex flex-col gap-4">
-            {/* 2026-07-20 — "熱門商戶" strip. Surfaces what's hot
-                RIGHT NOW so couples can discover trending vendors
-                before they pick a task category. Sourced from the
-                popularity counter on the vendor doc. Hides itself
-                if no vendors have any views (e.g. fresh catalog).
-                Click a card → onSelectVendor → opens VendorModal. */}
-            <TrendingVendors
-              vendors={vendors}
-              onSelect={onSelectVendor}
-              onGoDiscover={onGoDiscover}
-              user={user}
-              currentEvent={currentEvent}
-              onOpenChat={(vendor) =>
-                handleOpenChat({
-                  otherUid: vendor.id || vendor.uid,
-                  otherName: vendor.name,
-                })
-              }
-            />
+            {/* 2026-07-22 — Removed TrendingVendors strip from this
+                column. It was duplicating what couples get inside
+                the catalog picker modal. Now it only appears when
+                the user opens the 🏪 從商戶目錄搵 picker (mounted
+                inside PickExistingVendor.jsx as a "people also
+                viewed" affordance). Couples no longer see the same
+                strip twice in one session.
+                Also removed myVendorsPanel from here — moved to the
+                right column above the EmptyMatch/VendorMatch area
+                so the address-book is visible alongside the smart-
+                match recommendations. */}
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-200">
-              {myVendorsPanel && (
-                <div className="mb-6 pb-6 border-b border-slate-200 -mx-2 px-2">
-                  {myVendorsPanel}
-                </div>
-              )}
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-bold text-slate-800">我的任務清單</h2>
             <div className="text-sm font-bold text-rose-600 bg-rose-50 px-3 py-1 rounded-full">
@@ -743,7 +729,17 @@ export function CoupleChecklist({
       </section>
 
       <section className="lg:col-span-6">
-        <div className="sticky top-28">
+        <div className="sticky top-28 space-y-4">
+          {/* 2026-07-22 — Moved MyVendorsPanel here (was at the
+              bottom of the left column). Sits ABOVE the
+              EmptyMatch/VendorMatch so the couple's saved vendor
+              contacts are visible alongside the smart-match
+              recommendations. This makes more sense: the smart-
+              match panel is a "discovery" surface while the
+              MyVendors panel is a "I already know these people"
+              surface — they belong next to each other, not split
+              across the two columns. */}
+          {myVendorsPanel}
           {!activeCategory ? (
             <EmptyMatch onGoDiscover={onGoDiscover} />
           ) : (
