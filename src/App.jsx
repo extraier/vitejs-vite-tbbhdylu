@@ -1543,8 +1543,32 @@ export default function App() {
     const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'resources', id);
     await setDoc(ref, { checked }, { merge: true });
   };
+  // 2026-07-22 — 物資 reorder. Same algorithm as playlist:
+  // swap manualPosition between two adjacent items in the same
+  // category. O(1) parallel writes.
+  const handleReorderResource = async (idA, posA, idB, posB) => {
+    if (!user || !idA || !idB) return;
+    const a = doc(db, 'artifacts', appId, 'users', user.uid, 'resources', idA);
+    const b = doc(db, 'artifacts', appId, 'users', user.uid, 'resources', idB);
+    await Promise.all([
+      setDoc(a, { manualPosition: posA }, { merge: true }),
+      setDoc(b, { manualPosition: posB }, { merge: true }),
+    ]);
+  };
   const handleUpsertTeaCeremony = (d) => upsertWeddingDoc('teaCeremony', d);
   const handleDeleteTeaCeremony = (id) => deleteWeddingDoc('teaCeremony', id);
+  // 2026-07-22 — 敬茶名單 reorder. Swaps the existing `order`
+  // field on two adjacent people in the same group. Both writes
+  // are O(1) — no renumbering of subsequent rows needed.
+  const handleReorderTeaCeremony = async (idA, orderA, idB, orderB) => {
+    if (!user || !idA || !idB) return;
+    const a = doc(db, 'artifacts', appId, 'users', user.uid, 'teaCeremony', idA);
+    const b = doc(db, 'artifacts', appId, 'users', user.uid, 'teaCeremony', idB);
+    await Promise.all([
+      setDoc(a, { order: orderA }, { merge: true }),
+      setDoc(b, { order: orderB }, { merge: true }),
+    ]);
+  };
   const handleUpsertPlaylist = (d) => upsertWeddingDoc('playlist', d);
   const handleDeletePlaylist = (id) => deleteWeddingDoc('playlist', id);
   // 2026-07-22 — playlist reorder. Couples tap ▲▼ in the manual
@@ -2427,8 +2451,16 @@ export default function App() {
                 onUpsertResource={handleUpsertResource}
                 onDeleteResource={handleDeleteResource}
                 onToggleResource={handleToggleResource}
+                // 2026-07-22 — ▲▼ reorder in the 物資 tab manual
+                // sort mode swaps manualPosition between adjacent
+                // items in the same category.
+                onReorderResource={handleReorderResource}
                 onUpsertTeaCeremony={handleUpsertTeaCeremony}
                 onDeleteTeaCeremony={handleDeleteTeaCeremony}
+                // 2026-07-22 — ▲▼ reorder in the 敬茶名單 tab
+                // swaps the existing `order` field between adjacent
+                // people in the same group.
+                onReorderTeaCeremony={handleReorderTeaCeremony}
                 onUpsertPlaylist={handleUpsertPlaylist}
                 onDeletePlaylist={handleDeletePlaylist}
                 // 2026-07-22 — playlist reorder. ▲▼ in the manual

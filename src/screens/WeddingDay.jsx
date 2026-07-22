@@ -635,9 +635,51 @@ const RESOURCE_CATEGORIES = {
   other: '其他',
 };
 
-function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser, helpers }) {
+function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, currentUser, helpers }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
+  // 2026-07-22 — Sort mode toggle. Same pattern as PlaylistTab.
+  //   'created' (default) — sort by createdAt asc; new items
+  //                          appear at the bottom of their
+  //                          category. Couples can mentally
+  //                          track order without effort.
+  //   'manual'             — sort by manualPosition asc. Couples
+  //                          use ▲▼ in each row to pin specific
+  //                          items to specific positions.
+  //                          Useful when the morning-of packing
+  //                          order matters (fridge stuff first,
+  //                          decorations last).
+  const [sortMode, setSortMode] = useState('created');
+
+  // 2026-07-22 — swap handler. Same algorithm as PlaylistTab.
+  // Items are grouped by category; ▲/▼ swaps the manualPosition
+  // of the moved item with the neighbour in the same group.
+  function handleReorder(itemId, direction) {
+    const item = (items || []).find((i) => i.id === itemId);
+    if (!item) return;
+    const cat = item.category || 'other';
+    const groupList = grouped[cat] || [];
+    const idx = groupList.findIndex((i) => i.id === itemId);
+    if (idx < 0) return;
+    const delta = direction === 'up' ? -1 : 1;
+    const swapWith = groupList[idx + delta];
+    if (!swapWith) return;
+    const myPos = item.manualPosition;
+    const otherPos = swapWith.manualPosition;
+    let newMine, newOther;
+    if (myPos != null && otherPos != null) {
+      newMine = otherPos;
+      newOther = myPos;
+    } else if (myPos == null && otherPos == null) {
+      const base = groupList.filter((s) => s.manualPosition != null).length;
+      newMine = base;
+      newOther = base + 1;
+    } else {
+      newMine = otherPos ?? idx;
+      newOther = myPos ?? idx + 1;
+    }
+    onReorder?.(itemId, newMine, swapWith.id, newOther);
+  }
 
   const filtered = useMemo(() => {
     if (filter === 'all') return items || [];
@@ -660,8 +702,26 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser, helper
       if (!out[c]) out[c] = [];
       out[c].push(it);
     });
+    // 2026-07-22 — sort each group by the active mode.
+    Object.keys(out).forEach((k) => {
+      if (sortMode === 'manual') {
+        out[k].sort((a, b) => {
+          const ap = a.manualPosition;
+          const bp = b.manualPosition;
+          if (ap == null && bp == null) return (a.createdAt || 0) - (b.createdAt || 0);
+          if (ap == null) return 1;
+          if (bp == null) return -1;
+          return ap - bp;
+        });
+      } else {
+        // 'created' (default) — sort by createdAt asc. Stable
+        // enough for typical usage; older items appear first
+        // which mirrors a "checklist of to-dos" mental model.
+        out[k].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      }
+    });
     return out;
-  }, [filtered]);
+  }, [filtered, sortMode]);
 
   return (
     <div className="space-y-4">
@@ -688,6 +748,37 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser, helper
             label={`${lbl} (${(items || []).filter((i) => (i.category || 'other') === c).length})`}
           />
         ))}
+        {/* 2026-07-22 — sort mode toggle. Two pills: 加入時間
+            (default, createdAt) and 自訂順序 (manual, ▲▼).
+            Same component pattern as PlaylistTab. */}
+        <div className="inline-flex rounded-lg border border-slate-300 bg-white overflow-hidden text-xs ml-auto">
+          <button
+            type="button"
+            onClick={() => setSortMode('created')}
+            className={`px-2.5 py-1 flex items-center gap-1 transition-colors ${
+              sortMode === 'created'
+                ? 'bg-rose-500 text-white'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+            title="按加入時間排序"
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>時間</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortMode('manual')}
+            className={`px-2.5 py-1 flex items-center gap-1 transition-colors border-l border-slate-200 ${
+              sortMode === 'manual'
+                ? 'bg-rose-500 text-white'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+            title="按自訂順序排序（用 ▲▼ 排列）"
+          >
+            <GripVertical className="w-3.5 h-3.5" />
+            <span>自訂</span>
+          </button>
+        </div>
       </div>
 
       <NewResourceRow
@@ -701,7 +792,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser, helper
             {RESOURCE_CATEGORIES[cat] || cat}
           </div>
           <div className="divide-y divide-slate-100">
-            {list.map((item) => (
+            {list.map((item, itemIdx) => (
               <div
                 key={item.id}
                 className={`flex items-center gap-3 px-4 py-2.5 ${
@@ -718,6 +809,34 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, currentUser, helper
                     <Circle className="w-5 h-5 text-slate-300" />
                   )}
                 </button>
+                {/* 2026-07-22 — reorder column. Same pattern as
+                    SongRow in PlaylistTab. Visible only in manual
+                    sort mode so the default 時間 view stays
+                    uncluttered. */}
+                {sortMode === 'manual' && (
+                  <div className="flex-shrink-0 flex flex-col gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => handleReorder(item.id, 'up')}
+                      disabled={itemIdx === 0}
+                      className="p-0.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                      title="向上移一個位置"
+                      aria-label="向上移"
+                    >
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleReorder(item.id, 'down')}
+                      disabled={itemIdx === list.length - 1}
+                      className="p-0.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+                      title="向下移一個位置"
+                      aria-label="向下移"
+                    >
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
                 <div className="flex-grow min-w-0">
                   <div
                     className={`font-bold ${item.checked ? 'line-through text-slate-500' : 'text-slate-800'}`}
@@ -897,7 +1016,7 @@ const CEREMONY_GROUPS = [
   { id: 'groom_friends', label: '新郎朋友', e: '🤵' },
 ];
 
-function TeaCeremonyTab({ people, onUpsert, onDelete }) {
+function TeaCeremonyTab({ people, onUpsert, onDelete, onReorder }) {
   const [editing, setEditing] = useState(null);
 
   const grouped = useMemo(() => {
@@ -912,6 +1031,34 @@ function TeaCeremonyTab({ people, onUpsert, onDelete }) {
     );
     return out;
   }, [people]);
+
+  // 2026-07-22 — swap handler for the new ▲▼ reorder column.
+  // The 敬茶名單 list already has an `order` field (defaults to
+  // 99 if not set) and is sorted by (completed desc, order asc).
+  // Couples tap ▲/▼ to swap the `order` field with the neighbour
+  // in the same group (husband / wife / both-parents / etc.).
+  // Same swap-on-neighbour pattern as PlaylistTab's
+  // handleReorder — O(1) writes, robust to rapid tapping,
+  // ▲ then ▼ returns to the original position.
+  function handleReorder(personId, direction) {
+    const person = (people || []).find((p) => p.id === personId);
+    if (!person) return;
+    const group = person.group || 'husband';
+    // Re-derive the same sort the grouped useMemo does so we're
+    // swapping with the row the user actually sees above/below.
+    // groupList is already sorted by (completed desc, order asc),
+    // matching the rendered order.
+    const groupList = grouped[group] || [];
+    const idx = groupList.findIndex((p) => p.id === personId);
+    if (idx < 0) return;
+    const delta = direction === 'up' ? -1 : 1;
+    const swapWith = groupList[idx + delta];
+    if (!swapWith) return;
+    const myOrder = person.order ?? 99;
+    const otherOrder = swapWith.order ?? 99;
+    // Both rows always have a numeric order after the swap.
+    onReorder?.(personId, otherOrder, swapWith.id, myOrder);
+  }
 
   const totals = useMemo(() => {
     const total = (people || []).length;
@@ -951,7 +1098,7 @@ function TeaCeremonyTab({ people, onUpsert, onDelete }) {
             </div>
           )}
           <div className="divide-y divide-slate-100">
-            {(grouped[id] || []).map((person) => (
+            {(grouped[id] || []).map((person, personIdx) => (
               <PersonRow
                 key={person.id}
                 person={person}
@@ -959,6 +1106,13 @@ function TeaCeremonyTab({ people, onUpsert, onDelete }) {
                 onDelete={() => onDelete(person.id)}
                 isEditing={editing === person.id}
                 onEditToggle={() => setEditing(editing === person.id ? null : person.id)}
+                // 2026-07-22 — reorder wiring. Same pattern as
+                // SongRow in PlaylistTab: boundary buttons disabled,
+                // tap swaps with neighbour in the same group.
+                isFirst={personIdx === 0}
+                isLast={personIdx === (grouped[id]?.length || 0) - 1}
+                onMoveUp={() => handleReorder(person.id, 'up')}
+                onMoveDown={() => handleReorder(person.id, 'down')}
               />
             ))}
           </div>
@@ -983,7 +1137,19 @@ function KPICard({ label, value, accent = 'slate' }) {
   );
 }
 
-function PersonRow({ person, onUpsert, onDelete, isEditing, onEditToggle }) {
+function PersonRow({
+  person,
+  onUpsert,
+  onDelete,
+  isEditing,
+  onEditToggle,
+  // 2026-07-22 — reorder props for the ▲▼ column. isFirst/isLast
+  // disable the corresponding button at the boundary.
+  isFirst,
+  isLast,
+  onMoveUp,
+  onMoveDown,
+}) {
   const [draft, setDraft] = useState({
     name: person.name || '',
     relation: person.relation || 'relative',
@@ -1058,6 +1224,32 @@ function PersonRow({ person, onUpsert, onDelete, isEditing, onEditToggle }) {
           <Circle className="w-5 h-5 text-slate-300" />
         )}
       </button>
+      {/* 2026-07-22 — Reorder column. Stacked ▲▼ buttons; tap
+          swaps the person's `order` field with the neighbour's
+          via handleReorder in the parent. Same pattern as the
+          SongRow reorder column in PlaylistTab. */}
+      <div className="flex-shrink-0 flex flex-col gap-0.5">
+        <button
+          type="button"
+          onClick={onMoveUp}
+          disabled={isFirst}
+          className="p-0.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+          title="向上移一個位置"
+          aria-label="向上移"
+        >
+          <ChevronUp className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={onMoveDown}
+          disabled={isLast}
+          className="p-0.5 rounded hover:bg-rose-100 text-slate-400 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+          title="向下移一個位置"
+          aria-label="向下移"
+        >
+          <ChevronDown className="w-3.5 h-3.5" />
+        </button>
+      </div>
       <div className="flex-grow min-w-0">
         <div className={`font-bold ${person.completed ? 'line-through text-slate-500' : 'text-slate-800'}`}>
           {person.name || '未命名'}
@@ -1741,8 +1933,10 @@ export function WeddingDay({
   onUpsertResource,
   onDeleteResource,
   onToggleResource,
+  onReorderResource,
   onUpsertTeaCeremony,
   onDeleteTeaCeremony,
+  onReorderTeaCeremony,
   onUpsertPlaylist,
   onDeletePlaylist,
   // 2026-07-22 — playlist reorder handler (▲▼ buttons in manual
@@ -1794,6 +1988,9 @@ export function WeddingDay({
             onUpsert={onUpsertResource}
             onDelete={onDeleteResource}
             onToggle={onToggleResource}
+            // 2026-07-22 — manualPosition swap handler. Driven by
+            // ▲▼ buttons in each item row when sortMode === 'manual'.
+            onReorder={onReorderResource}
             currentUser={currentUser}
             helpers={helpers}
           />
@@ -1803,6 +2000,11 @@ export function WeddingDay({
             people={teaCeremony}
             onUpsert={onUpsertTeaCeremony}
             onDelete={onDeleteTeaCeremony}
+            // 2026-07-22 — ▲▼ reorder swaps the existing `order`
+            // field on the two adjacent people. Already had the
+            // field; now couples can edit it without opening
+            // each person's edit modal.
+            onReorder={onReorderTeaCeremony}
           />
         )}
         {active === 'playlist' && (
