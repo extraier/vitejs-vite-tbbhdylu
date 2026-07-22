@@ -81,12 +81,45 @@ const RUNDOWN_GROUP_LABELS = {
 // tag 大日流程 or 物資 items with one or more 兄弟姊妹. Stored on
 // the item as `assignedHelpers: [{id,name,uid}]` (uid empty for
 // free-typed names — used as the "before invite" fallback).
+//
+// 2026-07-22 — UX rework per user feedback. The dropdown is now
+// the PRIMARY control (always visible) so couples see the helpers
+// they can pick from. The free-text input is demoted to a small
+// "+ 自訂" toggle that reveals a text field on demand. Before this
+// change, couples with no helpers invited only saw a text input —
+// which pushed them toward typing free-form names instead of
+// inviting helpers, defeating the point of having helpers in
+// the app. Now the dropdown is always visible and the free-text
+// is opt-in.
 function HelperPicker({ helpers = [], value = [], onChange }) {
+  const [showCustom, setShowCustom] = useState(false);
   const add = (h) => {
     if (value.find((x) => x.id === h.id)) return;
     onChange([...value, h]);
   };
   const remove = (id) => onChange(value.filter((x) => x.id !== id));
+
+  // 2026-07-22 — Build deduped option list (same logic as before
+  // but pulled out so we can show it even when helpers.length is 0).
+  // Same person can appear in both /helpers and /pendingInvites
+  // (registered email pending acceptance vs. just an invited email),
+  // often with different doc ids. We dedupe on email — when both
+  // exist, prefer the /helpers row (uid-keyed).
+  const picked = new Set(value.map((v) => v.id));
+  const byEmail = new Map();
+  helpers.forEach((h) => {
+    const key = (h.email || h.id || '').toLowerCase();
+    if (!key || picked.has(h.id)) return;
+    if (h.status === 'revoked') return;
+    const cur = byEmail.get(key);
+    if (!cur || (h._src === 'helpers' && cur._src !== 'helpers')) {
+      byEmail.set(key, h);
+    }
+  });
+  const list = Array.from(byEmail.values()).sort((a, b) =>
+    (a.displayName || a.email).localeCompare(b.displayName || b.email),
+  );
+
   return (
     <div>
       <label className="text-xs font-bold text-slate-600 mb-1 block">
@@ -113,41 +146,29 @@ function HelperPicker({ helpers = [], value = [], onChange }) {
           <span className="text-xs text-slate-400">未分配</span>
         )}
       </div>
-      {helpers.length > 0 && (() => {
-        // 2026-07-18 — Build deduped option list. Same person can
-        // appear in both /helpers and /pendingInvites (registered
-        // email pending acceptance vs. just an invited email),
-        // often with different doc ids. We dedupe on email — when
-        // both exist, prefer the /helpers row (uid-keyed).
-        const picked = new Set(value.map((v) => v.id));
-        const byEmail = new Map();
-        helpers.forEach((h) => {
-          const key = (h.email || h.id || '').toLowerCase();
-          if (!key || picked.has(h.id)) return;
-          if (h.status === 'revoked') return;
-          const cur = byEmail.get(key);
-          if (!cur || (h._src === 'helpers' && cur._src !== 'helpers')) {
-            byEmail.set(key, h);
-          }
-        });
-        const list = Array.from(byEmail.values()).sort((a, b) =>
-          (a.displayName || a.email).localeCompare(b.displayName || b.email),
-        );
-        if (list.length === 0) return null;
-        return (
-          <select
-            value=""
-            onChange={(e) => {
-              const hid = e.target.value;
-              const h = helpers.find((x) => x.id === hid);
-              if (h) add({
-                id: h.id,
-                name: h.displayName || h.name || h.email || '?',
-                uid: h.helperUid || '',
-              });
-            }}
-            className="w-full p-2 rounded-lg border border-slate-300 text-xs bg-white"
-          >
+      {/* 2026-07-22 — Always-on dropdown. Was hidden when
+          helpers.length === 0, which pushed couples into the
+          free-text input. Now we render it always so couples
+          see "this is the way to assign helpers" even before
+          they've invited anyone. When list is empty, the
+          dropdown is disabled and the helper text below points
+          them at the helpers manager. */}
+      <select
+        value=""
+        onChange={(e) => {
+          const hid = e.target.value;
+          const h = helpers.find((x) => x.id === hid);
+          if (h) add({
+            id: h.id,
+            name: h.displayName || h.name || h.email || '?',
+            uid: h.helperUid || '',
+          });
+        }}
+        disabled={list.length === 0}
+        className="w-full p-2 rounded-lg border border-slate-300 text-xs bg-white disabled:bg-slate-50 disabled:text-slate-400"
+      >
+        {list.length > 0 ? (
+          <>
             <option value="">+ 從已邀請嘅兄弟姊妹加入...</option>
             {list.map((h) => {
               const accepted = h.status === 'active';
@@ -158,24 +179,56 @@ function HelperPicker({ helpers = [], value = [], onChange }) {
                 </option>
               );
             })}
-          </select>
-        );
-      })()}
-      <input
-        type="text"
-        placeholder="或自行輸入名 (例: 表姊 KC)"
-        value=""
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && e.currentTarget.value.trim()) {
-            const name = e.currentTarget.value.trim();
-            const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-            add({ id, name, uid: '' });
-            e.currentTarget.value = '';
-            e.preventDefault();
-          }
-        }}
-        className="w-full mt-1 p-2 rounded-lg border border-slate-300 text-xs"
-      />
+          </>
+        ) : (
+          <option value="">未邀請任何兄弟姊妹 (去主控台邀請)</option>
+        )}
+      </select>
+      {list.length === 0 && (
+        <p className="text-[10px] text-amber-600 mt-1 leading-relaxed">
+          💡 去主控台點「兄弟姊妹」→「邀請」加入常用嘅助手，之後就可以喺度直接指派。
+        </p>
+      )}
+      {/* 2026-07-22 — Opt-in custom-name input. Demoted from
+          always-visible to a "+ 自訂" toggle. The dropdown is
+          now the primary path; this is the escape hatch for
+          on-the-fly names like "表姊 KC" who isn't in the app
+          yet. */}
+      {showCustom ? (
+        <div className="mt-1.5 flex gap-1">
+          <input
+            type="text"
+            autoFocus
+            placeholder="自行輸入名 (例: 表姊 KC)"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                const name = e.currentTarget.value.trim();
+                const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+                add({ id, name, uid: '' });
+                e.currentTarget.value = '';
+                e.preventDefault();
+              }
+            }}
+            className="flex-1 p-2 rounded-lg border border-slate-300 text-xs"
+          />
+          <button
+            type="button"
+            onClick={() => setShowCustom(false)}
+            className="px-2 text-xs text-slate-400 hover:text-slate-700"
+            title="取消自訂"
+          >
+            ✕
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setShowCustom(true)}
+          className="mt-1 text-[10px] text-slate-500 hover:text-indigo-600 underline"
+        >
+          + 自行輸入名 (不在已邀請名單內)
+        </button>
+      )}
     </div>
   );
 }
