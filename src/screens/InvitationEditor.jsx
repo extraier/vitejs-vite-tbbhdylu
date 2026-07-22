@@ -766,7 +766,10 @@ function SendButton({ ownerUid, eventId, invitationId, guestIds, customMessage, 
     }
     setSending(true);
     try {
-      const fn = httpsCallable(getFunctions(), 'sendInvitations');
+      // 2026-07-22 — Calling sendInvitationsV2 in asia-east2
+      // instead of sendInvitations (us-central1). See
+      // functions/src/invitations.ts:105 for the full story.
+      const fn = httpsCallable(getFunctions('asia-east2'), 'sendInvitationsV2');
       const result = await fn({ eventId, invitationId, guestIds, customMessage });
       const sentCount = result.data.sent.filter((s) => s.status === 'sent').length;
       const skipped = result.data.sent.filter((s) => s.status === 'skipped').length;

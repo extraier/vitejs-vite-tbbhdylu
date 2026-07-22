@@ -102,8 +102,20 @@ interface SendInvitationsResult {
   sent: SendResult[];
 }
 
-export const sendInvitations = onCall(
+// 2026-07-22 — Renamed to sendInvitationsV2 AND moved to
+// asia-east2 to bypass a stuck HTTP 409 on the original
+// sendInvitations resource in us-central1. Google's backend had
+// a queued operation that wouldn't drain even after
+// `firebase functions:delete` + manual Console delete + 10
+// minutes wait. Deploying in a different region creates a
+// fresh resource; the front-end callsite
+// (QrCodeModal.jsx and InvitationEditor.jsx) has been updated
+// to specify asia-east2 when invoking the function. Once the
+// stuck resource eventually clears (or its 7-day TTL expires)
+// this can be moved back to us-central1 if desired.
+export const sendInvitationsV2 = onCall(
   {
+    region: 'asia-east2',
     timeoutSeconds: 120,
     memory: '512MiB',
     secrets: [SMTP_URL, SMTP_FROM, APP_BASE_URL, LINK_SECRET],

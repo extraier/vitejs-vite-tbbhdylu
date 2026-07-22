@@ -45,7 +45,11 @@ export function QrCodeModal({
         },
         { merge: true }
       );
-      const fn = httpsCallable(getFunctions(), 'sendInvitations');
+      // 2026-07-22 — Calling sendInvitationsV2 in asia-east2
+      // instead of sendInvitations (us-central1) to bypass a
+      // stuck 409 on the original function resource. See
+      // functions/src/invitations.ts:105 for the full story.
+      const fn = httpsCallable(getFunctions('asia-east2'), 'sendInvitationsV2');
       const result = await fn({
         eventId: currentEventId,
         invitationId,
