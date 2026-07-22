@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Heart, LogOut, Users, MessageCircle } from 'lucide-react';
+import { Heart, LogOut, Users, MessageCircle, ChevronLeft } from 'lucide-react';
 import {
      addDoc,
      collection,
@@ -2125,6 +2125,32 @@ export default function App() {
                         🤝 助手控制台
                       </button>
                     )}
+                    {/* 2026-07-22 — Back-to-總大堂 button. Lives in
+                        the header (between 兄弟姊妹/助手控制台 and
+                        登出) so it's always reachable, not just
+                        inside the checklist view. Same handler as
+                        the in-page back button — clears currentEvent,
+                        flips to events-dashboard, resets active-
+                        category/venue so the dashboard renders cleanly.
+                        Only shown when we're actually inside a project;
+                        otherwise the events dashboard is the current
+                        view and the button would be redundant. */}
+                    {currentEvent && currentView !== 'events-dashboard' && (
+                      <button
+                        onClick={() => {
+                          setCurrentEvent(null);
+                          setCurrentView('events-dashboard');
+                          setActiveCategory(null);
+                          setActiveVenue('');
+                        }}
+                        className="flex items-center gap-1 text-sm font-bold text-rose-700 hover:text-rose-900 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg border border-rose-200 transition-colors"
+                        title="返回 Save The Day · 總大堂"
+                        aria-label="返回 Save The Day · 總大堂"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                        <span className="hidden sm:inline">返回總大堂</span>
+                      </button>
+                    )}
                     <button
                       onClick={handleLogout}
                       className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 transition-colors"
@@ -2234,18 +2260,9 @@ export default function App() {
                 // uninvited vendors.
                 user={user}
                 currentEvent={currentEvent}
-                // 2026-07-22 — back button. Clear currentEvent +
-                // flip view so the couple lands on the events
-                // dashboard (總大堂) and can pick a different
-                // wedding or create a new one.
-                onGoEventsDashboard={() => {
-                  setCurrentEvent(null);
-                  setCurrentView('events-dashboard');
-                  // Reset any active-category selection so the
-                  // dashboard renders cleanly.
-                  setActiveCategory(null);
-                  setActiveVenue('');
-                }}
+                // 2026-07-22 — back button now lives in the global
+                // header (between 兄弟姊妹 and 登出), reachable
+                // from every couple screen. No longer passed here.
                 // 2026-07-20 — TrendingVendors click handler. Opens
                 // the vendor profile modal via the existing
                 // viewingVendorProfile state — couples can then
