@@ -37,7 +37,7 @@ import {
 } from 'lucide-react';
 
 /**
- * WeddingDay — 大日統籌
+ * WeddingDay — Big Day (大日統籌)
  *
  * One screen with four sub-tabs covering the day-of operations:
  *   rundown    — 司儀稿 / Timeline of the day (time-ordered slots)
@@ -2380,7 +2380,7 @@ export function WeddingDay({
             <ClipboardList className="w-7 h-7 text-rose-500" />
           </div>
           <div>
-            <h2 className="text-2xl font-black text-slate-800">大日統籌</h2>
+            <h2 className="text-2xl font-black text-slate-800">Big Day 大日統籌</h2>
             <p className="text-slate-500 text-sm mt-1">
               流程、物資、敬茶名單、歌單 — 全部一個畫面搞掂。
             </p>

@@ -1125,7 +1125,7 @@ export default function App() {
     [targetUid, guest.isGuestMode],
   );
 
-  // ---- 2026-07-17: 大日統籌 suite (rundown / resources / teaCeremony / playlist).
+  // ---- 2026-07-17: Big Day (大日統籌) suite (rundown / resources / teaCeremony / playlist).
   // All four collections live under /users/{ownerUid}/{name}. Read-only here;
   // writes go through the parent via callback props. Helper users do NOT see
   // these (rules allow owner-only).
@@ -1476,7 +1476,7 @@ export default function App() {
     setActiveCategory(null);
   };
 
-  // ---- 2026-07-17: 大日統籌 (WeddingDay suite) CRUD handlers.
+  // ---- 2026-07-17: Big Day (大日統籌) (WeddingDay suite) CRUD handlers.
   // Each handler owns one of the four collections:
   //   rundown / resources / teaCeremony / playlist
   // Writes are direct against Firestore — owner-only rules gate the
