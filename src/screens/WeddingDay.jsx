@@ -14,6 +14,9 @@ import {
   Pause,
   Users,
   Package,
+  ChevronUp,
+  ChevronDown,
+  Flame,
 } from 'lucide-react';
 
 /**
@@ -1241,10 +1244,27 @@ function youtubeId(url) {
   return null;
 }
 
-function PlaylistTab({ songs, onUpsert, onDelete, currentUserUid }) {
+function PlaylistTab({ songs, onUpsert, onDelete, onReorder, currentUserUid }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  // 2026-07-22 — Sort mode for each playlist group. Two modes:
+  //   'hot'  — sort by votes desc, then alphabetical (default).
+  //            Couples see what the wedding party is rallying
+  //            around; the "wisdom of the crowd" picks the
+  //            running order.
+  //   'manual' — sort by manualPosition asc. Couples use the
+  //            ▲▼ buttons in each row to pin specific songs
+  //            to specific positions. manualPosition is null
+  //            for songs that have never been reordered — they
+  //            get appended at the end of the manual sort.
+  //            This is the right pattern for the owner who
+  //            already knows which song they want where.
+  // We could also auto-promote a song to the manual sort on
+  // first ▲/▼ tap, but couples switching from hot → manual
+  // for the first time would see a strange initial ordering.
+  // Cleaner: only songs with a manualPosition participate.
+  const [sortMode, setSortMode] = useState('hot');
   // 2026-07-18 — P1 inline audio preview. We track which song id is
   // currently playing so that tapping a different row stops the
   // previous one (only one preview at a time across the whole tab).
@@ -1267,14 +1287,85 @@ function PlaylistTab({ songs, onUpsert, onDelete, currentUserUid }) {
     s.forEach((sg) => {
       const k = sg.moment || 'pre_guest';
       if (!out[k]) out[k] = [];
-      // Sort by votes desc, then alpha
-      out[k].sort(
-        (a, b) => (b.votes?.length || 0) - (a.votes?.length || 0) || (a.title || '').localeCompare(b.title || ''),
-      );
       out[k].push(sg);
     });
+    // Sort each group by the active mode. We use a stable sort so
+    // ties don't shuffle unpredictably between renders.
+    Object.keys(out).forEach((k) => {
+      if (sortMode === 'manual') {
+        out[k].sort((a, b) => {
+          // Songs with manualPosition come first, ascending.
+          const ap = a.manualPosition;
+          const bp = b.manualPosition;
+          if (ap == null && bp == null) {
+            // Both unpinned — keep createdAt ascending (older first).
+            return (a.createdAt || 0) - (b.createdAt || 0);
+          }
+          if (ap == null) return 1;  // unpinned goes to end
+          if (bp == null) return -1;
+          return ap - bp;
+        });
+      } else {
+        // 'hot' mode — votes desc, then alpha.
+        out[k].sort(
+          (a, b) =>
+            (b.votes?.length || 0) - (a.votes?.length || 0) ||
+            (a.title || '').localeCompare(b.title || ''),
+        );
+      }
+    });
     return out;
-  }, [songs, filter, search]);
+  }, [songs, filter, search, sortMode]);
+
+  // 2026-07-22 — Up/down handler. In manual mode we swap the
+  // manualPosition of the moved song with the song directly above
+  // or below it in the same moment group. Swapping is more
+  // robust than renumbering all subsequent rows because:
+  //   • O(1) writes instead of O(n)
+  //   • no race conditions if two arrows are tapped quickly
+  //   • when the user taps ▲ and then ▼, they end up back where
+  //     they started (instead of somewhere unexpected).
+  // If the song above/below is unpinned (manualPosition = null)
+  // we assign the next free position so the moved song is
+  // guaranteed to move into a defined slot.
+  function handleReorder(songId, direction) {
+    const song = (songs || []).find((s) => s.id === songId);
+    if (!song) return;
+    const moment = song.moment || 'pre_guest';
+    const groupList = grouped[moment] || [];
+    const idx = groupList.findIndex((s) => s.id === songId);
+    if (idx < 0) return;
+    const delta = direction === 'up' ? -1 : 1;
+    const swapWith = groupList[idx + delta];
+    if (!swapWith) return; // already at top/bottom
+
+    // Compute the two new positions. If the neighbour is unpinned
+    // (manualPosition == null), we use the current song's position
+    // shifted by direction; otherwise we just swap.
+    const myPos = song.manualPosition;
+    const otherPos = swapWith.manualPosition;
+    let newMine, newOther;
+    if (myPos != null && otherPos != null) {
+      // Both pinned → simple swap.
+      newMine = otherPos;
+      newOther = myPos;
+    } else if (myPos == null && otherPos == null) {
+      // Both unpinned → give them contiguous positions starting
+      // from the current size of the manual list.
+      const base = groupList.filter(
+        (s) => s.manualPosition != null,
+      ).length;
+      newMine = base;          // current song
+      newOther = base + 1;     // neighbour
+    } else {
+      // One pinned, one not. Pin the moved song in the neighbour's
+      // slot, and bump the unpinned song to the moved song's slot
+      // (or just below it).
+      newMine = otherPos ?? idx;
+      newOther = myPos ?? idx + 1;
+    }
+    onReorder?.(songId, newMine, swapWith.id, newOther);
+  }
 
   return (
     <div className="space-y-4">
@@ -1304,6 +1395,38 @@ function PlaylistTab({ songs, onUpsert, onDelete, currentUserUid }) {
             </option>
           ))}
         </select>
+        {/* 2026-07-22 — Sort mode toggle. Two pills: 熱度 (default,
+            votes-based) and 自訂順序 (manual, ▲▼ reorder). The
+            toggle is sticky per-tab so couples can switch between
+            views without losing their intent. */}
+        <div className="inline-flex rounded-lg border border-slate-300 bg-white overflow-hidden text-sm">
+          <button
+            type="button"
+            onClick={() => setSortMode('hot')}
+            className={`px-3 py-2 flex items-center gap-1 transition-colors ${
+              sortMode === 'hot'
+                ? 'bg-rose-500 text-white'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+            title="按熱度排序（❤️ 數量）"
+          >
+            <Flame className="w-4 h-4" />
+            <span className="hidden sm:inline">熱度</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortMode('manual')}
+            className={`px-3 py-2 flex items-center gap-1 transition-colors border-l border-slate-200 ${
+              sortMode === 'manual'
+                ? 'bg-rose-500 text-white'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+            title="按自訂順序排序（用 ▲▼ 排列）"
+          >
+            <GripVertical className="w-4 h-4" />
+            <span className="hidden sm:inline">自訂</span>
+          </button>
+        </div>
       </div>
 
       <NewSongRow
@@ -1328,11 +1451,20 @@ function PlaylistTab({ songs, onUpsert, onDelete, currentUserUid }) {
               </span>
             </div>
             <div className="divide-y divide-slate-100">
-              {grouped[id].map((song) => (
+              {grouped[id].map((song, songIdx) => (
                 <SongRow
                   key={song.id}
                   song={song}
                   currentUserUid={currentUserUid}
+                  // 2026-07-22 — reorder props. Only meaningful
+                  // when sortMode === 'manual'; the SongRow itself
+                  // gates visibility on that flag so we don't
+                  // litter the hot-mode UI with arrow buttons.
+                  sortMode={sortMode}
+                  isFirst={songIdx === 0}
+                  isLast={songIdx === grouped[id].length - 1}
+                  onMoveUp={() => handleReorder(song.id, 'up')}
+                  onMoveDown={() => handleReorder(song.id, 'down')}
                   // 2026-07-18 — P1 inline preview wiring: SongRow
                   // reports its own playing state up; PlaylistTab
                   // flips off whichever row was playing before.
@@ -1363,12 +1495,58 @@ function PlaylistTab({ songs, onUpsert, onDelete, currentUserUid }) {
   );
 }
 
-function SongRow({ song, currentUserUid, isPlaying, onTogglePlay, onVote, onDelete }) {
+function SongRow({
+  song,
+  currentUserUid,
+  isPlaying,
+  onTogglePlay,
+  onVote,
+  onDelete,
+  // 2026-07-22 — reorder props. All four are only consulted when
+  // sortMode === 'manual'; otherwise the arrow column is hidden.
+  // The first/last booleans disable the corresponding button so
+  // the UI communicates "you can't move further" without us
+  // needing extra clicks or toasts.
+  sortMode,
+  isFirst,
+  isLast,
+  onMoveUp,
+  onMoveDown,
+}) {
   const voted = (song.votes || []).includes(currentUserUid);
   const ytId = youtubeId(song.link);
 
   return (
     <div className="px-4 py-3 flex gap-3 items-start">
+      {/* 2026-07-22 — Reorder column. Only rendered when the
+          tab is in manual mode so the hot/votes view stays
+          clean. Stacked ▲▼ buttons; tapping swaps the
+          manualPosition with the neighbour via handleReorder
+          in the parent. */}
+      {sortMode === 'manual' && (
+        <div className="flex-shrink-0 flex flex-col gap-0.5 self-center">
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={isFirst}
+            className="p-1 rounded hover:bg-rose-100 text-slate-500 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+            title="向上移一個位置"
+            aria-label="向上移"
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={isLast}
+            className="p-1 rounded hover:bg-rose-100 text-slate-500 hover:text-rose-600 disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
+            title="向下移一個位置"
+            aria-label="向下移"
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       <div className="flex-shrink-0 w-20">
         {ytId ? (
           // 2026-07-18 — P1 inline preview. We render an iframe when
@@ -1567,6 +1745,10 @@ export function WeddingDay({
   onDeleteTeaCeremony,
   onUpsertPlaylist,
   onDeletePlaylist,
+  // 2026-07-22 — playlist reorder handler (▲▼ buttons in manual
+  // sort mode). Optional so WeddingDay keeps working in test/
+  // preview environments without it.
+  onReorderPlaylist,
   currentUser,
   // 2026-07-18 — pass the active helper list down so rundown and
   // resources tabs can offer a 兄弟姊妹 picker for each item.
@@ -1628,6 +1810,11 @@ export function WeddingDay({
             songs={playlist}
             onUpsert={onUpsertPlaylist}
             onDelete={onDeletePlaylist}
+            // 2026-07-22 — manualPosition swap handler. Driven by
+            // ▲▼ buttons in each SongRow when sortMode === 'manual'.
+            // Optional in PlaylistTab (default no-op) so the screen
+            // still works in tests / preview without breaking.
+            onReorder={onReorderPlaylist}
             currentUserUid={currentUser?.uid}
           />
         )}

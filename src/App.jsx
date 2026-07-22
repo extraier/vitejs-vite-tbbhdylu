@@ -1547,6 +1547,25 @@ export default function App() {
   const handleDeleteTeaCeremony = (id) => deleteWeddingDoc('teaCeremony', id);
   const handleUpsertPlaylist = (d) => upsertWeddingDoc('playlist', d);
   const handleDeletePlaylist = (id) => deleteWeddingDoc('playlist', id);
+  // 2026-07-22 — playlist reorder. Couples tap ▲▼ in the manual
+  // sort mode of the 歌單 tab. We write manualPosition on the two
+  // swapped songs. Idempotent: re-running the swap with the same
+  // args is a no-op (setDoc with merge=true on unchanged data).
+  const handleReorderPlaylist = async (idA, posA, idB, posB) => {
+    if (!user || !idA || !idB) return;
+    const a = doc(db, 'artifacts', appId, 'users', user.uid, 'playlist', idA);
+    const b = doc(db, 'artifacts', appId, 'users', user.uid, 'playlist', idB);
+    // Parallel writes — both should succeed independently. If one
+    // fails (e.g. network glitch) the UI will rerender on the next
+    // subscription tick from the partial state, and a fresh ▲/▼
+    // tap can re-synchronize. We don't try to batch them in a
+    // transaction because the cost (lock contention) outweighs the
+    // benefit (consistency in a UI the user is actively clicking).
+    await Promise.all([
+      setDoc(a, { manualPosition: posA }, { merge: true }),
+      setDoc(b, { manualPosition: posB }, { merge: true }),
+    ]);
+  };
 
   const handleAddGuest = async (e) => {
     e.preventDefault();
@@ -2412,6 +2431,10 @@ export default function App() {
                 onDeleteTeaCeremony={handleDeleteTeaCeremony}
                 onUpsertPlaylist={handleUpsertPlaylist}
                 onDeletePlaylist={handleDeletePlaylist}
+                // 2026-07-22 — playlist reorder. ▲▼ in the manual
+                // sort mode of 歌單 tab swap manualPosition between
+                // adjacent songs.
+                onReorderPlaylist={handleReorderPlaylist}
                 currentUser={user}
                 // 2026-07-18 — pass the active helpers list down so
                 // 大日流程/物資 can offer a 兄弟姊妹 picker. Already
