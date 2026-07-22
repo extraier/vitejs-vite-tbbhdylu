@@ -2,7 +2,19 @@ import { useState } from 'react';
 import { X, Mail } from 'lucide-react';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db, appId } from '../../lib/firebase';
+import { db, app, appId } from '../../lib/firebase';
+
+// 2026-07-22 — Cache the asia-east2 functions instance at module
+// level. Previously we called `httpsCallable(getFunctions('asia-east2'), ...)`
+// on every send, which Firebase 10.x handles inconsistently — the
+// internal provider cache can return undefined for `getProvider()`
+// when the same app gets both default and region-specific instances,
+// surfacing as `code: UNKNOWN, message: Cannot read properties of
+// undefined (reading 'getProvider')`.
+//
+// Module-level singleton sidesteps the issue: same Functions
+// instance returned every time.
+const functionsAsiaEast2 = getFunctions(app, 'asia-east2');
 
 export function QrCodeModal({
   guest,
@@ -49,7 +61,9 @@ export function QrCodeModal({
       // instead of sendInvitations (us-central1) to bypass a
       // stuck 409 on the original function resource. See
       // functions/src/invitations.ts:105 for the full story.
-      const fn = httpsCallable(getFunctions('asia-east2'), 'sendInvitationsV2');
+      // Uses a cached module-level Functions instance to avoid
+      // Firebase 10.x's `getProvider` undefined bug.
+      const fn = httpsCallable(functionsAsiaEast2, 'sendInvitationsV2');
       const result = await fn({
         eventId: currentEventId,
         invitationId,
