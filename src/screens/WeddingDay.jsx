@@ -1597,6 +1597,13 @@ export function WeddingDay({
             onUpsert={onUpsertRundown}
             onDelete={onDeleteRundown}
             onReorder={onReorderRundown}
+            // 2026-07-22 — pass helpers down so the dropdown inside
+            // 大日流程 items actually shows invited helpers. Was
+            // missing here (ResourcesTab already had it). Without
+            // this, the HelperPicker fell back to the
+            // "未邀請任何兄弟姊妹" empty-state even when helpers
+            // had been invited.
+            helpers={helpers}
           />
         )}
         {active === 'resources' && (
