@@ -416,6 +416,75 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
 // =============================================================================
 // Email HTML — inlined so the function is self-contained.
 // =============================================================================
+//
+// 2026-07-22 — Template-aware email rendering. The previous version
+// rendered a single one-size-fits-all plain layout regardless of the
+// chosen invitation template, so couples who picked 玫瑰金邊 / 翡翠
+// 中式 / 深藍星夜 etc. saw a generic white-card email that didn't match
+// the design they chose. We now apply the chosen template's palette
+// + layout to the email body so what the guest receives mirrors what
+// the couple picked.
+//
+// The template registry below mirrors src/components/invitation/templates.js.
+// We can't import that file because the function is TypeScript-compiled
+// separately from the Vite bundle. Keeping a parallel registry is the
+// smallest delta and avoids a build-time cross-import.
+// =============================================================================
+
+interface TemplatePalette {
+  bg: string;
+  text: string;
+  accent: string;
+  muted: string;
+}
+
+interface TemplateDef {
+  id: string;
+  palette: TemplatePalette;
+  // Light or dark — drives whether the text inside the colored hero
+  // band needs white text overlay (dark templates like 深藍星夜).
+  isDark: boolean;
+}
+
+// 2026-07-22 — Template registry. Keep in sync with
+// src/components/invitation/templates.js. New templates added there
+// must also be added here or the email will fall back to plain.
+const EMAIL_TEMPLATES: Record<string, TemplateDef> = {
+  plain: {
+    id: 'plain',
+    palette: { bg: '#ffffff', text: '#1e293b', accent: '#e11d48', muted: '#64748b' },
+    isDark: false,
+  },
+  'tpl-rose': {
+    id: 'tpl-rose',
+    palette: { bg: '#fff1f2', text: '#881337', accent: '#e11d48', muted: '#9f1239' },
+    isDark: false,
+  },
+  'tpl-jade': {
+    id: 'tpl-jade',
+    palette: { bg: '#ecfdf5', text: '#064e3b', accent: '#047857', muted: '#065f46' },
+    isDark: false,
+  },
+  'tpl-midnight': {
+    id: 'tpl-midnight',
+    palette: { bg: '#0f172a', text: '#f8fafc', accent: '#fbbf24', muted: '#cbd5e1' },
+    isDark: true,
+  },
+  'tpl-blush': {
+    id: 'tpl-blush',
+    palette: { bg: '#fdf2f8', text: '#500724', accent: '#db2777', muted: '#831843' },
+    isDark: false,
+  },
+  'tpl-sage': {
+    id: 'tpl-sage',
+    palette: { bg: '#f0fdf4', text: '#14532d', accent: '#16a34a', muted: '#166534' },
+    isDark: false,
+  },
+};
+
+function getEmailTemplate(id: string): TemplateDef {
+  return EMAIL_TEMPLATES[id] || EMAIL_TEMPLATES.plain;
+}
 
 function renderEmailHtml(args: {
   guestName: string;
@@ -430,40 +499,71 @@ function renderEmailHtml(args: {
   bgUrl?: string | null;
   templateId: string;
 }): string {
-  const { guestName, isFamily, memberNames, eventName, eventDate, eventTime, venue, address, ownerMessage, bgUrl } = args;
+  const { guestName, isFamily, memberNames, eventName, eventDate, eventTime, venue, address, ownerMessage, bgUrl, templateId } = args;
+  const tpl = getEmailTemplate(templateId);
+  const p = tpl.palette;
 
+  // 2026-07-22 — Page background uses the template's bg color but
+  // slightly softened so the white card pops against it. For dark
+  // templates (e.g. 深藍星夜) we invert: the page becomes near-black
+  // and the card uses the slightly lighter template bg.
+  const pageBg = tpl.isDark ? '#020617' : '#f8fafc';
+  const cardBg = p.bg;
+  const cardText = p.text;
+  const cardAccent = p.accent;
+  const cardMuted = p.muted;
+
+  // 2026-07-22 — Hero block. If a custom bg image is uploaded we
+  // layer it on top of the template color (matches what the
+  // preview shows). Otherwise the hero is a colored gradient
+  // using the template's accent color so couples can see at a
+  // glance which template was used.
   const heroStyle = bgUrl
-    ? `background-image: linear-gradient(rgba(15,23,42,0.45), rgba(15,23,42,0.6)), url('${bgUrl}'); background-size: cover; background-position: center;`
-    : `background: linear-gradient(135deg, #fff1f2 0%, #fdf2f8 100%);`;
+    ? `background-image: linear-gradient(rgba(0,0,0,0.45), rgba(0,0,0,0.55)), url('${bgUrl}'); background-size: cover; background-position: center; color: #fff;`
+    : `background: linear-gradient(135deg, ${cardBg} 0%, ${cardAccent}22 100%); color: ${cardText};`;
+
+  // 2026-07-22 — Text color inside the hero. White for dark
+  // templates (midnight) or when there's a bg image; otherwise the
+  // template's text color so it stays readable on the colored bg.
+  const heroTextColor = bgUrl || tpl.isDark ? '#ffffff' : cardText;
+  const heroMutedColor = bgUrl || tpl.isDark ? 'rgba(255,255,255,0.85)' : cardMuted;
+
+  // 2026-07-22 — Divider lines between sections. Always use the
+  // template accent color at 30% opacity so the email looks
+  // visually consistent with the chosen design.
+  const dividerStyle = `height:1px;background:${cardAccent};opacity:0.3;margin:16px 0;`;
 
   const greeting = isFamily
-    ? `<h2 style="margin:0 0 8px;font-size:24px;font-weight:900;">${escapeHtml(guestName)}</h2>
-       <p style="margin:0 0 16px;font-size:13px;color:#64748b;">${escapeHtml(memberNames.join('、'))}</p>`
-    : `<h2 style="margin:0 0 16px;font-size:24px;font-weight:900;">${escapeHtml(guestName)}</h2>`;
+    ? `<h2 style="margin:0 0 8px;font-size:24px;font-weight:900;color:${cardText};">${escapeHtml(guestName)}</h2>
+       <p style="margin:0 0 16px;font-size:13px;color:${cardMuted};">${escapeHtml(memberNames.join('、'))}</p>`
+    : `<h2 style="margin:0 0 16px;font-size:24px;font-weight:900;color:${cardText};">${escapeHtml(guestName)}</h2>`;
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'PingFang HK',sans-serif;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;padding:24px 0;">
+<body style="margin:0;padding:0;background:${pageBg};font-family:-apple-system,BlinkMacSystemFont,'PingFang HK',sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${pageBg};padding:24px 0;">
     <tr><td align="center">
-      <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border-radius:24px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.08);">
-        <tr><td style="${heroStyle}padding:48px 32px;text-align:center;color:#fff;">
-          <p style="margin:0 0 12px;font-size:11px;letter-spacing:0.3em;font-weight:900;">${isFamily ? 'FAMILY INVITATION' : 'ELECTRONIC INVITATION'}</p>
-          <h1 style="margin:0 0 8px;font-size:28px;font-weight:900;">${escapeHtml(eventName)}</h1>
-          ${eventDate ? `<p style="margin:0;font-size:14px;opacity:0.9;">${escapeHtml(eventDate)}${eventTime ? ` · ${escapeHtml(eventTime)}` : ''}</p>` : ''}
+      <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="max-width:480px;background:${cardBg};border-radius:24px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,0.12);">
+        <tr><td style="${heroStyle}padding:48px 32px;text-align:center;">
+          <p style="margin:0 0 12px;font-size:11px;letter-spacing:0.3em;font-weight:900;color:${heroMutedColor};">${isFamily ? 'FAMILY INVITATION' : 'ELECTRONIC INVITATION'}</p>
+          <h1 style="margin:0 0 8px;font-size:28px;font-weight:900;color:${heroTextColor};">${escapeHtml(eventName)}</h1>
+          ${eventDate ? `<p style="margin:0;font-size:14px;color:${heroMutedColor};">${escapeHtml(eventDate)}${eventTime ? ` · ${escapeHtml(eventTime)}` : ''}</p>` : ''}
         </td></tr>
-        <tr><td style="padding:32px;text-align:center;color:#1e293b;">
-          <p style="margin:0 0 8px;font-size:14px;color:#64748b;">${isFamily ? '誠意邀請' : '親愛的'}</p>
+        <tr><td style="padding:32px;text-align:center;">
+          <p style="margin:0 0 8px;font-size:14px;color:${cardMuted};">${isFamily ? '誠意邀請' : '親愛的'}</p>
           ${greeting}
-          ${ownerMessage ? `<p style="margin:0 0 24px;font-size:14px;color:#475569;font-style:italic;line-height:1.6;">"${escapeHtml(ownerMessage)}"</p>` : ''}
-          ${venue ? `<p style="margin:0 0 4px;font-size:14px;"><strong style="color:#e11d48;">場地：</strong>${escapeHtml(venue)}</p>` : ''}
-          ${address ? `<p style="margin:0 0 24px;font-size:12px;color:#64748b;">${escapeHtml(address)}</p>` : ''}
-          <div style="margin:24px auto;display:inline-block;background:#eef2ff;border:2px solid #e0e7ff;border-radius:16px;padding:16px;">
+          ${dividerStyle ? `<div style="${dividerStyle}"></div>` : ''}
+          ${ownerMessage ? `<p style="margin:0 0 16px;font-size:14px;color:${cardMuted};font-style:italic;line-height:1.6;">"${escapeHtml(ownerMessage)}"</p>` : ''}
+          ${venue ? `<p style="margin:0 0 4px;font-size:14px;color:${cardText};"><strong style="color:${cardAccent};">場地：</strong>${escapeHtml(venue)}</p>` : ''}
+          ${address ? `<p style="margin:0 0 24px;font-size:12px;color:${cardMuted};">${escapeHtml(address)}</p>` : ''}
+          <div style="margin:24px auto;display:inline-block;background:${cardAccent}15;border:2px solid ${cardAccent}40;border-radius:16px;padding:16px;">
             <img src="cid:invitation-qr-0" alt="QR Code" width="200" height="200" style="display:block;border-radius:8px;" />
-            <p style="margin:8px 0 0;font-size:11px;color:#6366f1;font-family:monospace;">入場請出示此 QR Code</p>
+            <p style="margin:8px 0 0;font-size:11px;color:${cardAccent};font-family:monospace;font-weight:700;">入場請出示此 QR Code</p>
           </div>
-          <a href="{{PRIMARY_QR}}" style="display:inline-block;margin-top:24px;padding:14px 32px;background:#e11d48;color:#fff;text-decoration:none;border-radius:12px;font-weight:700;font-size:14px;">開啟專屬電子喜帖</a>
-          <p style="margin:24px 0 0;font-size:11px;color:#94a3b8;font-family:monospace;">Save The Day</p>
+          <div style="margin:24px 0 8px;">
+            <a href="{{PRIMARY_QR}}" style="display:inline-block;padding:14px 32px;background:${cardAccent};color:#ffffff;text-decoration:none;border-radius:12px;font-weight:700;font-size:14px;">開啟專屬電子喜帖</a>
+          </div>
+          <p style="margin:16px 0 0;font-size:11px;color:${cardMuted};font-family:monospace;">Save The Day</p>
         </td></tr>
       </table>
     </td></tr>
