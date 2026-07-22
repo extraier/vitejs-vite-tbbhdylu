@@ -2234,6 +2234,18 @@ export default function App() {
                 // uninvited vendors.
                 user={user}
                 currentEvent={currentEvent}
+                // 2026-07-22 — back button. Clear currentEvent +
+                // flip view so the couple lands on the events
+                // dashboard (總大堂) and can pick a different
+                // wedding or create a new one.
+                onGoEventsDashboard={() => {
+                  setCurrentEvent(null);
+                  setCurrentView('events-dashboard');
+                  // Reset any active-category selection so the
+                  // dashboard renders cleanly.
+                  setActiveCategory(null);
+                  setActiveVenue('');
+                }}
                 // 2026-07-20 — TrendingVendors click handler. Opens
                 // the vendor profile modal via the existing
                 // viewingVendorProfile state — couples can then

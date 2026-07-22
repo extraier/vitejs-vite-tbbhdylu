@@ -16,6 +16,7 @@ import {
   MessageCircle,
   Calendar as CalendarIcon,
   CalendarDays,
+  ChevronLeft,
 } from 'lucide-react';
 import { TaskComments } from '../components/TaskComments';
 import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
@@ -361,6 +362,9 @@ export function CoupleChecklist({
   // CTA hides when user is null).
   user,
   currentEvent,
+  // 2026-07-22 — Back button callback. Parents pass a handler that
+  // clears currentEvent + resets view to 'events-dashboard'.
+  onGoEventsDashboard,
 }) {
   const progressPercentage = Math.round(
     (tasks.filter((t) => t.isCompleted).length / (tasks.length || 1)) * 100,
@@ -429,7 +433,36 @@ export function CoupleChecklist({
   const [notOnboardedVendor, setNotOnboardedVendor] = useState(null);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mt-8 animate-in slide-in-from-bottom-4 duration-500">
+    <div className="animate-in slide-in-from-bottom-4 duration-500">
+      {/* 2026-07-22 — Sticky back button + project context header.
+          Lives at the top so it's always one tap away no matter
+          how long the checklist scrolls. Shows the current event
+          name on the right so users know which wedding they're
+          in even when they navigated here from a deep link. */}
+      <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200 -mx-4 px-4 py-3 mb-6 shadow-sm">
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => onGoEventsDashboard?.()}
+            disabled={!onGoEventsDashboard}
+            className="flex items-center gap-1 text-sm text-slate-600 hover:text-rose-600 font-bold px-2 py-1.5 -ml-1 rounded-lg hover:bg-rose-50 transition-colors disabled:opacity-50"
+            aria-label="返回 Save The Day · 總大堂"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            返回總大堂
+          </button>
+          {currentEvent?.name && (
+            <div className="flex items-center gap-2 text-sm text-slate-500 truncate">
+              <CalendarIcon className="w-4 h-4 flex-shrink-0 text-slate-400" />
+              <span className="font-bold text-slate-700 truncate">
+                {currentEvent.name}
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
       <section className="lg:col-span-6 flex flex-col gap-4">
             {/* 2026-07-20 — "熱門商戶" strip. Surfaces what's hot
                 RIGHT NOW so couples can discover trending vendors
@@ -737,6 +770,7 @@ export function CoupleChecklist({
           onClose={() => setNotOnboardedVendor(null)}
         />
       )}
+      </div>
     </div>
   );
 }
