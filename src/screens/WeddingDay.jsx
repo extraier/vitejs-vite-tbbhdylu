@@ -1978,7 +1978,11 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
             title="按熱度排序（❤️ 數量）"
           >
             <Flame className="w-4 h-4" />
-            <span className="hidden sm:inline">熱度</span>
+            {/* 2026-07-23 — Show label on mobile. The button is
+                only ~50px tall and there's plenty of horizontal
+                room next to the search input above, so hiding the
+                text was unnecessary compression. */}
+            <span>熱度</span>
           </button>
           <button
             type="button"
@@ -1991,7 +1995,7 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
             title="按自訂順序排序（用 ▲▼ 排列）"
           >
             <GripVertical className="w-4 h-4" />
-            <span className="hidden sm:inline">自訂</span>
+            <span>自訂</span>
           </button>
         </div>
       </div>
