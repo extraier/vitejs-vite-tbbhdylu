@@ -744,5 +744,30 @@ service cloud.firestore {
     match /{document=**} {
       allow read, write: if false;
     }
+
+    // ---- Top-level public collections --------------------------------
+    // The codebase writes to and reads from /jobRequests at the
+    // FIRESTORE TOP LEVEL (collection(db, 'jobRequests') → /jobRequests/*),
+    // not /artifacts/{appId}/jobRequests. The matching rule above
+    // is under /artifacts/{appId} and never matches the actual path,
+    // so direct client reads fall through to the catch-all deny.
+    // Mirroring the rule at the top level makes both reads and
+    // writes work for signed-in users. Writes additionally require
+    // coupleUid == auth.uid so couples can only create posts in
+    // their own name.
+    match /jobRequests/{jobId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.coupleUid == request.auth.uid;
+      allow update, delete: if isSignedIn()
+        && resource.data.coupleUid == request.auth.uid;
+    }
+    match /proposals/{proposalId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isSignedIn()
+        && (resource.data.vendorUid == request.auth.uid
+            || resource.data.coupleUid == request.auth.uid);
+    }
   }
 }
