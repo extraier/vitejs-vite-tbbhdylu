@@ -1949,7 +1949,20 @@ export default function App() {
       }
     } catch (err) {
       console.error('Upload failed:', err);
-      showToast(`❌ ${err.message || '上載失敗，請重試！'}`);
+      // 2026-07-23 — surface the most common cause with a
+      // Chinese hint that matches the user's vocabulary.
+      // "Missing or insufficient permissions" on the photo
+      // addDoc usually means the guestLinks/{auth.uid} doc
+      // has an expired expiresAt (long-lived session, old
+      // share-link token) or the guest's auth.uid changed
+      // since verifyShareToken ran. Re-sign-in via the
+      // share link is the recovery.
+      const isPermError = err?.code === 'permission-denied' ||
+        /Missing or insufficient permissions/i.test(err?.message || '');
+      const hint = isPermError
+        ? '（請重新整理相簿 QR code 連結）'
+        : '';
+      showToast(`❌ ${err.message || '上載失敗，請重試！'}${hint}`);
     } finally {
       setIsUploading(false);
       setUploadProgress(0);
