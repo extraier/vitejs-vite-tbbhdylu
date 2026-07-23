@@ -1973,6 +1973,38 @@ export default function App() {
     }
   };
 
+  // 2026-07-23 — PhotoDrop callbacks. Owners can edit caption /
+  // reactions and delete their own photos. firestore.rules already
+  // permits update+delete by isOwner(ownerUid) so we can write
+  // directly from the client (no Cloud Function needed).
+  const handleUpdatePhoto = async (photoId, patch) => {
+    if (!user?.uid) throw new Error('請先登入');
+    const photoRef = doc(
+      db,
+      'artifacts',
+      appId,
+      'users',
+      user.uid,
+      'photos',
+      photoId,
+    );
+    await updateDoc(photoRef, patch);
+  };
+
+  const handleDeletePhoto = async (photoId) => {
+    if (!user?.uid) throw new Error('請先登入');
+    const photoRef = doc(
+      db,
+      'artifacts',
+      appId,
+      'users',
+      user.uid,
+      'photos',
+      photoId,
+    );
+    await deleteDoc(photoRef);
+  };
+
   const submitProposal = (jobId) => {
     setJobRequests(
       jobRequests.map((j) =>
@@ -2548,8 +2580,12 @@ export default function App() {
                 photos={eventPhotos}
                 storageUsedMB={storageUsedMB}
                 isPremium={isPremium}
+                currentUserUid={user?.uid}
                 onPlaySlideshow={() => setIsFullscreen(true)}
                 onUpgrade={() => setShowUpgradeModal(true)}
+                onUpdatePhoto={handleUpdatePhoto}
+                onDeletePhoto={handleDeletePhoto}
+                onShowToast={showToast}
               />
             )}
 
