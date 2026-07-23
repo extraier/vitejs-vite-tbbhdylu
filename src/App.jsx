@@ -1458,13 +1458,19 @@ export default function App() {
 
   // Restore 2026-07-02: inline edit task cost from CoupleChecklist
   const [editingTaskId, setEditingTaskId] = useState(null);
-  const handleUpdateTaskCost = async (task, newCost) => {
+  // 2026-07-23 — Fixed signature mismatch. TaskCostEditor in
+  // CoupleChecklist calls onSave(task.id, est, act) — three args.
+  // The old signature (task, newCost) only took 2 and ignored the
+  // actual cost, plus `task.id` was a string so `doc(... 'tasks',
+  // undefined)` would either throw a permission error or write to
+  // the wrong path. Now matches the caller: takes (taskId, est, act)
+  // and writes both fields so totals stay correct.
+  const handleUpdateTaskCost = async (taskId, estimatedCost, actualCost) => {
     if (!user) return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id);
+    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
     await updateDoc(taskRef, {
-      estimatedCost: Number(newCost),
-      // If task is already complete, also update actualCost so totals stay consistent
-      ...(task.isCompleted ? { actualCost: Number(newCost) } : {}),
+      estimatedCost: Number(estimatedCost) || 0,
+      actualCost: Number(actualCost) || 0,
     });
     setEditingTaskId(null);
     showToast('✅ 任務金額已更新');
