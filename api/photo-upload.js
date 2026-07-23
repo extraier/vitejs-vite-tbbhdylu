@@ -55,6 +55,12 @@ async function _handler(req, res) {
 
   // Buffer the body, capped at MAX_FORWARD_BYTES. For 25 MB photos
   // this fits comfortably in Vercel serverless memory (1 GB+).
+  //
+  // Vercel's default bodyParser is true and parses application/json
+  // and urlencoded into req.body. For multipart it leaves req as
+  // a stream we can iterate with for-await. However, the NAS server
+  // expects Content-Type with the original boundary string — fetch
+  // reconstructs the boundary when we pass a Buffer.
   let body;
   try {
     const chunks = [];
@@ -75,16 +81,28 @@ async function _handler(req, res) {
     return;
   }
 
+  if (body.length === 0) {
+    res.status(400).json({ error: 'empty body' });
+    return;
+  }
+
   // Forward to NAS. Pass through auth headers — the NAS server
   // verifies the HMAC token and rejects expired/invalid tokens
   // with 401 (same as before).
   const token = String(req.headers['x-upload-token'] || '');
   const expires = String(req.headers['x-upload-expires'] || '');
+  // Preserve the original multipart Content-Type so the boundary
+  // matches what the client sent. Without this, the NAS can't
+  // parse the multipart body and returns "expected multipart/
+  // form-data" because our forwarded Content-Type doesn't have
+  // a boundary parameter.
+  const contentType = String(req.headers['content-type'] || '');
 
   // eslint-disable-next-line no-console
   console.log('[photo-upload] forwarding', {
     bytes: body.length,
     tokenLen: token.length,
+    contentType: contentType.slice(0, 60),
     nasHost: new URL(NAS_UPLOAD_URL).host,
   });
 
@@ -93,7 +111,7 @@ async function _handler(req, res) {
     upstream = await fetch(NAS_UPLOAD_URL, {
       method: 'POST',
       headers: {
-        // Don't set Content-Type — fetch will add multipart boundary.
+        'Content-Type': contentType,
         'X-Upload-Token': token,
         'X-Upload-Expires': expires,
       },
