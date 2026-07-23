@@ -25,12 +25,36 @@ const NAS_UPLOAD_URL =
 const MAX_FORWARD_BYTES = 25 * 1024 * 1024;
 
 export default async function handler(req, res) {
+  // Top-level safety net. If anything below throws, log it AND
+  // respond — so we get a real error body instead of Cloudflare's
+  // generic "error code: 502".
+  try {
+    return await _handler(req, res);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[photo-upload] FATAL:', err);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: `Internal error: ${err && err.message ? err.message : String(err)}`,
+      });
+    }
+  }
+}
+
+async function _handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
     'Content-Type, X-Upload-Token, X-Upload-Expires',
   );
+
+  // eslint-disable-next-line no-console
+  console.log('[photo-upload] hit', {
+    method: req.method,
+    contentType: req.headers['content-type'],
+    contentLength: req.headers['content-length'],
+  });
 
   if (req.method === 'OPTIONS') {
     res.status(204).end();
