@@ -295,42 +295,61 @@ export function VendorDashboard({
           </div>
         )}
       </div>
-      <div className="bg-slate-900 rounded-2xl p-8 text-white mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold flex items-center gap-3">
-            <Briefcase className="w-7 h-7 text-emerald-400" /> 商戶接單大堂 (Vendor Board)
+      <div className="bg-slate-900 rounded-2xl p-5 md:p-8 text-white mb-8 flex flex-col md:flex-row md:justify-between md:items-center gap-4">
+        <div className="min-w-0 flex-1">
+          {/* 2026-07-23 — Mobile-friendly header.
+              Previously the title wrapped to "商戶接單大堂\n(Vendor
+              Board)" on narrow viewports because (Vendor Board) was
+              inline with the Chinese title. On mobile we now show
+              the Chinese-only version; the English translation
+              appears on sm+ where there's room. The Briefcase icon
+              also gets whitespace-nowrap so the icon + first
+              character never separate. */}
+          <h2 className="text-xl md:text-2xl font-bold flex items-center gap-2 md:gap-3">
+            <Briefcase className="w-6 h-6 md:w-7 md:h-7 text-emerald-400 flex-shrink-0" />
+            <span className="whitespace-nowrap md:hidden">商戶接單大堂</span>
+            <span className="hidden md:inline whitespace-nowrap">商戶接單大堂 (Vendor Board)</span>
           </h2>
           <p className="text-slate-400 mt-2 text-sm">
             瀏覽全港新人發佈的急切要求，主動發送報價單發掘潛在客源。
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full md:w-auto min-w-0">
           {onManageProfile && (
             <button
               type="button"
               onClick={onManageProfile}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl flex items-center gap-2 transition-colors"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2.5 rounded-xl flex items-center justify-center gap-2 transition-colors whitespace-nowrap flex-shrink-0"
             >
-              <Settings className="w-4 h-4" /> 管理專頁
+              <Settings className="w-4 h-4 flex-shrink-0" />
+              <span>管理專頁</span>
             </button>
           )}
           {onLogout && (
             <button
               type="button"
               onClick={onLogout}
-              className="bg-slate-700 hover:bg-slate-800 text-white font-bold px-4 py-2 rounded-xl flex items-center gap-2 transition-colors border border-slate-600"
+              className="bg-slate-700 hover:bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl flex items-center justify-center gap-2 transition-colors border border-slate-600 whitespace-nowrap flex-shrink-0"
               title="登出商戶帳號"
             >
-              <LogOut className="w-4 h-4" /> 登出
+              <LogOut className="w-4 h-4 flex-shrink-0" />
+              <span>登出</span>
             </button>
           )}
-          <div className="bg-slate-800/80 backdrop-blur px-5 py-3 rounded-xl border border-slate-700">
+          {/* Vendor name card — on mobile it goes full-width below
+              the buttons; on sm+ it sits inline. min-w-0 lets it
+              truncate instead of pushing the buttons off-screen. */}
+          <div className="bg-slate-800/80 backdrop-blur px-4 py-3 rounded-xl border border-slate-700 min-w-0 flex-1 sm:flex-initial">
             <div className="text-xs text-slate-400 mb-0.5">當前登入商戶：</div>
-            <div className="font-bold text-emerald-400 text-lg" data-testid="vendor-name">
+            <div
+              className="font-bold text-emerald-400 text-base md:text-lg truncate"
+              data-testid="vendor-name"
+              title={vendorName}
+            >
               {vendorName}
             </div>
             {categoryLabel && (
-              <div className="text-xs text-slate-400 mt-0.5">{categoryLabel}</div>
+              <div className="text-xs text-slate-400 mt-0.5 truncate">{categoryLabel}</div>
             )}
           </div>
         </div>
