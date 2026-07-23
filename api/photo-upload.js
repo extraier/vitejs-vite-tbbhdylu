@@ -39,8 +39,13 @@ const MAX_FORWARD_BYTES = 25 * 1024 * 1024; // 25 MB hard limit, mirrors the NAS
 
 export const config = {
   api: {
-    bodyParser: false, // we stream the multipart body ourselves
-    sizeLimit: '26mb', // leave headroom over MAX_FORWARD_BYTES for form fields
+    // bodyParser:false lets us read req as a stream of raw bytes.
+    // With bodyParser:true Vercel tries to JSON-parse the body,
+    // which fails on multipart and throws before our handler runs
+    // (which is why the 502 came back as "error code: 502" with
+    // an empty body — Vercel's default error page).
+    bodyParser: false,
+    sizeLimit: '26mb',
   },
 };
 
@@ -60,10 +65,10 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Read the body as a buffer (Vercel hobby plan's bodyParser:false
-  // gives us req as a stream). For 25 MB photos, buffering in
-  // memory is fine — Vercel serverless functions have ~1 GB RAM.
-  // For larger payloads, swap this for a streamed pipe.
+  // Stream-read the raw multipart body. With bodyParser:false, Vercel
+  // leaves req as a readable stream that we can consume chunk-by-chunk.
+  // We cap at MAX_FORWARD_BYTES to prevent OOM on huge uploads (NAS
+  // server has its own size cap; this matches it).
   try {
     const chunks = [];
     let totalBytes = 0;
@@ -84,10 +89,19 @@ export default async function handler(req, res) {
     // with 401 (same as before).
     const token = req.headers['x-upload-token'] || '';
     const expires = req.headers['x-upload-expires'] || '';
+
+    // eslint-disable-next-line no-console
+    console.log('[photo-upload] forwarding', {
+      bytes: body.length,
+      tokenLen: String(token).length,
+      nasUrl: NAS_UPLOAD_URL,
+    });
+
     const upstream = await fetch(NAS_UPLOAD_URL, {
       method: 'POST',
       headers: {
-        // Let fetch auto-set Content-Type with the boundary
+        // Don't set Content-Type — fetch will add the multipart boundary
+        // automatically when body is a Buffer.
         'X-Upload-Token': String(token),
         'X-Upload-Expires': String(expires),
       },
@@ -95,6 +109,12 @@ export default async function handler(req, res) {
     });
 
     const responseText = await upstream.text();
+    // eslint-disable-next-line no-console
+    console.log('[photo-upload] upstream response', {
+      status: upstream.status,
+      bytes: responseText.length,
+      preview: responseText.slice(0, 200),
+    });
     // Try to forward the JSON body if the NAS responded with one
     try {
       const json = JSON.parse(responseText);
@@ -104,9 +124,6 @@ export default async function handler(req, res) {
       res.status(upstream.status).send(responseText);
     }
   } catch (err) {
-    // 2026-07-23 — log to Vercel's function logs so we can
-    // diagnose CORS-replacement failures without needing a
-    // browser-side log export.
     // eslint-disable-next-line no-console
     console.error('[photo-upload] forward failed:', err);
     const msg = err instanceof Error ? err.message : String(err);
