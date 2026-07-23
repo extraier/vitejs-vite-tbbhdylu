@@ -1929,24 +1929,42 @@ export default function App() {
     }
   };
 
-  const handleJobSubmit = (e) => {
+  const handleJobSubmit = async (e) => {
     e.preventDefault();
     if (!newJobForm.budget) return;
-    const newJob = {
-      id: `job-${Date.now()}`,
-      coupleName: currentEvent?.name || '新人',
-      weddingDate: currentEvent?.date || '',
-      serviceNeeded: newJobForm.serviceNeeded,
-      venues: newJobForm.venueInput ? newJobForm.venueInput.split(',').map((v) => v.trim()) : [],
-      budget: newJobForm.budget,
-      details: newJobForm.details,
-      status: 'open',
-      proposalsCount: 0,
-      postedAt: '剛剛',
-    };
-    setJobRequests([newJob, ...jobRequests]);
-    setNewJobForm({ serviceNeeded: '場地佈置', venueInput: '', budget: '', details: '' });
-    showToast('✅ 求救 Post 已成功發佈！');
+    // 2026-07-23 — Write to Firestore, not just local state.
+    // Previously this only updated the in-memory `jobRequests`
+    // array, which the owner's screen reads. But vendors query
+    // `liveJobRequests` from the /jobRequests collection, so
+    // they would never see posts that only lived in the owner's
+    // React state. Now we addDoc() to the public collection,
+    // and the live query automatically picks it up.
+    //
+    // Field shape matches firestore.rules match /jobRequests:
+    //   coupleUid == request.auth.uid is the only auth gate on
+    //   create. Timestamps + postedAt are added for sorting/UX.
+    try {
+      await addDoc(collection(db, 'jobRequests'), {
+        coupleUid: user.uid,
+        coupleName: currentEvent?.name || '新人',
+        weddingDate: currentEvent?.date || '',
+        serviceNeeded: newJobForm.serviceNeeded,
+        venues: newJobForm.venueInput
+          ? newJobForm.venueInput.split(',').map((v) => v.trim()).filter(Boolean)
+          : [],
+        budget: newJobForm.budget,
+        details: newJobForm.details,
+        status: 'open',
+        proposalsCount: 0,
+        postedAt: '剛剛',
+        createdAt: Date.now(),
+      });
+      setNewJobForm({ serviceNeeded: '場地佈置', venueInput: '', budget: '', details: '' });
+      showToast('✅ 求救 Post 已成功發佈！');
+    } catch (err) {
+      console.error('[handleJobSubmit] failed:', err);
+      showToast(`❌ 發佈失敗：${err?.message || '未知錯誤'}`);
+    }
   };
 
   const submitProposal = (jobId) => {
@@ -2569,7 +2587,17 @@ export default function App() {
 
             {userRole === 'owner' && currentEvent && currentView === 'couple-jobboard' && (
               <CoupleJobBoard
-                jobRequests={jobRequests}
+                // 2026-07-23 — Read from live Firestore query, not
+                // local React state. Previously the job was only
+                // added to `jobRequests` (in-memory); vendors query
+                // `liveJobRequests` and never saw it. Now we write
+                // directly to Firestore, and the owner reads from
+                // the same live query so both views stay in sync.
+                // Filter to the current couple's own posts so a
+                // shared-rules visitor doesn't see someone else's.
+                jobRequests={(liveJobRequests || []).filter(
+                  (j) => !user?.uid || j.coupleUid === user.uid,
+                )}
                 newJobForm={newJobForm}
                 onNewJobFormChange={setNewJobForm}
                 onSubmitJob={handleJobSubmit}
