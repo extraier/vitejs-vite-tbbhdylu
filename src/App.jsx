@@ -2151,9 +2151,19 @@ export default function App() {
           {currentEvent && (
             <header className="bg-white shadow-sm sticky top-0 z-40 border-b border-slate-200">
               <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div className="flex justify-between items-center py-4">
+                <div className="flex justify-between items-center py-4 gap-2">
+                  {/* 2026-07-23 — Mobile-friendly header.
+                      The logo previously wrapped to 3 lines because the
+                      "Save The Day" text was inline with the heart icon
+                      and the 主控台 badge, and there was no min-w-0 on the
+                      container so siblings squeezed it. On mobile we now
+                      show just the heart icon (the brand is recognizable
+                      by shape alone). The 主控台 badge is hidden on mobile
+                      because it's redundant when there's only one view
+                      anyway — tapping the heart goes to the role's
+                      landing. */}
                   <h1
-                    className="text-xl font-black text-slate-800 flex items-center gap-2 cursor-pointer"
+                    className="flex items-center gap-2 cursor-pointer min-w-0 flex-shrink-0"
                     onClick={() => {
                       // From outside a project, this navigates to the
                       // dashboard (no event → renders the picker).
@@ -2170,12 +2180,15 @@ export default function App() {
                       else setCurrentView('couple-checklist');
                     }}
                   >
-                    <Heart className="w-6 h-6 fill-rose-500 text-rose-500" /> Save The Day
-                    <span className="text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded ml-2">
+                    <Heart className="w-6 h-6 fill-rose-500 text-rose-500 flex-shrink-0" />
+                    <span className="hidden sm:inline text-xl font-black text-slate-800 whitespace-nowrap">
+                      Save The Day
+                    </span>
+                    <span className="hidden sm:inline-flex text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded ml-2">
                       主控台
                     </span>
                   </h1>
-                  <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2 sm:gap-4 min-w-0">
                     {/* 2026-07-15 — inbox icon with unread badge.
                         Visible to owners + vendors (not reception/
                         guest_portal). Click navigates to the inbox. */}
@@ -2185,7 +2198,7 @@ export default function App() {
                           setSelectedInquiry(null);
                           setCurrentView('inbox');
                         }}
-                        className="relative text-slate-600 hover:text-slate-800 p-2 rounded-lg hover:bg-slate-100 transition-colors"
+                        className="relative text-slate-600 hover:text-slate-800 p-2 rounded-lg hover:bg-slate-100 transition-colors flex-shrink-0"
                         title="訊息收件匣"
                       >
                         <MessageCircle className="w-5 h-5" />
@@ -2196,16 +2209,23 @@ export default function App() {
                         )}
                       </button>
                     )}
-                    <div className="text-sm font-bold text-slate-800 bg-rose-50 px-3 py-1 rounded-lg border border-rose-100">
+                    {/* Event name chip — truncates on mobile so it
+                        doesn't push other buttons off-screen. */}
+                    <div
+                      className="text-sm font-bold text-slate-800 bg-rose-50 px-2 sm:px-3 py-1 rounded-lg border border-rose-100 truncate max-w-[100px] sm:max-w-[180px] min-w-0"
+                      title={currentEvent.name}
+                    >
                       {currentEvent.name}
                     </div>
                     {userRole === 'owner' && (
                       <button
                         onClick={() => setShowHelperManager(true)}
-                        className="flex items-center gap-1 text-sm font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-lg border border-indigo-200 transition-colors"
+                        className="flex items-center gap-1 text-sm font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-2 sm:px-3 py-1.5 rounded-lg border border-indigo-200 transition-colors flex-shrink-0"
                         title="管理兄弟姊妹 (邀請、權限、撤銷)"
+                        aria-label="管理兄弟姊妹"
                       >
-                        <Users className="w-4 h-4" /> 兄弟姊妹
+                        <Users className="w-4 h-4" />
+                        <span className="hidden sm:inline">兄弟姊妹</span>
                       </button>
                     )}
                     {/* 2026-07-19 — helper pill: visible whenever the
@@ -2219,14 +2239,15 @@ export default function App() {
                           setUserRole('helper');
                           setCurrentView('helper-dashboard');
                         }}
-                        className={`flex items-center gap-1 text-sm font-bold px-3 py-1.5 rounded-lg border transition-colors ${
+                        className={`flex items-center gap-1 text-sm font-bold px-2 sm:px-3 py-1.5 rounded-lg border transition-colors flex-shrink-0 ${
                           userRole === 'helper'
                             ? 'text-amber-700 bg-amber-100 border-amber-300'
                             : 'text-amber-700 bg-amber-50 hover:bg-amber-100 border-amber-200'
                         }`}
                         title="切換到助手控制台"
+                        aria-label="助手控制台"
                       >
-                        🤝 助手控制台
+                        🤝<span className="hidden sm:inline ml-1">助手控制台</span>
                       </button>
                     )}
                     {/* 2026-07-22 — Back-to-總大堂 button. Lives in
@@ -2247,7 +2268,7 @@ export default function App() {
                           setActiveCategory(null);
                           setActiveVenue('');
                         }}
-                        className="flex items-center gap-1 text-sm font-bold text-rose-700 hover:text-rose-900 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg border border-rose-200 transition-colors"
+                        className="flex items-center gap-1 text-sm font-bold text-rose-700 hover:text-rose-900 bg-rose-50 hover:bg-rose-100 px-2 sm:px-3 py-1.5 rounded-lg border border-rose-200 transition-colors flex-shrink-0"
                         title="返回 Save The Day · 總大堂"
                         aria-label="返回 Save The Day · 總大堂"
                       >
@@ -2257,8 +2278,9 @@ export default function App() {
                     )}
                     <button
                       onClick={handleLogout}
-                      className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 transition-colors"
+                      className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-200 transition-colors flex-shrink-0"
                       title="登出"
+                      aria-label="登出"
                     >
                       <LogOut className="w-4 h-4" />
                       <span className="hidden sm:inline">登出</span>
