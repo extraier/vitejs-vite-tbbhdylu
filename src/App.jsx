@@ -1915,15 +1915,38 @@ export default function App() {
       // PhotoDrop screen can render it (uses onSnapshot for live updates).
       // thumbnailUrl is the smaller 256px version — the gallery uses it so
       // guests on slow wifi don't have to download full 4-8 MB phone photos.
-      await addDoc(collection(db, 'artifacts', appId, 'users', targetUid, 'photos'), {
-        eventId: currentEvent.id,
-        url,
-        thumbnailUrl: thumbnailUrl || url,  // fall back to full URL for legacy photos
-        uploaderId: activeGuestPortal.guestId,
-        uploaderName: activeGuestPortal.name,
-        createdAt: Date.now(),
-      });
-      showToast('📸 相片已成功上載至大螢幕！');
+      // 2026-07-23 — Firestore rule check requires eventId to match the
+      // guestLinks/{auth.uid} doc's eventId. We log targetUid/eventId/auth
+      // state on permission errors so we can diagnose mismatches without
+      // another round-trip.
+      try {
+        await addDoc(collection(db, 'artifacts', appId, 'users', targetUid, 'photos'), {
+          eventId: currentEvent.id,
+          url,
+          thumbnailUrl: thumbnailUrl || url,  // fall back to full URL for legacy photos
+          uploaderId: activeGuestPortal.guestId,
+          uploaderName: activeGuestPortal.name,
+          createdAt: Date.now(),
+        });
+        showToast('📸 相片已成功上載至大螢幕！');
+      } catch (firestoreErr) {
+        // 2026-07-23 — surface diagnostic context for the
+        // "Missing or insufficient permissions" case. The most
+        // common cause is a guestLink with an expired expiresAt
+        // or an eventId mismatch between the link and the photo.
+        // eslint-disable-next-line no-console
+        console.error('[photo-upload] firestore write failed:', {
+          code: firestoreErr?.code,
+          message: firestoreErr?.message,
+          targetUid,
+          eventId: currentEvent.id,
+          authUid: auth.currentUser?.uid,
+          isGuestMode: guest.isGuestMode,
+          qEvent: guest.qEvent,
+          qGuest: guest.qGuest,
+        });
+        throw firestoreErr;
+      }
     } catch (err) {
       console.error('Upload failed:', err);
       showToast(`❌ ${err.message || '上載失敗，請重試！'}`);
