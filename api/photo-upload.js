@@ -37,18 +37,6 @@ const NAS_UPLOAD_URL =
   'https://cdn.savetheday.io/upload';
 const MAX_FORWARD_BYTES = 25 * 1024 * 1024; // 25 MB hard limit, mirrors the NAS server
 
-export const config = {
-  api: {
-    // bodyParser:false lets us read req as a stream of raw bytes.
-    // With bodyParser:true Vercel tries to JSON-parse the body,
-    // which fails on multipart and throws before our handler runs
-    // (which is why the 502 came back as "error code: 502" with
-    // an empty body — Vercel's default error page).
-    bodyParser: false,
-    sizeLimit: '26mb',
-  },
-};
-
 export default async function handler(req, res) {
   // Same-origin so CORS isn't needed, but Vercel preview deploys
   // and local dev sometimes hit this from a different origin.
@@ -65,7 +53,18 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Stream-read the raw multipart body. With bodyParser:false, Vercel
+  // Vercel's default config: bodyParser:true parses application/json
+  // and urlencoded into req.body, but for multipart it leaves the
+  // raw stream on req (which we consume via for-await). The 502
+  // error we were seeing was caused by `export const config = {
+  // api: { bodyParser: false, sizeLimit: '26mb' } }` — that export
+  // is the legacy Pages-Router API and Vercel's newer routing doesn't
+  // recognize it; the function crashed before our handler ran.
+  //
+  // We just read the stream directly. The size limit is enforced
+  // by checking accumulated chunk bytes below.
+
+  // Stream-read the raw multipart body. With default config, Vercel
   // leaves req as a readable stream that we can consume chunk-by-chunk.
   // We cap at MAX_FORWARD_BYTES to prevent OOM on huge uploads (NAS
   // server has its own size cap; this matches it).
