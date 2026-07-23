@@ -1,22 +1,25 @@
-// Upload a photo to the NAS via Tailscale Funnel.
+// Upload a photo via the Vercel /api/photo-upload proxy.
 //
-// Replaces Firebase Storage for guest photo uploads. The URL is read from
-// VITE_NAS_UPLOAD_URL at build time (see .env.example). When unset, this
-// throws a clear error — the caller (App.jsx) catches it and shows a toast.
+// Why proxy through Vercel instead of going direct to the NAS?
+// The NAS endpoint (cdn.savetheday.io/upload) doesn't return CORS
+// headers for savetheday.io, so the browser preflight (OPTIONS) is
+// blocked and the actual POST never fires. Routing through Vercel
+// sidesteps CORS entirely (same-origin from the browser's POV),
+// and the proxy streams to the NAS server-to-server where CORS
+// doesn't apply.
 //
-// Security (Hermes 2026-06-25): every upload is signed with HMAC-SHA256
-// over (eventId|guestId|expiresAt). The server rejects expired or tampered
-// tokens with 401, and rejects files whose magic bytes don't match the
-// declared content type. The shared secret is bundled into the public JS —
-// acceptable for a wedding app with 5-minute TTL, like a Stripe publishable key.
-//
-// Returns the public URL of the uploaded photo (e.g. https://<funnel>/photos/<event>/<guest>/<file>.jpg)
-// which is then stored in Firestore's photos collection so the new owner's
-// PhotoDrop gallery can display it.
+// 2026-07-23 — switched from direct NAS POST to /api/photo-upload.
+// The HMAC token is still minted client-side and forwarded as
+// the X-Upload-Token header so the NAS server's auth check is
+// unchanged. The progress events still work because XHR measures
+// the browser→Vercel leg, which is the bulk of the upload time.
 
 const NAS_UPLOAD_URL = import.meta.env.VITE_NAS_UPLOAD_URL || '';
 const NAS_UPLOAD_SECRET = import.meta.env.VITE_NAS_UPLOAD_SECRET || '';
 const TOKEN_TTL_MS = 5 * 60 * 1000; // 5 minutes — server enforces this
+
+// Same-origin proxy URL. Empty string falls back to direct NAS (legacy).
+const PROXY_URL = '/api/photo-upload';
 
 type UploadArgs = {
   file: File;
@@ -67,11 +70,9 @@ export function uploadPhotoToNas({
   uploaderName,
   onProgress,
 }: UploadArgs): Promise<UploadResult> {
-  if (!NAS_UPLOAD_URL) {
-    return Promise.reject(
-      new Error('VITE_NAS_UPLOAD_URL 未設定，請聯絡管理員'),
-    );
-  }
+  // The NAS URL is no longer needed in the client bundle — the proxy
+  // (/api/photo-upload) forwards to it server-side. We still need the
+  // HMAC secret to mint the upload token, since that's done client-side.
   if (!NAS_UPLOAD_SECRET) {
     return Promise.reject(
       new Error('VITE_NAS_UPLOAD_SECRET 未設定，請聯絡管理員'),
@@ -94,9 +95,13 @@ export function uploadPhotoToNas({
 
       // Use XHR instead of fetch so we can report upload progress (fetch can't
       // until the Streams API stabilizes for upload bodies).
+      //
+      // POST goes to /api/photo-upload (Vercel proxy), not the NAS directly,
+      // to bypass the NAS's missing CORS headers. The proxy forwards the
+      // multipart body + X-Upload-Token to cdn.savetheday.io/upload.
       return new Promise<UploadResult>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', NAS_UPLOAD_URL, true);
+        xhr.open('POST', PROXY_URL, true);
         xhr.setRequestHeader('X-Upload-Token', token);
         xhr.setRequestHeader('X-Upload-Expires', String(expiresMs));
 
@@ -145,7 +150,7 @@ export function uploadPhotoToNas({
           }
         };
 
-        xhr.onerror = () => reject(new Error('網絡錯誤，請檢查連線'));
+        xhr.onerror = () => reject(new Error('網絡錯誤，請檢查連線或稍後再試'));
         xhr.ontimeout = () => reject(new Error('上載逾時，請重試'));
         xhr.timeout = 60_000; // 60s for slow phone uploads
 

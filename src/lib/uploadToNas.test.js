@@ -109,7 +109,9 @@ describe('uploadToNas', () => {
 
     expect(xhr).not.toBeNull();
     expect(xhr.method).toBe('POST');
-    expect(xhr.url).toBe('http://localhost:9879/upload');
+    // 2026-07-23 — POST goes to /api/photo-upload (Vercel proxy),
+    // not the NAS directly. The proxy forwards to the NAS server-side.
+    expect(xhr.url).toBe('/api/photo-upload');
     expect(xhr.headers['X-Upload-Token']).toMatch(/^[0-9a-f]{64}$/);
     const expires = parseInt(xhr.headers['X-Upload-Expires'], 10);
     expect(expires).toBeGreaterThan(Date.now());
@@ -285,11 +287,34 @@ describe('uploadToNas', () => {
 });
 
 describe('configured constants', () => {
+  // Same beforeEach as the main describe — without resetting
+  // FakeXHR._lastInstance, tests get the previous test's XHR.
+  beforeEach(() => {
+    FakeXHR._lastInstance = null;
+  });
+
   test('NAS_UPLOAD_CONFIGURED is true when both env vars are set', () => {
     expect(NAS_UPLOAD_CONFIGURED).toBe(true);
   });
 
   test('NAS_UPLOAD_URL_VALUE exposes the URL', () => {
+    // 2026-07-23 — kept as a config introspection helper, but
+    // uploadToNas now POSTs to /api/photo-upload (the Vercel
+    // proxy). NAS_UPLOAD_URL_VALUE still exists for debugging
+    // (e.g. logging the configured NAS endpoint). The proxy
+    // uses an env var on the server, not the client bundle.
     expect(NAS_UPLOAD_URL_VALUE).toBe('http://localhost:9879/upload');
+  });
+
+  test('posts to /api/photo-upload proxy (not direct NAS URL)', async () => {
+    // The proxy exists to bypass CORS on the NAS endpoint.
+    // If this test ever sees the raw NAS URL leak through,
+    // the browser preflight will start failing again.
+    const file = new File(['hello'], 'a.jpg', { type: 'image/jpeg' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const xhr = await waitForXhr();
+    expect(xhr.url).toBe('/api/photo-upload');
+    xhr._respond(200, { url: 'http://example.com/x.jpg', bytes: 5 });
+    await p;
   });
 });
