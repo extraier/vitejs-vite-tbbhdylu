@@ -2445,6 +2445,7 @@ export default function App() {
                 totalSpent={totalSpent}
                 canEdit={userRole === 'owner'}
                 onSaveBudget={handleSaveBudget}
+                onToggleTask={toggleTask}
                 onSelectTask={(taskId) => {
                   setCurrentView('couple-checklist');
                 }}

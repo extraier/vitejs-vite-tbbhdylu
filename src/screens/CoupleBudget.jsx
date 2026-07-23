@@ -2,7 +2,7 @@ import { Wallet, PieChart, CheckCircle2, Circle, Pencil, Save, X, ExternalLink }
 import { useState, useEffect, useRef } from 'react';
 import { formatMoney } from '../lib/format';
 
-export function CoupleBudget({ tasks, totalBudget, totalSpent, canEdit = false, onSaveBudget, onSelectTask }) {
+export function CoupleBudget({ tasks, totalBudget, totalSpent, canEdit = false, onSaveBudget, onSelectTask, onToggleTask }) {
   const totalRemaining = totalBudget - totalSpent;
   const budgetPercentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
 
@@ -55,6 +55,8 @@ export function CoupleBudget({ tasks, totalBudget, totalSpent, canEdit = false, 
               <BudgetItemRow
                 key={task.id}
                 task={task}
+                canEdit={canEdit}
+                onToggle={onToggleTask}
                 onSelect={() => onSelectTask && onSelectTask(task.id)}
               />
             ))}
@@ -211,26 +213,65 @@ function EditableBudgetCard({ value, onSave }) {
   );
 }
 
-function BudgetItemRow({ task, onSelect }) {
-  const clickable = typeof onSelect === 'function';
+/**
+ * BudgetItemRow — one row in the budget list.
+ *
+ * 2026-07-23 — Made the status circle clickable so owners can flip
+ * a task between 籌備中 (預算) and 已確認 (已付款) without leaving the
+ * budget screen. Previously the entire row was a single button that
+ * navigated to the checklist, forcing a context switch just to mark
+ * something complete. Now:
+ *   - Click the circle (or anywhere on the title/amount area): toggle
+ *     completed status (only when canEdit + onToggle provided)
+ *   - Click anywhere else: navigate to the task detail (onSelect)
+ *
+ * Visual cue: the row only shows the external-link icon on hover when
+ * there's an onSelect handler, so users discover the click affordance.
+ */
+function BudgetItemRow({ task, canEdit, onToggle, onSelect }) {
+  const canNavigate = typeof onSelect === 'function';
+  const canToggle = canEdit && typeof onToggle === 'function';
+
+  const handleToggle = (e) => {
+    e.stopPropagation(); // don't bubble to row click → navigate
+    onToggle?.(task, e);
+  };
+
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={!clickable}
-      title={clickable ? '前往任務清單編輯金額' : undefined}
+    <div
+      role={canNavigate ? 'button' : undefined}
+      onClick={canNavigate ? onSelect : undefined}
+      title={canNavigate ? '前往任務清單編輯金額' : undefined}
       className={`w-full text-left grid grid-cols-1 sm:grid-cols-12 gap-2 sm:gap-4 p-4 bg-white items-center transition-colors group ${
-        clickable ? 'hover:bg-rose-50/40 cursor-pointer' : ''
+        canNavigate ? 'hover:bg-rose-50/40 cursor-pointer' : ''
       }`}
     >
       <div className="sm:col-span-6 flex items-center gap-3">
-        {task.isCompleted ? (
+        {canToggle ? (
+          <button
+            type="button"
+            onClick={handleToggle}
+            className={`flex-shrink-0 rounded-full p-0.5 transition-colors ${
+              task.isCompleted
+                ? 'hover:bg-green-100'
+                : 'hover:bg-amber-100'
+            }`}
+            title={task.isCompleted ? '點擊改回籌備中' : '點擊標記為已確認（已付款）'}
+            aria-label={task.isCompleted ? '取消完成' : '標記完成'}
+          >
+            {task.isCompleted ? (
+              <CheckCircle2 className="w-5 h-5 text-green-500" />
+            ) : (
+              <Circle className="w-5 h-5 text-amber-400" />
+            )}
+          </button>
+        ) : task.isCompleted ? (
           <CheckCircle2 className="w-5 h-5 text-green-500 flex-shrink-0" />
         ) : (
           <Circle className="w-5 h-5 text-amber-400 flex-shrink-0" />
         )}
         <div className="font-bold text-slate-800 truncate">{task.title}</div>
-        {clickable && (
+        {canNavigate && (
           <ExternalLink className="w-3.5 h-3.5 text-slate-300 group-hover:text-rose-500 transition-colors flex-shrink-0" />
         )}
       </div>
@@ -252,7 +293,7 @@ function BudgetItemRow({ task, onSelect }) {
           <span className="text-slate-400">{formatMoney(task.estimatedCost)}</span>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 
