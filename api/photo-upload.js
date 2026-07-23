@@ -1,48 +1,36 @@
 // Vercel serverless function — proxy for photo uploads to the NAS.
 //
 // Why this exists:
-// The NAS photo upload endpoint (https://cdn.savetheday.io/upload)
-// doesn't return CORS headers for the savetheday.io origin. Browser
-// preflight (OPTIONS) gets blocked with "No Access-Control-Allow-
-// Origin header" and the XHR never reaches the POST.
+// The NAS upload endpoint (cdn.savetheday.io/upload) doesn't return
+// CORS headers for savetheday.io, so the browser preflight (OPTIONS)
+// is blocked and the actual POST never fires. Routing through Vercel
+// sidesteps CORS entirely (same-origin from the browser's POV), and
+// the proxy streams to the NAS server-to-server where CORS doesn't
+// apply.
 //
-// Routing through Vercel sidesteps CORS entirely:
-//   1. Browser → POST /api/photo-upload (same-origin, no preflight)
-//   2. Vercel  → POST https://cdn.savetheday.io/upload
-//                (server-to-server, no preflight)
+// 2026-07-23 — refactored after two failed attempts (502 from
+// Cloudflare). Root cause was an `export const config` block that
+// triggered Vercel's legacy Pages-Router config code path. Removed.
+// Now using the simplest possible Vercel default-config handler.
 //
-// The browser XHR's progress events still work — they're measured
-// client→Vercel, and the file is streamed through without buffering
-// to disk (multipart streaming via fetch + duplex: 'half' in
-// Node 18+).
-//
-// Input:
-//   - multipart/form-data with:
-//       file: the photo binary
-//       eventId, guestId, uploaderName: as form fields
-//   - Headers:
-//       X-Upload-Token, X-Upload-Expires: HMAC signed by the client
-//
-// Output:
-//   - 200: { url, thumbnailUrl, bytes }
-//   - 401/413/415/429/507/500: forwarded from NAS with original status
-//   - 502: NAS unreachable / bad response
+// Approach: buffer the multipart body in memory (capped at 25 MB),
+// forward to NAS as a Buffer with X-Upload-Token / X-Upload-Expires
+// headers preserved. Vercel's default bodyParser is fine because
+// we read req as a stream ourselves in the try block.
 
 const NAS_UPLOAD_URL =
-  // Prefer the server-only var (cleaner separation), but fall back to
-  // the client-prefixed VITE_NAS_UPLOAD_URL so we don't need to
-  // duplicate the secret URL in two env slots.
   process.env.NAS_UPLOAD_URL ||
   process.env.VITE_NAS_UPLOAD_URL ||
   'https://cdn.savetheday.io/upload';
-const MAX_FORWARD_BYTES = 25 * 1024 * 1024; // 25 MB hard limit, mirrors the NAS server
+const MAX_FORWARD_BYTES = 25 * 1024 * 1024;
 
 export default async function handler(req, res) {
-  // Same-origin so CORS isn't needed, but Vercel preview deploys
-  // and local dev sometimes hit this from a different origin.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Upload-Token, X-Upload-Expires');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, X-Upload-Token, X-Upload-Expires',
+  );
 
   if (req.method === 'OPTIONS') {
     res.status(204).end();
@@ -53,81 +41,76 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Vercel's default config: bodyParser:true parses application/json
-  // and urlencoded into req.body, but for multipart it leaves the
-  // raw stream on req (which we consume via for-await). The 502
-  // error we were seeing was caused by `export const config = {
-  // api: { bodyParser: false, sizeLimit: '26mb' } }` — that export
-  // is the legacy Pages-Router API and Vercel's newer routing doesn't
-  // recognize it; the function crashed before our handler ran.
-  //
-  // We just read the stream directly. The size limit is enforced
-  // by checking accumulated chunk bytes below.
-
-  // Stream-read the raw multipart body. With default config, Vercel
-  // leaves req as a readable stream that we can consume chunk-by-chunk.
-  // We cap at MAX_FORWARD_BYTES to prevent OOM on huge uploads (NAS
-  // server has its own size cap; this matches it).
+  // Buffer the body, capped at MAX_FORWARD_BYTES. For 25 MB photos
+  // this fits comfortably in Vercel serverless memory (1 GB+).
+  let body;
   try {
     const chunks = [];
-    let totalBytes = 0;
+    let total = 0;
     for await (const chunk of req) {
-      totalBytes += chunk.length;
-      if (totalBytes > MAX_FORWARD_BYTES) {
-        res.status(413).json({
-          error: '相片太大，請壓縮後再上載',
-        });
+      total += chunk.length;
+      if (total > MAX_FORWARD_BYTES) {
+        res.status(413).json({ error: '相片太大，請壓縮後再上載' });
         return;
       }
       chunks.push(chunk);
     }
-    const body = Buffer.concat(chunks);
-
-    // Forward to NAS. Pass through the auth headers — the NAS server
-    // verifies the HMAC token and rejects expired/invalid tokens
-    // with 401 (same as before).
-    const token = req.headers['x-upload-token'] || '';
-    const expires = req.headers['x-upload-expires'] || '';
-
+    body = Buffer.concat(chunks);
+  } catch (err) {
     // eslint-disable-next-line no-console
-    console.log('[photo-upload] forwarding', {
-      bytes: body.length,
-      tokenLen: String(token).length,
-      nasUrl: NAS_UPLOAD_URL,
-    });
+    console.error('[photo-upload] body read failed:', err);
+    res.status(400).json({ error: '無法讀取 request body' });
+    return;
+  }
 
-    const upstream = await fetch(NAS_UPLOAD_URL, {
+  // Forward to NAS. Pass through auth headers — the NAS server
+  // verifies the HMAC token and rejects expired/invalid tokens
+  // with 401 (same as before).
+  const token = String(req.headers['x-upload-token'] || '');
+  const expires = String(req.headers['x-upload-expires'] || '');
+
+  // eslint-disable-next-line no-console
+  console.log('[photo-upload] forwarding', {
+    bytes: body.length,
+    tokenLen: token.length,
+    nasHost: new URL(NAS_UPLOAD_URL).host,
+  });
+
+  let upstream;
+  try {
+    upstream = await fetch(NAS_UPLOAD_URL, {
       method: 'POST',
       headers: {
-        // Don't set Content-Type — fetch will add the multipart boundary
-        // automatically when body is a Buffer.
-        'X-Upload-Token': String(token),
-        'X-Upload-Expires': String(expires),
+        // Don't set Content-Type — fetch will add multipart boundary.
+        'X-Upload-Token': token,
+        'X-Upload-Expires': expires,
       },
       body,
     });
-
-    const responseText = await upstream.text();
-    // eslint-disable-next-line no-console
-    console.log('[photo-upload] upstream response', {
-      status: upstream.status,
-      bytes: responseText.length,
-      preview: responseText.slice(0, 200),
-    });
-    // Try to forward the JSON body if the NAS responded with one
-    try {
-      const json = JSON.parse(responseText);
-      res.status(upstream.status).json(json);
-    } catch {
-      // Not JSON — forward raw text with the upstream status
-      res.status(upstream.status).send(responseText);
-    }
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error('[photo-upload] forward failed:', err);
-    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[photo-upload] fetch to NAS failed:', err);
     res.status(502).json({
-      error: `上載轉發失敗：${msg}`,
+      error: '無法連接到 NAS upload server，請稍後再試',
     });
+    return;
+  }
+
+  const responseText = await upstream.text();
+
+  // eslint-disable-next-line no-console
+  console.log('[photo-upload] upstream', {
+    status: upstream.status,
+    bytes: responseText.length,
+    preview: responseText.slice(0, 200),
+  });
+
+  // Forward the response. If JSON, pass through with the original
+  // status; if not, send raw text.
+  try {
+    const json = JSON.parse(responseText);
+    res.status(upstream.status).json(json);
+  } catch {
+    res.status(upstream.status).send(responseText);
   }
 }
