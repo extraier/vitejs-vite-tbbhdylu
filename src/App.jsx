@@ -1169,11 +1169,17 @@ export default function App() {
     vendorDocRef,
     [user?.uid, userRole],
   );
+  // 2026-07-23 — Run for all signed-in users, not just vendors.
+  // Previously the query was gated on `userRole === 'vendor'`, which
+  // meant couples saw an empty list and couldn't find their own
+  // posts in 我發佈過嘅求救記錄. The couple-side UI filters to
+  // `j.coupleUid === user.uid` itself, so the query result is safe
+  // to share — a couple never sees another couple's posts.
   const { data: liveJobRequests, loading: jobRequestsLoading } = useFirestoreCollection(
-    user && userRole === 'vendor'
+    user
       ? query(collection(db, 'jobRequests'), where('status', '==', 'open'))
       : null,
-    [user?.uid, userRole],
+    [user?.uid],
   );
 
   // Sync current event from URL params when in guest mode
