@@ -155,13 +155,18 @@ service cloud.firestore {
 
         // Photos: owner full access. Guests can create (read-only after).
         // Helpers may read IF canViewPhotos, create IF canUploadPhotos.
+        // 2026-07-23 — owner was missing from the create allow list.
+        // The owner could update/delete (line 173) but couldn't create,
+        // which made the photo-upload flow fail when run from the
+        // owner's own session. Added isOwner(ownerUid) to the OR.
         match /photos/{photoId} {
           allow read: if isOwner(ownerUid)
             || hasValidGuestLink(ownerUid, resource.data.eventId)
             || hasHelperPerm(ownerUid, 'canViewPhotos');
           allow create: if isSignedIn()
             && (
-              (hasValidGuestLink(ownerUid, request.resource.data.eventId)
+              isOwner(ownerUid)
+              || (hasValidGuestLink(ownerUid, request.resource.data.eventId)
                 && request.resource.data.keys().hasAll(['eventId', 'url', 'uploaderId', 'uploaderName', 'createdAt'])
                 && request.resource.data.url is string
                 && request.resource.data.createdAt is number)
