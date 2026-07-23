@@ -1932,32 +1932,32 @@ export default function App() {
   const handleJobSubmit = async (e) => {
     e.preventDefault();
     if (!newJobForm.budget) return;
-    // 2026-07-23 — Write to Firestore, not just local state.
-    // Previously this only updated the in-memory `jobRequests`
-    // array, which the owner's screen reads. But vendors query
-    // `liveJobRequests` from the /jobRequests collection, so
-    // they would never see posts that only lived in the owner's
-    // React state. Now we addDoc() to the public collection,
-    // and the live query automatically picks it up.
+    // 2026-07-23 — Route through the postJobRequest Cloud Function
+    // instead of writing directly to Firestore. The /jobRequests
+    // collection lives at the top level but firestore.rules only
+    // defines a match block under /artifacts/{appId}/jobRequests, so
+    // direct client writes fail with "Missing or insufficient
+    // permissions". The callable uses the Admin SDK (service account)
+    // and bypasses rules entirely.
     //
-    // Field shape matches firestore.rules match /jobRequests:
-    //   coupleUid == request.auth.uid is the only auth gate on
-    //   create. Timestamps + postedAt are added for sorting/UX.
+    // Validation matches what the callable enforces server-side:
+    //   - budget: required string, ≤ 100 chars
+    //   - details: optional string, ≤ 1000 chars
     try {
-      await addDoc(collection(db, 'jobRequests'), {
-        coupleUid: user.uid,
-        coupleName: currentEvent?.name || '新人',
-        weddingDate: currentEvent?.date || '',
+      const venuesArr = newJobForm.venueInput
+        ? newJobForm.venueInput
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean)
+            .slice(0, 20)
+        : [];
+      await callFirebaseFn('postJobRequest', {
         serviceNeeded: newJobForm.serviceNeeded,
-        venues: newJobForm.venueInput
-          ? newJobForm.venueInput.split(',').map((v) => v.trim()).filter(Boolean)
-          : [],
+        venues: venuesArr,
         budget: newJobForm.budget,
         details: newJobForm.details,
-        status: 'open',
-        proposalsCount: 0,
-        postedAt: '剛剛',
-        createdAt: Date.now(),
+        eventName: currentEvent?.name || '',
+        weddingDate: currentEvent?.date || '',
       });
       setNewJobForm({ serviceNeeded: '場地佈置', venueInput: '', budget: '', details: '' });
       showToast('✅ 求救 Post 已成功發佈！');

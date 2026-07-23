@@ -53,6 +53,11 @@ export default async function handler(req, res) {
     'sendInvitations',
     'autoLinkVendorContactsV2',
     'autoLinkVendorContacts',
+    // 2026-07-23 — couples post 徵求報價 via this callable because
+    // direct Firestore writes to /jobRequests hit the catch-all
+    // deny (the rule match is under /artifacts/{appId}/jobRequests
+    // but the collection lives at the top level).
+    'postJobRequest',
     'verifyShareToken',
   ]);
   if (!ALLOWED.has(fnName)) {

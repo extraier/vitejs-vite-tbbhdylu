@@ -908,3 +908,9 @@ export {
   UNLOCK_PRICING,
   UNLOCK_TYPES,
 } from './unlocks';
+
+// 2026-07-23 — public job board callable. Couples post 徵求報價
+// requests through here because the direct Firestore path is
+// blocked by the catch-all deny (see functions/src/jobBoard.ts
+// for the full rationale).
+export { postJobRequest } from './jobBoard';
