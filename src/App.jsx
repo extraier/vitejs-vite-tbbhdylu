@@ -1220,8 +1220,25 @@ export default function App() {
   );
 
   const totalBudget = currentEvent?.budget || 350000;
+  // 2026-07-24 — deduct budget for tasks that are NOT 已確認 (已付款),
+  // not just completed ones. Previously only completed tasks with
+  // actualCost counted, which left the user blind to committed-but-not-
+  // yet-paid amounts (e.g. deposits, vendor quotes). Now we sum:
+  //   - isCompleted tasks: actualCost (what was actually paid)
+  //   - non-completed tasks: estimatedCost (the planned/quoted amount)
+  // Both are still "real money the couple owes" and should reduce the
+  // remaining headroom. We also expose totalPaid and totalCommitted
+  // separately so the budget screen can show both numbers.
   const totalSpent = eventTasks.reduce(
+    (sum, t) => sum + (t.isCompleted ? t.actualCost || 0 : t.estimatedCost || 0),
+    0,
+  );
+  const totalPaid = eventTasks.reduce(
     (sum, t) => sum + (t.isCompleted ? t.actualCost || 0 : 0),
+    0,
+  );
+  const totalCommitted = eventTasks.reduce(
+    (sum, t) => sum + (t.isCompleted ? 0 : t.estimatedCost || 0),
     0,
   );
   const storageUsedMB = eventPhotos.length * 1.5;
@@ -2527,6 +2544,8 @@ export default function App() {
                 tasks={eventTasks}
                 totalBudget={totalBudget}
                 totalSpent={totalSpent}
+                totalPaid={totalPaid}
+                totalCommitted={totalCommitted}
                 canEdit={userRole === 'owner'}
                 onSaveBudget={handleSaveBudget}
                 onToggleTask={toggleTask}

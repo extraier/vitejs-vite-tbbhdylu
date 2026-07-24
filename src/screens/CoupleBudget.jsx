@@ -2,7 +2,22 @@ import { Wallet, PieChart, CheckCircle2, Circle, Pencil, Save, X, ExternalLink }
 import { useState, useEffect, useRef } from 'react';
 import { formatMoney } from '../lib/format';
 
-export function CoupleBudget({ tasks, totalBudget, totalSpent, canEdit = false, onSaveBudget, onSelectTask, onToggleTask }) {
+export function CoupleBudget({
+  tasks,
+  totalBudget,
+  totalSpent,
+  totalPaid = 0,
+  totalCommitted = 0,
+  canEdit = false,
+  onSaveBudget,
+  onSelectTask,
+  onToggleTask,
+}) {
+  // 2026-07-24 — totalSpent is now the sum of actualCost (completed)
+  // + estimatedCost (not completed). totalPaid and totalCommitted are
+  // also passed down so the UI can show the breakdown. The "剩餘可分配"
+  // card was already showing totalBudget - totalSpent, which now
+  // correctly reflects "headroom after planned + paid amounts".
   const totalRemaining = totalBudget - totalSpent;
   const budgetPercentage = totalBudget > 0 ? Math.round((totalSpent / totalBudget) * 100) : 0;
 
@@ -19,7 +34,16 @@ export function CoupleBudget({ tasks, totalBudget, totalSpent, canEdit = false, 
           ) : (
             <SummaryCard label="總預算目標 (HKD)" value={`$${totalBudget.toLocaleString()}`} tone="slate" />
           )}
-          <SummaryCard label="已確認開支" value={`$${totalSpent.toLocaleString()}`} tone="rose" />
+          <SummaryCard
+            label="已預留預算 (含未付款)"
+            value={`$${totalSpent.toLocaleString()}`}
+            tone="rose"
+            subtitle={totalPaid > 0 || totalCommitted > 0 ? (
+              <span className="text-xs font-normal text-slate-500">
+                已付 ${totalPaid.toLocaleString()} · 籌備中 ${totalCommitted.toLocaleString()}
+              </span>
+            ) : null}
+          />
           <SummaryCard
             label="剩餘可分配"
             value={`$${totalRemaining.toLocaleString()}`}
@@ -297,7 +321,7 @@ function BudgetItemRow({ task, canEdit, onToggle, onSelect }) {
   );
 }
 
-function SummaryCard({ label, value, tone }) {
+function SummaryCard({ label, value, tone, subtitle = null }) {
   const palette = {
     slate: 'bg-slate-50 border-slate-200 text-slate-800',
     rose: 'bg-rose-50 border-rose-200 text-rose-700',
@@ -308,6 +332,7 @@ function SummaryCard({ label, value, tone }) {
     <div className={`rounded-xl p-5 border shadow-sm ${palette}`}>
       <p className={`text-sm mb-1 font-bold`}>{label}</p>
       <p className="text-3xl font-black">{value}</p>
+      {subtitle && <div className="mt-2">{subtitle}</div>}
     </div>
   );
 }
