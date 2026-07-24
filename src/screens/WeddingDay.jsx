@@ -23,7 +23,6 @@ import {
   Music2,
   Plus,
   Trash2,
-  Pencil,
   X,
   CheckCircle2,
   Circle,
@@ -688,11 +687,16 @@ function RundownCard({
         )}
       </div>
       <div className="flex flex-col gap-1">
+        {/* 2026-07-24 — use the same ✏️ emoji that 敬茶/影相 uses
+            so the whole Wedding Day suite is consistent. Was
+            previously a text "編輯" button. */}
         <button
           onClick={onEdit}
-          className="px-2 py-1 text-xs rounded border border-slate-200 text-slate-500 hover:bg-slate-50"
+          className="p-1 text-slate-300 hover:text-slate-700 rounded"
+          title="編輯"
+          aria-label="編輯"
         >
-          編輯
+          <span className="text-xs">✏️</span>
         </button>
         <button
           onClick={onDelete}
@@ -1103,7 +1107,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                           title="編輯物資"
                           aria-label="編輯物資"
                         >
-                          <Pencil className="w-4 h-4" />
+                          <span className="text-xs">✏️</span>
                         </button>
                         <button
                           onClick={() => onDelete(item.id)}
@@ -1150,16 +1154,15 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                     )}
                   </button>
                   <ResourceItemBody item={item} />
-                  {/* 2026-07-24 — edit button. Opens the inline
-                      editor. Sets editing=item.id which hides
-                      this row and shows <EditResourceRow> instead. */}
+                  {/* 2026-07-24 — edit button. ✏️ emoji to match
+                      the rest of the wedding-day suite. */}
                   <button
                     onClick={() => setEditing(item.id)}
                     className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded flex-shrink-0"
                     title="編輯物資"
                     aria-label="編輯物資"
                   >
-                    <Pencil className="w-4 h-4" />
+                    <span className="text-xs">✏️</span>
                   </button>
                   <button
                     onClick={() => onDelete(item.id)}
@@ -2433,9 +2436,9 @@ function SongRow({
         </button>
         <span className="text-xs font-bold text-slate-600">{(song.votes || []).length}</span>
       </div>
-      {/* 2026-07-24 — edit button. Opens the inline editor for
-          this song. Sets editing=song.id which hides this row
-          and shows <EditSongRow> instead. */}
+      {/* 2026-07-24 — edit button. ✏️ emoji to match the rest
+          of the wedding-day suite. Sets editing=song.id which
+          hides this row and shows <EditSongRow> instead. */}
       {onEdit && (
         <button
           onClick={onEdit}
@@ -2443,7 +2446,7 @@ function SongRow({
           title="編輯歌曲"
           aria-label="編輯歌曲"
         >
-          <Pencil className="w-4 h-4" />
+          <span className="text-xs">✏️</span>
         </button>
       )}
       <button

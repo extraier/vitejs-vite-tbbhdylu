@@ -950,7 +950,10 @@ function TaskRow({
           title="編輯任務"
           aria-label="編輯任務"
         >
-          <Pencil className="w-3.5 h-3.5" />
+          {/* 2026-07-24 — use ✏️ emoji to match the rest of the
+              wedding-day suite (大日流程 / 物資 / 歌單 / 敬茶).
+              Was lucide <Pencil>. */}
+          <span className="text-xs">✏️</span>
           <span className="hidden sm:inline">編輯</span>
         </button>
         <button
