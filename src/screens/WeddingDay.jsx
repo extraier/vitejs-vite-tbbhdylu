@@ -1135,7 +1135,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
               {list.map((item) => (
                 <div
                   key={item.id}
-                  className={`flex items-center gap-3 px-4 py-2.5 ${
+                  className={`${editing === item.id ? 'hidden' : 'flex'} items-center gap-3 px-4 py-2.5 ${
                     item.checked ? 'bg-slate-50 opacity-60' : ''
                   }`}
                 >
@@ -1150,6 +1150,17 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                     )}
                   </button>
                   <ResourceItemBody item={item} />
+                  {/* 2026-07-24 — edit button. Opens the inline
+                      editor. Sets editing=item.id which hides
+                      this row and shows <EditResourceRow> instead. */}
+                  <button
+                    onClick={() => setEditing(item.id)}
+                    className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded flex-shrink-0"
+                    title="編輯物資"
+                    aria-label="編輯物資"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
                   <button
                     onClick={() => onDelete(item.id)}
                     className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded flex-shrink-0"
@@ -1158,6 +1169,19 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                   </button>
                 </div>
               ))}
+              {editing && (items || []).some((i) => i.id === editing) && (
+                <EditResourceRow
+                  key={editing}
+                  item={(items || []).find((i) => i.id === editing)}
+                  helpers={helpers}
+                  onSave={(updated) => {
+                    onUpsert(updated);
+                    setEditing(null);
+                    showToast('✅ 物資已更新');
+                  }}
+                  onCancel={() => setEditing(null)}
+                />
+              )}
             </div>
           )}
         </div>
@@ -2154,28 +2178,27 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
         }
       />
 
-      {PLAYLIST_MOMENTS.map(({ id, label, e }) => (
-        grouped[id]?.length > 0 && (
+      {PLAYLIST_MOMENTS.map(({ id, label, e }) => {
+        // 2026-07-24 — rewrite. The previous version inlined a
+        // `grouped[id]?.length > 0 && (<div>...)` expression as
+        // the arrow function body, which works but is hard to
+        // read and was breaking in some bundles. Hoist the
+        // guard to a plain `if` and return the JSX directly.
+        const list = grouped[id];
+        if (!list || list.length === 0) return null;
+        return (
           <div key={id} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
               <span className="text-lg">{e}</span>
               <span className="text-sm font-bold text-slate-700">{label}</span>
               <span className="ml-auto text-xs text-slate-500">
-                {grouped[id].length} 首
+                {list.length} 首
               </span>
             </div>
-            {/* 2026-07-22b — Wrap each moment's list in
-                PlaylistGroupDnD when in manual sort mode. The
-                SortableContext + DndContext are scoped to this
-                group so couples can only drag within (e.g. 入場
-                songs stay within 入場). In hot mode (sortMode
-                !== 'manual') we render the legacy non-draggable
-                list — couples who want votes-based ranking
-                shouldn't see drag handles cluttering the UI. */}
             {sortMode === 'manual' ? (
-              <PlaylistGroupDnD groupId={id} list={grouped[id]}>
+              <PlaylistGroupDnD groupId={id} list={list}>
                 <div className="divide-y divide-slate-100">
-                  {grouped[id].map((song) => (
+                  {list.map((song) => (
                     editing === song.id ? (
                       <EditSongRow
                         key={song.id}
@@ -2216,7 +2239,7 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
               </PlaylistGroupDnD>
             ) : (
               <div className="divide-y divide-slate-100">
-                {grouped[id].map((song) => (
+                {list.map((song) => (
                   editing === song.id ? (
                     <EditSongRow
                       key={song.id}
@@ -2252,8 +2275,8 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
               </div>
             )}
           </div>
-        )
-      ))}
+        );
+      })}
 
       {songs?.length === 0 && (
         <div className="text-center py-10 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
