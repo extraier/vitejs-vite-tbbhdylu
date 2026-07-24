@@ -23,6 +23,8 @@ import {
   Music2,
   Plus,
   Trash2,
+  Pencil,
+  X,
   CheckCircle2,
   Circle,
   GripVertical,
@@ -820,7 +822,7 @@ const RESOURCE_CATEGORIES = {
   other: '其他',
 };
 
-function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrders, currentUser, helpers }) {
+function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrders, currentUser, helpers, showToast }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
   // 2026-07-22 — Sort mode toggle. Same pattern as PlaylistTab.
@@ -1096,6 +1098,14 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                         </button>
                         <ResourceItemBody item={item} />
                         <button
+                          onClick={() => setEditing(item.id)}
+                          className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded flex-shrink-0"
+                          title="編輯物資"
+                          aria-label="編輯物資"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
                           onClick={() => onDelete(item.id)}
                           className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded flex-shrink-0"
                         >
@@ -1105,6 +1115,19 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                     )}
                   </SortableRow>
                 ))}
+                {editing && (items || []).some((i) => i.id === editing) && (
+                  <EditResourceRow
+                    key={editing}
+                    item={(items || []).find((i) => i.id === editing)}
+                    helpers={helpers}
+                    onSave={(updated) => {
+                      onUpsert(updated);
+                      setEditing(null);
+                      showToast('✅ 物資已更新');
+                    }}
+                    onCancel={() => setEditing(null)}
+                  />
+                )}
               </div>
             </ResourcesGroupDnD>
           ) : (
@@ -1240,6 +1263,126 @@ function NewResourceRow({ onSubmit, helpers }) {
           className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700"
         >
           新增
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * EditResourceRow — inline editor for an existing 物資 item.
+ *
+ * 2026-07-24 — Added per user request. Same field set as
+ * NewResourceRow but pre-filled with the existing item's values.
+ * Saves via onSave which receives the full updated item; the
+ * caller merges it into Firestore via onUpsert. We deliberately
+ * re-use the onUpsert path so the save logic stays single-source.
+ */
+function EditResourceRow({ item, helpers, onSave, onCancel }) {
+  const [label, setLabel] = useState(item.label || '');
+  const [qty, setQty] = useState(item.qty || '');
+  const [category, setCategory] = useState(item.category || 'other');
+  const [assignedToName, setAssignedToName] = useState(item.assignedToName || '');
+  const [assignedHelpers, setAssignedHelpers] = useState(item.assignedHelpers || []);
+  const [notes, setNotes] = useState(item.notes || '');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!label.trim()) return;
+    setSaving(true);
+    try {
+      // Pass through the original id + createdAt/checked so we don't
+      // accidentally reset them; only the editable fields are touched.
+      await onSave({
+        ...item,
+        label: label.trim(),
+        qty: qty.trim(),
+        category,
+        assignedToName: assignedToName.trim(),
+        assignedHelpers,
+        notes: notes.trim(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border-2 border-rose-300 p-4 bg-rose-50/30 space-y-3 mx-4 my-2">
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-bold text-slate-800 text-sm">編輯物資</div>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="text-slate-400 hover:text-slate-600 p-1"
+          aria-label="關閉編輯"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      <div className="grid grid-cols-12 gap-3">
+        <input
+          type="text"
+          required
+          autoFocus
+          placeholder="物資名稱"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          className="col-span-12 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+        <input
+          type="text"
+          placeholder="數量"
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          className="col-span-4 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className="col-span-4 p-2 rounded-lg border border-slate-300 text-sm bg-white"
+        >
+          {Object.entries(RESOURCE_CATEGORIES).map(([c, lbl]) => (
+            <option key={c} value={c}>{lbl}</option>
+          ))}
+        </select>
+        <input
+          type="text"
+          placeholder="負責人"
+          value={assignedToName}
+          onChange={(e) => setAssignedToName(e.target.value)}
+          className="col-span-4 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+        <div className="col-span-12">
+          <HelperPicker
+            helpers={helpers}
+            value={assignedHelpers}
+            onChange={setAssignedHelpers}
+          />
+        </div>
+        <input
+          type="text"
+          placeholder="備註"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          className="col-span-12 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+      </div>
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100"
+        >
+          取消
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={saving || !label.trim()}
+          className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:opacity-50"
+        >
+          {saving ? '儲存中...' : '儲存'}
         </button>
       </div>
     </div>
@@ -1771,7 +1914,7 @@ function youtubeId(url) {
   return null;
 }
 
-function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, currentUserUid }) {
+function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, currentUserUid, showToast }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -2033,50 +2176,78 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
               <PlaylistGroupDnD groupId={id} list={grouped[id]}>
                 <div className="divide-y divide-slate-100">
                   {grouped[id].map((song) => (
-                    <SortableRow key={song.id} id={song.id}>
-                      {({ dragHandleProps }) => (
-                        <SongRow
-                          song={song}
-                          currentUserUid={currentUserUid}
-                          sortMode={sortMode}
-                          dragHandleProps={dragHandleProps}
-                          isPlaying={playingYtId === song.id}
-                          onTogglePlay={(ytId) =>
-                            setPlayingYtId((prev) => (prev === ytId ? null : ytId))
-                          }
-                          onVote={() => {
-                            const votes = new Set(song.votes || []);
-                            if (votes.has(currentUserUid)) votes.delete(currentUserUid);
-                            else votes.add(currentUserUid);
-                            onUpsert({ ...song, votes: Array.from(votes) });
-                          }}
-                          onDelete={() => onDelete(song.id)}
-                        />
-                      )}
-                    </SortableRow>
+                    editing === song.id ? (
+                      <EditSongRow
+                        key={song.id}
+                        song={song}
+                        onSave={(updated) => {
+                          onUpsert(updated);
+                          setEditing(null);
+                          showToast('✅ 歌曲已更新');
+                        }}
+                        onCancel={() => setEditing(null)}
+                      />
+                    ) : (
+                      <SortableRow key={song.id} id={song.id}>
+                        {({ dragHandleProps }) => (
+                          <SongRow
+                            song={song}
+                            currentUserUid={currentUserUid}
+                            sortMode={sortMode}
+                            dragHandleProps={dragHandleProps}
+                            isPlaying={playingYtId === song.id}
+                            onEdit={() => setEditing(song.id)}
+                            onTogglePlay={(ytId) =>
+                              setPlayingYtId((prev) => (prev === ytId ? null : ytId))
+                            }
+                            onVote={() => {
+                              const votes = new Set(song.votes || []);
+                              if (votes.has(currentUserUid)) votes.delete(currentUserUid);
+                              else votes.add(currentUserUid);
+                              onUpsert({ ...song, votes: Array.from(votes) });
+                            }}
+                            onDelete={() => onDelete(song.id)}
+                          />
+                        )}
+                      </SortableRow>
+                    )
                   ))}
                 </div>
               </PlaylistGroupDnD>
             ) : (
               <div className="divide-y divide-slate-100">
                 {grouped[id].map((song) => (
-                  <SongRow
-                    key={song.id}
-                    song={song}
-                    currentUserUid={currentUserUid}
-                    sortMode={sortMode}
-                    isPlaying={playingYtId === song.id}
-                    onTogglePlay={(ytId) =>
-                      setPlayingYtId((prev) => (prev === ytId ? null : ytId))
-                    }
-                    onVote={() => {
-                      const votes = new Set(song.votes || []);
-                      if (votes.has(currentUserUid)) votes.delete(currentUserUid);
-                      else votes.add(currentUserUid);
-                      onUpsert({ ...song, votes: Array.from(votes) });
-                    }}
-                    onDelete={() => onDelete(song.id)}
-                  />
+                  editing === song.id ? (
+                    <EditSongRow
+                      key={song.id}
+                      song={song}
+                      onSave={(updated) => {
+                        onUpsert(updated);
+                        setEditing(null);
+                        showToast('✅ 歌曲已更新');
+                      }}
+                      onCancel={() => setEditing(null)}
+                    />
+                  ) : (
+                    <SongRow
+                      key={song.id}
+                      song={song}
+                      currentUserUid={currentUserUid}
+                      sortMode={sortMode}
+                      isPlaying={playingYtId === song.id}
+                      onEdit={() => setEditing(song.id)}
+                      onTogglePlay={(ytId) =>
+                        setPlayingYtId((prev) => (prev === ytId ? null : ytId))
+                      }
+                      onVote={() => {
+                        const votes = new Set(song.votes || []);
+                        if (votes.has(currentUserUid)) votes.delete(currentUserUid);
+                        else votes.add(currentUserUid);
+                        onUpsert({ ...song, votes: Array.from(votes) });
+                      }}
+                      onDelete={() => onDelete(song.id)}
+                    />
+                  )
                 ))}
               </div>
             )}
@@ -2237,6 +2408,19 @@ function SongRow({
         </button>
         <span className="text-xs font-bold text-slate-600">{(song.votes || []).length}</span>
       </div>
+      {/* 2026-07-24 — edit button. Opens the inline editor for
+          this song. Sets editing=song.id which hides this row
+          and shows <EditSongRow> instead. */}
+      {onEdit && (
+        <button
+          onClick={onEdit}
+          className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded flex-shrink-0"
+          title="編輯歌曲"
+          aria-label="編輯歌曲"
+        >
+          <Pencil className="w-4 h-4" />
+        </button>
+      )}
       <button
         onClick={onDelete}
         className="p-1 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded flex-shrink-0"
@@ -2339,6 +2523,120 @@ function NewSongRow({ onSubmit }) {
   );
 }
 
+/**
+ * EditSongRow — inline editor for an existing 歌單 item.
+ *
+ * 2026-07-24 — Same pattern as EditResourceRow. Pre-filled with
+ * the existing song's values. Saves via onSave → onUpsert so
+ * the save path is shared with create.
+ */
+function EditSongRow({ song, onSave, onCancel }) {
+  const [title, setTitle] = useState(song.title || '');
+  const [artist, setArtist] = useState(song.artist || '');
+  const [moment, setMoment] = useState(song.moment || 'entrance');
+  const [link, setLink] = useState(song.link || '');
+  const [notes, setNotes] = useState(song.notes || '');
+  const [suggestedByName, setSuggestedByName] = useState(song.suggestedByName || '');
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      await onSave({
+        ...song,
+        title: title.trim(),
+        artist: artist.trim(),
+        moment,
+        link: link.trim(),
+        notes: notes.trim(),
+        suggestedByName: suggestedByName.trim(),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border-2 border-rose-300 p-4 bg-rose-50/30 space-y-3 mx-4 my-2">
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-bold text-slate-800 text-sm">編輯歌曲</div>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="text-slate-400 hover:text-slate-600 p-1"
+          aria-label="關閉編輯"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      <div className="grid grid-cols-12 gap-3">
+        <input
+          type="text"
+          required
+          autoFocus
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="歌名"
+          className="col-span-7 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+        <input
+          value={artist}
+          onChange={(e) => setArtist(e.target.value)}
+          placeholder="歌手"
+          className="col-span-5 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+        <select
+          value={moment}
+          onChange={(e) => setMoment(e.target.value)}
+          className="col-span-6 p-2 rounded-lg border border-slate-300 text-sm bg-white"
+        >
+          {PLAYLIST_MOMENTS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.e} {m.label}
+            </option>
+          ))}
+        </select>
+        <input
+          value={link}
+          onChange={(e) => setLink(e.target.value)}
+          placeholder="YouTube 連結 (可選)"
+          className="col-span-6 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+        <input
+          value={suggestedByName}
+          onChange={(e) => setSuggestedByName(e.target.value)}
+          placeholder="誰建議?"
+          className="col-span-6 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+        <input
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="為何適合?"
+          className="col-span-6 p-2 rounded-lg border border-slate-300 text-sm"
+        />
+      </div>
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100"
+        >
+          取消
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={saving || !title.trim()}
+          className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:opacity-50"
+        >
+          {saving ? '儲存中...' : '儲存'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // =========================================================================
 // Outer shell
 // =========================================================================
@@ -2373,6 +2671,8 @@ export function WeddingDay({
   // 2026-07-18 — pass the active helper list down so rundown and
   // resources tabs can offer a 兄弟姊妹 picker for each item.
   helpers = [],
+  // 2026-07-24 — toast for the new edit save confirmations.
+  showToast,
 }) {
   const [active, setActive] = useState('rundown');
 
@@ -2417,6 +2717,7 @@ export function WeddingDay({
             onSetOrders={onSetResourcePositions}
             currentUser={currentUser}
             helpers={helpers}
+            showToast={showToast}
           />
         )}
         {active === 'teaCeremony' && (
@@ -2440,6 +2741,7 @@ export function WeddingDay({
             // 2026-07-22b — drag-and-drop reorder in 歌單.
             onSetOrders={onSetPlaylistPositions}
             currentUserUid={currentUser?.uid}
+                      showToast={showToast}
           />
         )}
       </div>

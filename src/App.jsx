@@ -2692,6 +2692,9 @@ export default function App() {
                 // subscribed in App.jsx (line 610) for use by the
                 // wedding-tasks panel — just plumb it through.
                 helpers={helpers}
+                // 2026-07-24 — pass the toast hook so the new edit
+                // save confirmations in 物資/歌單 can show "✅ 已更新".
+                showToast={showToast}
               />
             )}
 
