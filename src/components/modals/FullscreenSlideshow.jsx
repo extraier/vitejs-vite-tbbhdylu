@@ -1,18 +1,6 @@
 import { X } from 'lucide-react';
 
 export function FullscreenSlideshow({ photos, currentIndex, onClose }) {
-  // 2026-07-24 — diagnostic: user reports a photo popup appears
-  // uninvited. Log when this component actually renders so we can
-  // confirm it's THIS modal (vs. ExpandedPhotoModal, PortfolioLightbox,
-  // or the toast itself).
-  if (typeof window !== 'undefined') {
-    // eslint-disable-next-line no-console
-    console.log('[FullscreenSlideshow] render', {
-      photoCount: photos?.length,
-      currentIndex,
-      currentPhotoUrl: photos?.[currentIndex]?.url,
-    });
-  }
   if (!photos || photos.length === 0) return null;
   const photo = photos[currentIndex];
   return (

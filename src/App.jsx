@@ -2395,19 +2395,6 @@ export default function App() {
                 onNewEventNameChange={setNewEventName}
                 onCreate={handleCreateEvent}
                 onSelectEvent={(ev) => {
-                  // 2026-07-24 — diagnostic: user reports that clicking
-                  // the event card opens a photo popup that fills the
-                  // page and the X is unclickable. Log the navigation
-                  // path so we can trace what's actually rendered.
-                  // eslint-disable-next-line no-console
-                  console.log('[App.jsx] onSelectEvent', {
-                    eventId: ev?.id,
-                    eventName: ev?.name,
-                    userRole,
-                    currentView,
-                    isFullscreen,
-                    activeGuestPortal: activeGuestPortal?.id,
-                  });
                   setCurrentEvent(ev);
                   // Route to the role-appropriate landing view for this event.
                   if (userRole === 'vendor') {
@@ -2833,11 +2820,21 @@ export default function App() {
         currentUser={user}
         currentUserRole={userRole}
       />
-      <FullscreenSlideshow
-        photos={eventPhotos}
-        currentIndex={currentSlideIndex}
-        onClose={() => setIsFullscreen(false)}
-      />
+      {/* 2026-07-24 — only mount FullscreenSlideshow when isFullscreen
+          is true. The original code rendered it unconditionally and
+          relied on the component returning null when photos.length
+          was 0, but as soon as ANY photo existed the fullscreen
+          black overlay covered the entire page. The X button's
+          onClose set isFullscreen=false, but it was already false,
+          so the modal stayed open forever. User reported the
+          "photo popup" and "cannot click X" — this was the cause. */}
+      {isFullscreen && (
+        <FullscreenSlideshow
+          photos={eventPhotos}
+          currentIndex={currentSlideIndex}
+          onClose={() => setIsFullscreen(false)}
+        />
+      )}
       <ProposalsModal
         jobId={viewingProposals}
         proposals={viewingProposals ? proposalsData[viewingProposals] : null}
