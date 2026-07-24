@@ -806,7 +806,7 @@ function TaskRow({
     <div
       ref={rowRef}
       onClick={onSelect}
-      className={`flex items-start p-3.5 rounded-xl border transition-all ${
+      className={`p-3 rounded-xl border transition-all ${
         task.isCompleted
           ? 'bg-slate-50 border-transparent opacity-75'
           : isActive
@@ -814,58 +814,57 @@ function TaskRow({
             : 'bg-white border-slate-200 hover:border-rose-200'
       }`}
     >
-      <button onClick={onToggle} className="mt-0.5 mr-3 flex-shrink-0">
-        <CheckCircle2
-          className={`w-6 h-6 ${task.isCompleted ? 'text-green-500' : 'text-slate-300'}`}
-        />
-      </button>
-      <div className="flex-grow">
-        <div className="flex items-center flex-wrap gap-2 mb-1">
-          <span
-            className={`font-bold ${task.isCompleted ? 'line-through text-slate-500' : 'text-slate-800'}`}
-          >
+      {/* 2026-07-24 — Top row: checkbox + title only. Action buttons
+          moved to a separate bottom bar so the title has full width
+          on mobile (the previous layout forced 5 buttons to compete
+          for horizontal space with the title). */}
+      <div className="flex items-start gap-2">
+        <button onClick={onToggle} className="mt-0.5 flex-shrink-0">
+          <CheckCircle2
+            className={`w-6 h-6 ${task.isCompleted ? 'text-green-500' : 'text-slate-300'}`}
+          />
+        </button>
+        <div className="flex-grow min-w-0">
+          <div className={`font-bold leading-snug ${task.isCompleted ? 'line-through text-slate-500' : 'text-slate-800'}`}>
             {task.title}
-          </span>
-          {task.venue && (
-            <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded flex items-center gap-1">
-              <MapPin className="w-3 h-3" /> {task.venue}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500 flex-wrap">
-          <TaskDeadline dueDate={task.dueDate} dueTime={task.dueTime} />
-          {/* 2026-07-17 — absolute-due-date chip. Sits right next to
-              the countdown so couples see BOTH at a glance: the
-              "live" relative label AND the actual calendar stamp.
-              Hover the chip for the full ISO date+time. monday-style
-              paired pattern (countdown + date chip). */}
-          {task.dueDate && (
-            <span
-              className="inline-flex items-center gap-1 text-[11px] text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-full"
-              title={formatLongAbsoluteDue(task.dueDate, task.dueTime)}
-            >
-              <CalendarDays className="w-3 h-3 text-slate-400" />
-              {formatAbsoluteDue(task.dueDate, task.dueTime)}
-              {task.dueTime ? '' : <span className="text-[10px] text-slate-400 ml-1">整天</span>}
-            </span>
-          )}
-          <div className="flex items-center gap-1 ml-auto">
-            <DollarSign className="w-3.5 h-3.5" />{' '}
-            {task.isCompleted
-              ? `實際: ${formatMoney(task.actualCost)}`
-              : `預算: ${formatMoney(task.estimatedCost)}`}
           </div>
+          {task.venue && (
+            <div className="mt-0.5 text-[11px] text-slate-500 flex items-center gap-1 truncate">
+              <MapPin className="w-3 h-3 flex-shrink-0" />
+              <span className="truncate">{task.venue}</span>
+            </div>
+          )}
         </div>
-        {/*
-          2026-07-15 — assigned-vendor badge on each task row. Shows
-          the contact name and a badge state: green (linked vendor,
-          vendor can see in their dashboard) or amber (unlinked,
-          pending vendor signup).
-        */}
-        {task.assignedVendorName && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+      </div>
+
+      {/* Meta row: deadline + price. Below the title on all breakpoints. */}
+      <div className="flex items-center gap-2 text-[11px] text-slate-500 flex-wrap mt-2 pl-8">
+        <TaskDeadline dueDate={task.dueDate} dueTime={task.dueTime} />
+        {task.dueDate && (
+          <span
+            className="inline-flex items-center gap-1 text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-full"
+            title={formatLongAbsoluteDue(task.dueDate, task.dueTime)}
+          >
+            <CalendarDays className="w-3 h-3 text-slate-400" />
+            <span>{formatAbsoluteDue(task.dueDate, task.dueTime)}</span>
+            {task.dueTime ? '' : <span className="text-[10px] text-slate-400 ml-0.5">整天</span>}
+          </span>
+        )}
+        <div className="flex items-center gap-1 ml-auto font-bold text-slate-700">
+          <DollarSign className="w-3.5 h-3.5" />
+          {task.isCompleted
+            ? `實際: ${formatMoney(task.actualCost)}`
+            : `預算: ${formatMoney(task.estimatedCost)}`}
+        </div>
+      </div>
+
+      {/* 2026-07-24 — Vendor + helper chips on one row, with names
+          truncated so long names don't blow out the card. */}
+      {(task.assignedVendorName || task.assignedHelperName) && (
+        <div className="mt-2 pl-8 flex flex-wrap items-center gap-1.5">
+          {task.assignedVendorName && (
             <span
-              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border max-w-full ${
                 task.assignedVendorUid
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : 'bg-amber-50 text-amber-700 border-amber-200'
@@ -876,36 +875,19 @@ function TaskRow({
                   : '已指派聯絡人，商戶加入平台後即可睇到'
               }
             >
-              {task.assignedVendorUid ? '✓ ' : '⏳ '}
-              {task.assignedVendorName}
-              {task.assignedVendorUid ? '' : ' (未加入)'}
+              <span className="flex-shrink-0">{task.assignedVendorUid ? '✓ ' : '⏳ '}</span>
+              <span className="truncate min-w-0">
+                {task.assignedVendorName}
+                {task.assignedVendorUid ? '' : ' (未加入)'}
+              </span>
             </span>
-            {task.status && task.assignedVendorUid && (
-              // 2026-07-17 — vendor status chip mirrors what the
-              // vendor selected on their dashboard. Hidden for tasks
-              // assigned to a contact who hasn't joined yet (no
-              // vendor-side status to mirror).
-              <VendorStatusChip status={task.status} note={task.statusNote} />
-            )}
-          </div>
-        )}
-        {/*
-          2026-07-17 — Helper (兄弟姊妹) chip. Mirrors the
-          assigned-vendor badge above but without a status layer
-          (helpers don't have their own dashboard; they just
-          receive the task via the helper view).
-            - assignedHelperUid set => emerald (linked helper,
-              they've signed up so they can see it in their
-              helper dashboard once that's wired).
-            - assignedHelperName set but no assignedHelperUid =>
-              amber (free-form name, e.g. typed inline); rendering
-              this without a uid tells the couple "yes we wrote
-              down who, but they're not a registered helper yet".
-        */}
-        {task.assignedHelperName && (
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          )}
+          {task.status && task.assignedVendorUid && (
+            <VendorStatusChip status={task.status} note={task.statusNote} />
+          )}
+          {task.assignedHelperName && (
             <span
-              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border ${
+              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-full border max-w-full ${
                 task.assignedHelperUid
                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   : 'bg-amber-50 text-amber-700 border-amber-200'
@@ -916,78 +898,82 @@ function TaskRow({
                   : '自訂名稱（非已邀請兄弟姊妹）'
               }
             >
-              {task.assignedHelperUid ? '✓ ' : '🤝 '}
-              {task.assignedHelperName}
-              {task.assignedHelperUid ? '' : ' (未邀請)'}
+              <span className="flex-shrink-0">{task.assignedHelperUid ? '✓ ' : '🤝 '}</span>
+              <span className="truncate min-w-0">
+                {task.assignedHelperName}
+                {task.assignedHelperUid ? '' : ' (未邀請)'}
+              </span>
             </span>
-          </div>
+          )}
+        </div>
+      )}
+
+      {/* 2026-07-24 — Action bar at the bottom of the card. Always
+          visible. Smart-match only when not completed. Labels hidden
+          on mobile (icon-only) so 4 buttons fit comfortably. The
+          delete button is pushed to the right with ml-auto so the
+          primary actions (smart-match, edit, comment) stay on the
+          left where the thumb naturally lands. */}
+      <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex items-center gap-1">
+        {!task.isCompleted && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect && onSelect();
+            }}
+            title="AI 為你智能配對合適商戶"
+            aria-label="智能配對推薦"
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+              isActive
+                ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">智能配對</span>
+          </button>
         )}
-      </div>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete(e);
-        }}
-        className="ml-2 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-      >
-        <Trash2 className="w-4 h-4" />
-      </button>
-      {!task.isCompleted && (
-        // Explicit CTA so users know clicking opens the AI vendor-matching
-        // panel — replaces the old silent ArrowRight chevron which gave no
-        // hint about what would happen. Label collapses to just the icon on
-        // narrow screens so the row stays single-line on mobile.
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onSelect && onSelect();
+            onClearEditing && onClearEditing(task.id);
           }}
-          title="AI 為你智能配對合適商戶"
-          aria-label="智能配對推薦"
-          className={`ml-2 flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
-            isActive
-              ? 'bg-rose-100 text-rose-700 border border-rose-200'
-              : 'bg-slate-50 text-slate-500 border border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200'
-          }`}
+          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold border bg-white text-slate-500 border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200"
+          title="編輯任務"
+          aria-label="編輯任務"
         >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">智能配對</span>
-          <ArrowRight className="w-3 h-3" />
+          <Pencil className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">編輯</span>
         </button>
-      )}
-      {/* 2026-07-24 — edit button. Opens the TaskFullEditor
-          inline. Clicking it sets editingTaskId via onClearEditing,
-          which is the same setter the cancel button uses (the
-          parent decides whether to open or close based on the
-          current state). We DON'T call onSelect (which would
-          change the active category) so the user can edit
-          without losing their place. */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onClearEditing && onClearEditing(task.id);
-        }}
-        className="ml-2 p-1.5 rounded-lg border bg-white text-slate-300 hover:text-rose-600 hover:border-rose-200 border-slate-200"
-        title="編輯任務"
-        aria-label="編輯任務"
-      >
-        <Pencil className="w-4 h-4" />
-      </button>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setShowComments((s) => !s);
-        }}
-        className={`ml-2 p-1.5 rounded-lg border ${
-          showComments
-            ? 'bg-rose-50 text-rose-700 border-rose-200'
-            : 'bg-white text-slate-300 hover:text-rose-600 hover:border-rose-200 border-slate-200'
-        }`}
-        title="留言"
-        aria-label="留言"
-      >
-        <MessageCircle className="w-4 h-4" />
-      </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowComments((s) => !s);
+          }}
+          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold border ${
+            showComments
+              ? 'bg-rose-50 text-rose-700 border-rose-200'
+              : 'bg-white text-slate-500 border-slate-200 hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200'
+          }`}
+          title="留言"
+          aria-label="留言"
+        >
+          <MessageCircle className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">留言</span>
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(e);
+          }}
+          className="ml-auto flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold border bg-white text-slate-400 border-slate-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+          title="刪除任務"
+          aria-label="刪除任務"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">刪除</span>
+        </button>
+      </div>
     </div>
     {showComments && (
       <div className="mt-2">
