@@ -825,8 +825,20 @@ function TaskRow({
           />
         </button>
         <div className="flex-grow min-w-0">
-          <div className={`font-bold leading-snug ${task.isCompleted ? 'line-through text-slate-500' : 'text-slate-800'}`}>
-            {task.title}
+          <div className="flex items-baseline gap-2">
+            <div className={`font-bold leading-snug flex-grow min-w-0 ${task.isCompleted ? 'line-through text-slate-500' : 'text-slate-800'}`}>
+              {task.title}
+            </div>
+            {/* 2026-07-24 — moved budget up to the title row, right-aligned.
+                Saves a vertical line and keeps the most important
+                financial info close to the title. Uses ml-auto so it
+                sticks to the right edge regardless of title width. */}
+            <div className="flex items-center gap-1 font-bold text-sm flex-shrink-0 text-slate-700">
+              <DollarSign className="w-4 h-4" />
+              {task.isCompleted
+                ? `實際: ${formatMoney(task.actualCost)}`
+                : `預算: ${formatMoney(task.estimatedCost)}`}
+            </div>
           </div>
           {task.venue && (
             <div className="mt-0.5 text-[11px] text-slate-500 flex items-center gap-1 truncate">
@@ -837,7 +849,9 @@ function TaskRow({
         </div>
       </div>
 
-      {/* Meta row: deadline + price. Below the title on all breakpoints. */}
+      {/* 2026-07-24 — Meta row: deadline + due date. Budget moved
+          up to the title row (right-aligned). Below the title on
+          all breakpoints. */}
       <div className="flex items-center gap-2 text-[11px] text-slate-500 flex-wrap mt-2 pl-8">
         <TaskDeadline dueDate={task.dueDate} dueTime={task.dueTime} />
         {task.dueDate && (
@@ -850,12 +864,6 @@ function TaskRow({
             {task.dueTime ? '' : <span className="text-[10px] text-slate-400 ml-0.5">整天</span>}
           </span>
         )}
-        <div className="flex items-center gap-1 ml-auto font-bold text-slate-700">
-          <DollarSign className="w-3.5 h-3.5" />
-          {task.isCompleted
-            ? `實際: ${formatMoney(task.actualCost)}`
-            : `預算: ${formatMoney(task.estimatedCost)}`}
-        </div>
       </div>
 
       {/* 2026-07-24 — Vendor + helper chips on one row, with names
