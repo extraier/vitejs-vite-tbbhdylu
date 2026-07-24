@@ -27,7 +27,28 @@ export function PersonalGuestPortal({
   return (
     <div className="max-w-md mx-auto mt-4 pb-12 animate-in fade-in zoom-in duration-300">
       {onExitPreview && (
-        <div className="flex justify-end mb-2">
+        <div className="flex justify-between items-center mb-2 gap-2">
+          {/* 2026-07-24 — secondary "back via browser history" button
+              as a fallback. The original onExitPreview is the
+              primary path; this back arrow handles cases where the
+              primary X is unreachable (e.g. toast overlay, or the
+              user is on a screen that lost the primary handler
+              state). z-50 puts it above the upload card. */}
+          <button
+            type="button"
+            onClick={() => {
+              if (window.history.length > 1) {
+                window.history.back();
+              } else {
+                // No history — fall through to the primary exit
+                onExitPreview();
+              }
+            }}
+            className="px-3 py-2 text-sm font-bold text-slate-700 bg-white hover:bg-slate-100 rounded-xl shadow-sm border border-slate-200 flex items-center gap-1 z-50"
+            title="返回上一頁"
+          >
+            ← 上一頁
+          </button>
           <button
             onClick={onExitPreview}
             className="px-4 py-2 text-sm font-bold text-slate-700 bg-white hover:bg-slate-100 rounded-xl shadow-sm border border-slate-200 flex items-center gap-1.5"

@@ -2395,6 +2395,19 @@ export default function App() {
                 onNewEventNameChange={setNewEventName}
                 onCreate={handleCreateEvent}
                 onSelectEvent={(ev) => {
+                  // 2026-07-24 — diagnostic: user reports that clicking
+                  // the event card opens a photo popup that fills the
+                  // page and the X is unclickable. Log the navigation
+                  // path so we can trace what's actually rendered.
+                  // eslint-disable-next-line no-console
+                  console.log('[App.jsx] onSelectEvent', {
+                    eventId: ev?.id,
+                    eventName: ev?.name,
+                    userRole,
+                    currentView,
+                    isFullscreen,
+                    activeGuestPortal: activeGuestPortal?.id,
+                  });
                   setCurrentEvent(ev);
                   // Route to the role-appropriate landing view for this event.
                   if (userRole === 'vendor') {
