@@ -84,6 +84,7 @@ import { ChatRoom } from './screens/ChatRoom';
 import { Inbox } from './screens/Inbox';
 import { PersonalGuestPortal } from './screens/PersonalGuestPortal';
 import { InvitationEditor } from './screens/InvitationEditor';
+import { RedPacketManager } from './screens/RedPacketManager';
 
 import { RoleSimulator } from './components/RoleSimulator';
 import { GuestBanner } from './components/GuestBanner';
@@ -2698,6 +2699,17 @@ export default function App() {
               />
             )}
 
+            {/* 2026-07-24 — 電子人情 (e-Red-Packet) manager. Lets
+                the owner upload PayMe / FPS / AlipayHK QR codes
+                that the PersonalGuestPortal's PaymentModal reads
+                to display the actual scan targets. */}
+            {userRole === 'owner' && currentEvent && currentView === 'red-packet' && (
+              <RedPacketManager
+                ownerUid={currentEvent.userId || user?.uid}
+                showToast={showToast}
+              />
+            )}
+
             {userRole === 'owner' && currentEvent && currentView === 'couple-jobboard' && (
               <CoupleJobBoard
                 // 2026-07-23 — Read from live Firestore query, not
@@ -2849,6 +2861,11 @@ export default function App() {
         isOpen={showPaymentModal}
         onClose={() => setShowPaymentModal(false)}
         onSend={handleGiveRedPacket}
+        // 2026-07-24 — pass the owner's uid so the modal can
+        // subscribe to /artifacts/{appId}/users/{ownerUid}/
+        // redPackets and display the actual QR codes the owner
+        // uploaded in RedPacketManager.
+        ownerUid={currentEvent?.userId}
       />
       <QrCodeModal
         guest={viewingQrCode}

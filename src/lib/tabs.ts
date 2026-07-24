@@ -37,6 +37,11 @@ export function tabsForRole(
       ['discover-vendors', '🔍 商戶指南'],
       ['couple-jobboard', '🆘 徵求報價'],
       ['couple-guests', '🎟️ 嘉賓與座位'],
+      // 2026-07-24 — 電子人情 (e-Red-Packet) tab. Lets the owner
+      // upload PayMe / FPS / AlipayHK QR codes that the
+      // PersonalGuestPortal's PaymentModal reads to display the
+      // actual scan targets. See RedPacketManager.jsx.
+      ['red-packet', '🧧 電子人情'],
       ['photo-drop', '📸 互動相片牆'],
     ];
   }
