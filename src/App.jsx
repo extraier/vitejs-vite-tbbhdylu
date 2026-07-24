@@ -2131,7 +2131,18 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-10">
       {toast && (
-        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[100] bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl font-bold animate-in fade-in slide-in-from-top-4">
+        // 2026-07-23 — bumped to z-[200] so the toast clears the
+        // PersonalGuestPortal's exit-preview button (z-auto, top-right).
+        // The toast is rendered at `top-4` and on narrow viewports
+        // extends past 50% width, overlapping the X button. The X
+        // had no z-index so the toast (z-100) intercepted clicks
+        // and the user couldn't return to the guest list after
+        // upload. Log captured 2026-07-23 shows upload succeeded
+        // then QUIC retries pinned the UI, but the actual fix is
+        // here in z-stacking. Also added pointer-events-none on
+        // the wrapper so even if they overlap visually, taps fall
+        // through to underlying elements when the toast is short.
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[200] bg-slate-900 text-white px-6 py-3 rounded-full shadow-2xl font-bold animate-in fade-in slide-in-from-top-4 pointer-events-none">
           {toast}
         </div>
       )}
