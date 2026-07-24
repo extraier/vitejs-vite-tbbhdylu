@@ -16,6 +16,7 @@ import {
   MessageCircle,
   Calendar as CalendarIcon,
   CalendarDays,
+  Pencil,
 } from 'lucide-react';
 import { TaskComments } from '../components/TaskComments';
 import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
@@ -335,6 +336,9 @@ export function CoupleChecklist({
   onToggleTask,
   onDeleteTask,
   onUpdateTaskCost,
+  // 2026-07-24 — full task edit (title, category, due, vendor, helper,
+  // costs). Replaces the cost-only TaskCostEditor workflow.
+  onUpdateTask,
   newTaskForm,
   onNewTaskFormChange,
   onAddTask,
@@ -470,6 +474,10 @@ export function CoupleChecklist({
                 currentUser={currentUser}
                 isActive={activeCategory === task.category}
                 isEditing={editingTaskId === task.id}
+                vendorContacts={vendorContacts}
+                helpers={helpers}
+                helpersLoading={helpersLoading}
+                onUpdateTask={onUpdateTask}
                 onSelect={() => {
                   if (!task.isCompleted) {
                     onSelectCategory(task.category, task.venue);
@@ -762,6 +770,11 @@ function TaskRow({
   onClearActive,
   onUpdateCost,
   onClearEditing,
+  // 2026-07-24 — props for the full TaskFullEditor.
+  vendorContacts,
+  helpers,
+  helpersLoading,
+  onUpdateTask,
 }) {
   const rowRef = useRef(null);
   const [showComments, setShowComments] = useState(false);
@@ -772,11 +785,17 @@ function TaskRow({
     }
   }, [isEditing]);
 
+  // 2026-07-24 — when isEditing is set, render the full editor
+  // (covers title, category, venue, due, costs, vendor, helper).
+  // Cost-only editing is now a subset of this.
   if (isEditing) {
     return (
-      <TaskCostEditor
+      <TaskFullEditor
         task={task}
-        onSave={onUpdateCost}
+        vendorContacts={vendorContacts}
+        helpers={helpers}
+        helpersLoading={helpersLoading}
+        onSave={onUpdateTask}
         onCancel={onClearEditing}
       />
     );
@@ -936,6 +955,24 @@ function TaskRow({
           <ArrowRight className="w-3 h-3" />
         </button>
       )}
+      {/* 2026-07-24 — edit button. Opens the TaskFullEditor
+          inline. Clicking it sets editingTaskId via onClearEditing,
+          which is the same setter the cancel button uses (the
+          parent decides whether to open or close based on the
+          current state). We DON'T call onSelect (which would
+          change the active category) so the user can edit
+          without losing their place. */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onClearEditing && onClearEditing(task.id);
+        }}
+        className="ml-2 p-1.5 rounded-lg border bg-white text-slate-300 hover:text-rose-600 hover:border-rose-200 border-slate-200"
+        title="編輯任務"
+        aria-label="編輯任務"
+      >
+        <Pencil className="w-4 h-4" />
+      </button>
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -1109,6 +1146,322 @@ function TaskCostEditor({ task, onSave, onCancel }) {
         </button>
       </div>
       <p className="text-[10px] text-slate-400 mt-2 text-center">完成時切換任務狀態會自動把實際金額填成預算金額</p>
+    </div>
+  );
+}
+
+/**
+ * TaskFullEditor — full inline editor for an existing task.
+ *
+ * 2026-07-24 — Added per user request "user to able to edit what
+ * has been added already". Previously only cost was editable via
+ * TaskCostEditor. Now owners can edit:
+ *   - title (custom or auto-derived from category)
+ *   - category (top + sub, or 'other' with custom title)
+ *   - venue
+ *   - dueDate / dueTime (via the same DateTimePicker used in add)
+ *   - estimatedCost / actualCost
+ *   - assigned vendor (from contact list)
+ *   - assigned helper (pick from list or custom name)
+ */
+function TaskFullEditor({
+  task,
+  vendorContacts,
+  helpers,
+  helpersLoading,
+  onSave,
+  onCancel,
+}) {
+  const splitCategory = (cat) => {
+    if (!cat) return { top: '', sub: '' };
+    if (cat === 'other') return { top: 'other', sub: '' };
+    if (cat.includes('.')) {
+      const [top, sub] = cat.split('.', 2);
+      return { top, sub };
+    }
+    return { top: cat, sub: '' };
+  };
+  const initial = splitCategory(task.category);
+
+  const [title, setTitle] = useState(task.title || '');
+  const [categoryTop, setCategoryTop] = useState(initial.top);
+  const [categorySub, setCategorySub] = useState(initial.sub);
+  const [customTitle, setCustomTitle] = useState(
+    task.category === 'other' ? task.title || '' : '',
+  );
+  const [venue, setVenue] = useState(task.venue || '');
+  const [dueDate, setDueDate] = useState(task.dueDate || '');
+  const [dueTime, setDueTime] = useState(task.dueTime || '');
+  const [estimatedCost, setEstimatedCost] = useState(
+    Number(task.estimatedCost || 0).toLocaleString('en-US'),
+  );
+  const [actualCost, setActualCost] = useState(
+    Number(task.actualCost || 0).toLocaleString('en-US'),
+  );
+  const [assignedContactId, setAssignedContactId] = useState(
+    task.assignedContactId || '',
+  );
+  const [assignedHelperMode, setAssignedHelperMode] = useState(
+    task.assignedHelperUid ? 'pick' : 'custom',
+  );
+  const [assignedHelperId, setAssignedHelperId] = useState(
+    task.assignedHelperId || '',
+  );
+  const [assignedHelperName, setAssignedHelperName] = useState(
+    task.assignedHelperName || '',
+  );
+
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSave = async () => {
+    setError(null);
+    const chosenContact = vendorContacts.find((c) => c.id === assignedContactId);
+    let chosenHelperId = '';
+    let chosenHelperName = '';
+    let chosenHelperUid = '';
+    if (assignedHelperMode === 'pick') {
+      const h = helpers.find((x) => x.id === assignedHelperId);
+      chosenHelperId = h?.id || '';
+      chosenHelperName = h?.displayName || h?.name || '';
+      chosenHelperUid = h?.helperUid || '';
+    } else {
+      chosenHelperName = assignedHelperName || '';
+    }
+    let categoryKey = 'other';
+    let finalTitle = '';
+    if (categoryTop === 'other') {
+      categoryKey = 'other';
+      finalTitle = customTitle.trim();
+    } else if (categoryTop) {
+      categoryKey = categorySub
+        ? `${categoryTop}.${categorySub}`
+        : categoryTop;
+      finalTitle = getTaskCategoryLabel(categoryKey);
+    } else {
+      categoryKey = task.category || 'other';
+      finalTitle = title || task.title || '';
+    }
+    if (!finalTitle) {
+      setError('請填寫任務名稱');
+      return;
+    }
+    const cleanedEst = Number(estimatedCost.replace(/[^0-9]/g, '')) || 0;
+    const cleanedAct = Number(actualCost.replace(/[^0-9]/g, '')) || 0;
+    setSaving(true);
+    try {
+      await onSave(task.id, {
+        title: finalTitle,
+        category: categoryKey,
+        venue,
+        dueDate,
+        dueTime,
+        estimatedCost: cleanedEst,
+        actualCost: cleanedAct,
+        assignedContactId: chosenContact?.id || '',
+        assignedVendorName: chosenContact?.vendorName || '',
+        assignedVendorUid: chosenContact?.linkedVendorUid || '',
+        assignedHelperId: chosenHelperId,
+        assignedHelperName: chosenHelperName,
+        assignedHelperUid: chosenHelperUid,
+      });
+    } catch (e) {
+      setError(e?.message || '儲存失敗');
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="bg-white border-2 border-rose-300 rounded-xl p-4 shadow-md ring-2 ring-rose-100 animate-in slide-in-from-top-2 duration-200"
+    >
+      <div className="flex items-center gap-2 mb-3">
+        <Pencil className="w-5 h-5 text-rose-500" />
+        <h3 className="font-bold text-slate-800 flex-grow truncate">編輯任務</h3>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="text-slate-400 hover:text-slate-600 p-1"
+          aria-label="關閉編輯"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-2">
+        <select
+          className="p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
+          value={categoryTop}
+          onChange={(e) => {
+            setCategoryTop(e.target.value);
+            setCategorySub('');
+          }}
+        >
+          <option value="">主類別...</option>
+          {Object.entries(VENDOR_CATEGORIES).map(([topKey, top]) => (
+            <option key={topKey} value={topKey}>
+              {top.icon} {top.label}
+            </option>
+          ))}
+          <option value="other">✏️ 自訂項目</option>
+        </select>
+        {categoryTop && categoryTop !== 'other' && VENDOR_CATEGORIES[categoryTop] && (
+          <select
+            className="p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
+            value={categorySub}
+            onChange={(e) => setCategorySub(e.target.value)}
+          >
+            <option value="">{VENDOR_CATEGORIES[categoryTop].label} (全部)</option>
+            {Object.entries(VENDOR_CATEGORIES[categoryTop].subs).map(([subKey, subLabel]) => (
+              <option key={subKey} value={subKey}>
+                ↳ {subLabel}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      {categoryTop === 'other' && (
+        <input
+          type="text"
+          placeholder="自訂項目名稱..."
+          required
+          className="w-full mb-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none"
+          value={customTitle}
+          onChange={(e) => setCustomTitle(e.target.value)}
+        />
+      )}
+      <input
+        type="text"
+        placeholder="📍 指定場地 (選填)"
+        className="w-full mb-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none"
+        value={venue}
+        onChange={(e) => setVenue(e.target.value)}
+      />
+      <DateTimePicker
+        dueDate={dueDate}
+        dueTime={dueTime}
+        onChange={(next) => {
+          setDueDate(next.dueDate);
+          setDueTime(next.dueTime);
+        }}
+      />
+      <div className="grid grid-cols-2 gap-2 mt-2">
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">$</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="預算"
+            className="w-full pl-7 pr-3 py-2.5 border border-slate-300 rounded-lg text-sm outline-none font-mono"
+            value={estimatedCost}
+            onChange={(e) => {
+              const digits = e.target.value.replace(/[^0-9]/g, '');
+              const capped = digits.length > 11 ? digits.slice(0, 11) : digits;
+              setEstimatedCost(capped ? Number(capped).toLocaleString('en-US') : '');
+            }}
+          />
+        </div>
+        <div className="relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">$</span>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="實際"
+            className="w-full pl-7 pr-3 py-2.5 border border-slate-300 rounded-lg text-sm outline-none font-mono"
+            value={actualCost}
+            onChange={(e) => {
+              const digits = e.target.value.replace(/[^0-9]/g, '');
+              const capped = digits.length > 11 ? digits.slice(0, 11) : digits;
+              setActualCost(capped ? Number(capped).toLocaleString('en-US') : '');
+            }}
+          />
+        </div>
+      </div>
+
+      <select
+        value={assignedContactId || ''}
+        onChange={(e) => setAssignedContactId(e.target.value)}
+        className="w-full mt-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
+      >
+        <option value="">🏪 未指派商戶</option>
+        {(vendorContacts || []).map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.linkedVendorUid ? '✓ ' : '⏳ '}
+            {c.vendorName}
+            {c.category ? ` · ${categoryLabel(c.category)}` : ''}
+            {c.linkedVendorUid ? ' (已連結)' : ' (未加入)'}
+          </option>
+        ))}
+      </select>
+
+      <div className="mt-2">
+        {assignedHelperMode === 'pick' ? (
+          <select
+            value={assignedHelperId || ''}
+            onChange={(e) => setAssignedHelperId(e.target.value)}
+            className="w-full p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
+          >
+            <option value="">🤝 未指派兄弟姊妹</option>
+            {helpersLoading && <option value="" disabled>讀取中...</option>}
+            {!helpersLoading && helpers.length === 0 && (
+              <option value="" disabled>尚未邀請任何兄弟姊妹</option>
+            )}
+            {helpers.map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.displayName || h.name || '(未命名)'}
+                {h.perms?.canScan ? ' · 接待' : ''}
+                {h.perms?.canViewGuestList ? ' · 名冊' : ''}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="text"
+            placeholder="輸入兄弟姊妹名稱..."
+            className="w-full p-2.5 border border-slate-300 rounded-lg text-sm outline-none"
+            value={assignedHelperName}
+            onChange={(e) => setAssignedHelperName(e.target.value)}
+          />
+        )}
+      </div>
+      <div className="flex items-center justify-between mt-1">
+        <button
+          type="button"
+          onClick={() => {
+            setAssignedHelperMode(
+              assignedHelperMode === 'pick' ? 'custom' : 'pick',
+            );
+          }}
+          className="text-[11px] text-slate-500 hover:text-rose-600 font-medium"
+        >
+          {assignedHelperMode === 'pick' ? '✏️ + 自訂名稱' : '📋 從兄弟姊妹清單揀'}
+        </button>
+      </div>
+
+      {error && <p className="text-xs text-red-600 mt-2 font-medium">{error}</p>}
+
+      <div className="flex gap-2 mt-3">
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-rose-500 hover:bg-rose-600 text-white text-sm font-bold rounded-lg transition-colors disabled:opacity-50"
+        >
+          <Save className="w-4 h-4" />
+          {saving ? '儲存中...' : '儲存'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={saving}
+          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-bold rounded-lg transition-colors disabled:opacity-50"
+        >
+          <X className="w-4 h-4" />
+          取消
+        </button>
+      </div>
     </div>
   );
 }

@@ -1499,6 +1499,21 @@ export default function App() {
     showToast('✅ 任務金額已更新');
   };
 
+  // 2026-07-24 — full task edit. Previously only cost was editable.
+  // Now owners can change title, category, venue, due date, vendor,
+  // helper, and costs from the same place via <TaskFullEditor>.
+  const handleUpdateTask = async (taskId, updates) => {
+    if (!user) return;
+    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
+    const cleaned = {};
+    Object.entries(updates).forEach(([k, v]) => {
+      if (v !== undefined) cleaned[k] = v;
+    });
+    await updateDoc(taskRef, cleaned);
+    setEditingTaskId(null);
+    showToast('✅ 任務已更新');
+  };
+
   const handleDeleteTask = async (task) => {
     if (!user) return;
     await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id));
@@ -2463,7 +2478,12 @@ export default function App() {
                 activeCategory={activeCategory}
                 activeVenue={activeVenue}
                 editingTaskId={editingTaskId}
-                onClearEditingTask={() => setEditingTaskId(null)}
+                onClearEditingTask={(id) => {
+                  // 2026-07-24 — pass id so the per-row edit button
+                  // can open the editor for that specific task.
+                  // Passing null/undefined closes the editor.
+                  setEditingTaskId(id || null);
+                }}
                 currentUser={user}
                 onSelectCategory={(cat, venue) => {
                   setActiveCategory(cat);
@@ -2472,6 +2492,7 @@ export default function App() {
                 onToggleTask={toggleTask}
                 onDeleteTask={handleDeleteTask}
                 onUpdateTaskCost={handleUpdateTaskCost}
+                onUpdateTask={handleUpdateTask}
                 newTaskForm={newTaskForm}
                 onNewTaskFormChange={setNewTaskForm}
                 onAddTask={handleAddTask}
