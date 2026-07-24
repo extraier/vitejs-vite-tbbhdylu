@@ -7,7 +7,14 @@ export function FullscreenSlideshow({ photos, currentIndex, onClose }) {
     <div className="fixed inset-0 bg-black z-50 flex items-center justify-center">
       <button
         onClick={onClose}
-        className="absolute top-6 right-6 text-white/50 hover:text-white bg-black/20 p-3 rounded-full z-20"
+        // 2026-07-24 — bumped z from 20 to 60 so this X is reachable
+        // when the upload-success toast (z-200) is on screen. Even
+        // though the toast has pointer-events:none, iOS Safari has
+        // historical quirks with it; explicit z-stacking is the
+        // belt-and-braces fix. Made the button bigger (p-3 / w-8 h-8)
+        // for easier tapping on mobile.
+        className="fixed top-6 right-6 text-white/70 hover:text-white bg-black/30 hover:bg-black/60 p-3 rounded-full z-[60] transition-colors"
+        aria-label="關閉 slideshow"
       >
         <X className="w-8 h-8" />
       </button>

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   Camera,
   Crown,
@@ -398,11 +398,43 @@ function ExpandedPhotoModal({
   const reactionCount = photo.reactions ? Object.keys(photo.reactions).length : 0;
   const userHasReacted = currentUserUid && photo.reactions?.[currentUserUid];
 
+  // 2026-07-24 — Esc key handler. The original X button was small
+  // (p-1.5 + w-5 = ~32px) and buried inside the sidebar header on
+  // mobile (modal is flex-col, so X is at top-right of the SIDEBAR,
+  // not the screen — easy to miss). Users reported clicking X did
+  // nothing. The root cause was likely the toast overlay (z-200,
+  // pointer-events-none was added but iOS Safari has historical
+  // quirks with it) sitting on top of the modal X. Defense in depth:
+  // 1) Floating X button pinned to top-right of the SCREEN, with
+  //    z above the modal so it's always reachable. 2) Esc key
+  //    closes the modal. 3) Click-outside already worked but kept.
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4 animate-in fade-in duration-200"
       onClick={onClose}
     >
+      {/* Floating close button — pinned to top-right of the screen,
+          above the modal box. Easier to find on mobile than the
+          small sidebar X. z-60 (above modal z-50, below toast z-200). */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        className="fixed top-4 right-4 z-[60] bg-black/60 hover:bg-black/80 text-white p-3 rounded-full backdrop-blur-sm shadow-lg transition-colors"
+        aria-label="關閉相片"
+      >
+        <X className="w-6 h-6" />
+      </button>
       <div
         className="bg-white rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col md:flex-row shadow-2xl"
         onClick={(e) => e.stopPropagation()}
