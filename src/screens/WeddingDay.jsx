@@ -2294,6 +2294,7 @@ function SongRow({
   onTogglePlay,
   onVote,
   onDelete,
+  // 2026-07-24 — onEdit opens the inline editor for this song.
   // 2026-07-22 — sortMode + legacy ▲▼ reorder props. Kept for
   // backward compatibility (some code paths still pass them).
   // 2026-07-22b — dragHandleProps replaces ▲▼ in manual sort
@@ -2301,6 +2302,7 @@ function SongRow({
   // onto a GripVertical button so only that element initiates
   // a drag. Couples can still tap the thumbnail to play/pause
   // and the heart to vote without triggering a drag.
+  onEdit,
   sortMode,
   isFirst,
   isLast,
