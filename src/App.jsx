@@ -2865,7 +2865,15 @@ export default function App() {
         // subscribe to /artifacts/{appId}/users/{ownerUid}/
         // redPackets and display the actual QR codes the owner
         // uploaded in RedPacketManager.
-        ownerUid={currentEvent?.userId}
+        //
+        // 2026-07-24b — bug fix. Previously used
+        // `currentEvent?.userId` but in guest mode `currentEvent`
+        // is NOT set (guests come in via URL ?o=&e=&g=&token= with
+        // no EventStore selection). The owner uid is instead on
+        // the guest object as `qOwner`. Mirror the same pattern
+        // the rest of the app uses (targetUid on line 573, plus
+        // the many uses on lines 1794, 1809, 1817, 1826, 1938).
+        ownerUid={guest.isGuestMode ? guest.qOwner : currentEvent?.userId}
       />
       <QrCodeModal
         guest={viewingQrCode}
