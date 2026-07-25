@@ -76,7 +76,30 @@ npm run lint
 npm test
 npm run build
 
-# Firestore rules (requires Java 17 + firebase-tools):
+# Firestore rules (requires Java 11+ + firebase-tools):
 npm install -g firebase-tools
-firebase emulators:exec --only firestore "node scripts/test-firestore-rules.js"
+firebase emulators:exec --only firestore "node scripts/test-firestore-rules.cjs"
 ```
+
+## Local prerequisites
+
+Some checks (Firestore emulator) need a JDK on your `PATH`. The
+rules-test step is a no-op if Java is missing, but installing it lets
+you catch rules regressions before pushing.
+
+| Tool | Why | Install (macOS) |
+|---|---|---|
+| **Java 11+** | Firestore emulator runtime | `brew install openjdk@11` then `sudo ln -sfn $(brew --prefix openjdk@11)/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk-11.jdk` |
+| **firebase-tools** | `firebase emulators:exec` + `firebase deploy` | `npm install -g firebase-tools` then `firebase login` |
+
+Verify with:
+
+```bash
+java -version       # → openjdk version "11.x" or newer
+firebase --version  # → 13.x or newer
+```
+
+If `firebase emulators:exec` fails with `Process java -version has
+exited with code 1`, the JDK is missing or not on `PATH`. CI runs
+the same check on Linux where Java is preinstalled, so this is a
+local-only gotcha.
