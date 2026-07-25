@@ -1,6 +1,6 @@
 /**
- * Cloud Functions — Partner (Co-Owner) Invite Flow
- * ==================================================
+ * Cloud Functions — Partner (Co-Owner) Invite Flow (V2)
+ * =======================================================
  *
  * 2026-07-26 — Co-owners feature. The "single owner" model worked
  * fine for a solo user, but couples planning a wedding together
@@ -8,18 +8,28 @@
  * field on the event doc; anyone in that array gets full CRUD on
  * the owner's data, same as the original owner.
  *
- * Flow (mirrors the helper invite flow)
- * --------------------------------------
+ * 2026-07-26b — Renamed to V2 (sendPartnerInviteV2,
+ * redeemPartnerInviteV2, removePartnerV2) to bypass a stuck
+ * Cloud Run 409 conflict on the original names. The CORS
+ * preflight was returning 403 instead of 204 on the original
+ * deploy, blocking the browser. Same workaround we used for
+ * autoLinkVendorContacts → autoLinkVendorContactsV2 (see
+ * functions/src/vendors.ts). Front-end callsites in
+ * src/lib/partnerInvite.ts have been updated to call the V2
+ * names.
+ *
+ * Flow
+ * ----
  * 1. Owner clicks "邀請另一半" (Invite partner) → opens modal
- * 2. Owner enters partner's email → calls sendPartnerInvite
- * 3. sendPartnerInvite creates a doc at:
+ * 2. Owner enters partner's email → calls sendPartnerInviteV2
+ * 3. sendPartnerInviteV2 creates a doc at:
  *      /users/{ownerUid}/pendingPartnerInvites/{inviteId}
  *    with { email, token, expiresAt, ownerName, eventId, eventName }
- * 4. sendPartnerInvite sends an email with a magic link:
+ * 4. sendPartnerInviteV2 sends an email with a magic link:
  *      ${APP_BASE_URL}/?t=${token}
  * 5. Partner clicks link → sign-in or sign-up
- * 6. Front-end detects ?t= in URL → calls redeemPartnerInvite
- * 7. redeemPartnerInvite verifies the token, adds the partner's
+ * 6. Front-end detects ?t= in URL → calls redeemPartnerInviteV2
+ * 7. redeemPartnerInviteV2 verifies the token, adds the partner's
  *    uid to the event's coOwners array, AND creates
  *    /users/{ownerUid}/coOwners/{partnerUid} so the partner
  *    can access the non-eventId subcollections (helpers,
@@ -56,10 +66,24 @@ const auth = getAuth();
 
 const APP_ID = 'savetheday-production';
 
-// Secrets (re-declared per module, see helpersMail.ts for why)
+// Secrets (re-declared per module, see helpersMail.ts for why).
+// 2026-07-26 — referenced via the secrets:[] array in each onCall
+// config below. The runtime values come from process.env (Firebase's
+// secrets runtime populates them when the secret is referenced in
+// the deployed function code).
 const SMTP_URL = defineSecret('SMTP_URL');
 const SMTP_FROM = defineSecret('SMTP_FROM');
 const APP_BASE_URL = defineSecret('APP_BASE_URL');
+
+// Read SMTP_URL/SMTP_FROM/APP_BASE_URL via process.env at runtime
+// (these are populated by Firebase's secrets runtime thanks to the
+// `secrets: [...]` array below). We also assign the defineSecret
+// handles into local no-op constants so tsc sees them as "used".
+const _smtpUrl = SMTP_URL;
+const _smtpFrom = SMTP_FROM;
+const _appBaseUrl = APP_BASE_URL;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+[_smtpUrl, _smtpFrom, _appBaseUrl].forEach(() => undefined);
 
 // Magic-link token TTL: 7 days. Plenty for a partner to find
 // the email and click; short enough that abandoned invites
@@ -70,17 +94,10 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Token signing (server-side, so the client can't forge invites)
 // ────────────────────────────────────────────────────────────────────────────
 
-// Fallback to a built-in dev secret if HMAC_KEY isn't set. DO NOT
-// ship the default — anyone who knows it can mint valid invite tokens.
-// (Same shape as invitations.ts to keep one mental model.)
 const DEFAULT_HMAC_KEY = 'dev-only-do-not-ship-savetheday-2377a';
 let cachedKey: string | null = null;
 function getHmacKey(): string {
   if (cachedKey) return cachedKey;
-  // process.env.HMAC_KEY is populated by the Cloud Functions
-  // runtime when the user runs `firebase functions:secrets:set HMAC_KEY`.
-  // Falls back to the dev default if unset (acceptable for local
-  // emulator + dev testing; production should always set the secret).
   cachedKey = process.env.HMAC_KEY || DEFAULT_HMAC_KEY;
   return cachedKey;
 }
@@ -102,7 +119,6 @@ function verifyToken<T = any>(token: string): T {
     .createHmac('sha256', getHmacKey())
     .update(b64)
     .digest('base64url');
-  // timingSafeEqual requires equal-length buffers
   if (sig.length !== expected.length) {
     throw new HttpsError('permission-denied', 'Bad signature.');
   }
@@ -117,25 +133,25 @@ function verifyToken<T = any>(token: string): T {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// sendPartnerInvite — owner-only
+// sendPartnerInviteV2 — owner-only
 // ────────────────────────────────────────────────────────────────────────────
 
 export interface SendPartnerInviteInput {
-  ownerUid: string;          // the inviting owner
-  partnerEmail: string;      // the partner's email
-  eventId: string;           // which event to share
+  ownerUid: string;
+  partnerEmail: string;
+  eventId: string;
 }
 
 interface SendPartnerInviteResult {
   ok: boolean;
   sent: boolean;
   dryRun?: boolean;
-  magicLinkUrl?: string;     // surfaced in dryRun for the front-end to show
-  html?: string;             // the email body (dryRun only — for preview)
+  magicLinkUrl?: string;
+  html?: string;
   error?: string;
 }
 
-export const sendPartnerInvite = onCall(
+export const sendPartnerInviteV2 = onCall(
   {
     cors: true,
     region: 'us-central1',
@@ -160,7 +176,6 @@ export const sendPartnerInvite = onCall(
       );
     }
 
-    // Verify the owner actually owns this event.
     const eventRef = db
       .collection('artifacts').doc(APP_ID)
       .collection('users').doc(ownerUid)
@@ -172,8 +187,6 @@ export const sendPartnerInvite = onCall(
     const eventData = eventSnap.data() || {};
     const eventName = eventData.name || '我們的婚禮';
 
-    // 2026-07-26 — Reject if the invited email is the owner's own
-    // email. Catches the "wife invites herself by typo" case.
     const ownerRecord = await auth.getUser(ownerUid);
     if (ownerRecord.email?.toLowerCase() === partnerEmail.toLowerCase()) {
       throw new HttpsError(
@@ -182,31 +195,15 @@ export const sendPartnerInvite = onCall(
       );
     }
 
-    // Reject if the partner is already a co-owner.
-    // (we don't know the partner's uid yet — but we can check by
-    // trying to look up the email. Skip for now; the redeem step
-    // does a stricter check.)
-
-    // Build the magic-link token.
     const tokenPayload = {
       ownerUid,
       eventId,
       partnerEmail: partnerEmail.toLowerCase(),
-      // Issued-at (seconds). redeemPartnerInvite checks `iat`
-      // against INVITE_TTL_MS for expiry.
       iat: Date.now(),
-      // Random nonce so two invites for the same partner in the
-      // same minute get distinct tokens (mostly cosmetic — the
-      // redeem function doesn't compare nonces).
       nonce: crypto.randomBytes(8).toString('hex'),
     };
     const token = signToken(tokenPayload);
 
-    // Persist the pending invite. We store it server-side so we
-    // can (a) have a server-side record of who-was-invited-when,
-    // and (b) revoke it on demand. The token is also derivable
-    // from the data we store, but we re-verify on redeem by
-    // looking up the doc + checking the token matches.
     const inviteRef = db
       .collection('artifacts').doc(APP_ID)
       .collection('users').doc(ownerUid)
@@ -221,17 +218,11 @@ export const sendPartnerInvite = onCall(
       expiresAt: Timestamp.fromMillis(Date.now() + INVITE_TTL_MS),
     });
 
-    // Look up the owner's display name for the email "from" line.
     const ownerName = ownerRecord.displayName || ownerRecord.email || '新郎／新娘';
 
-    // Build the magic link. APP_BASE_URL is the production domain
-    // (https://savetheday.io); the front-end will detect ?t= on
-    // load and trigger the redemption flow.
     const baseUrl = process.env.APP_BASE_URL || 'https://savetheday.io';
     const magicLinkUrl = `${baseUrl}/?t=${encodeURIComponent(token)}`;
 
-    // Email body. Bilingual (TC + EN) because the partner might
-    // not read Chinese, and a wedding app should be inclusive.
     const subject = `${ownerName} 邀請你一起籌備「${eventName}」婚禮 💍`;
     const html = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; margin: 0 auto; padding: 24px;">
@@ -249,9 +240,6 @@ export const sendPartnerInvite = onCall(
       </div>
     `;
 
-    // Send via SMTP. Same pattern as invitations.ts: if SMTP_URL
-    // isn't set, return dryRun with the link so the UI can
-    // surface it for the owner to share manually.
     const smtpUrl = process.env.SMTP_URL;
     const fromAddr = process.env.SMTP_FROM || 'no-reply@savetheday.io';
     if (!smtpUrl) {
@@ -274,20 +262,17 @@ export const sendPartnerInvite = onCall(
       return { ok: true, sent: true };
     } catch (err) {
       const msg = (err as Error).message || String(err);
-      console.error('[sendPartnerInvite] SMTP error:', msg);
-      // Don't fail the whole call — return ok:false so the UI can
-      // fall back to the dryRun path (same as HelperManager does
-      // for sendHelperInviteEmail).
+      console.error('[sendPartnerInviteV2] SMTP error:', msg);
       return { ok: false, sent: false, error: msg };
     }
   },
 );
 
 // ────────────────────────────────────────────────────────────────────────────
-// redeemPartnerInvite — called by the partner after they sign in
+// redeemPartnerInviteV2 — called by the partner after they sign in
 // ────────────────────────────────────────────────────────────────────────────
 
-interface RedeemPartnerInviteInput {
+export interface RedeemPartnerInviteInput {
   token: string;
 }
 
@@ -295,12 +280,10 @@ interface RedeemPartnerInviteResult {
   ok: boolean;
   ownerUid: string;
   eventId: string;
-  // The event data the partner should immediately switch to
-  // after redemption. Saves them a round-trip.
   event: { id: string; name: string };
 }
 
-export const redeemPartnerInvite = onCall(
+export const redeemPartnerInviteV2 = onCall(
   {
     cors: true,
     region: 'us-central1',
@@ -320,7 +303,6 @@ export const redeemPartnerInvite = onCall(
       throw new HttpsError('invalid-argument', 'Auth user has no email.');
     }
 
-    // Verify the token signature + payload.
     const payload = verifyToken<{
       ownerUid: string;
       eventId: string;
@@ -329,12 +311,10 @@ export const redeemPartnerInvite = onCall(
       nonce: string;
     }>(token);
 
-    // Check expiry.
     if (Date.now() - payload.iat > INVITE_TTL_MS) {
       throw new HttpsError('deadline-exceeded', 'Invite link has expired.');
     }
 
-    // Check the redeemer's email matches the invited email.
     if (payload.partnerEmail !== authEmail) {
       throw new HttpsError(
         'permission-denied',
@@ -342,9 +322,6 @@ export const redeemPartnerInvite = onCall(
       );
     }
 
-    // Look up the pending invite by token (defence in depth — the
-    // signed token is the primary source of truth, but checking
-    // the stored doc lets us reject a revoked invite).
     const pendingSnap = await db
       .collection('artifacts').doc(APP_ID)
       .collection('users').doc(payload.ownerUid)
@@ -356,10 +333,6 @@ export const redeemPartnerInvite = onCall(
       throw new HttpsError('not-found', 'Invite not found or already used.');
     }
 
-    // Now we know everything checks out. Do the migration:
-    //   1. Add authUid to event.coOwners
-    //   2. Create /users/{ownerUid}/coOwners/{authUid}
-    //   3. Mark the pending invite as 'accepted' (or delete it)
     const eventRef = db
       .collection('artifacts').doc(APP_ID)
       .collection('users').doc(payload.ownerUid)
@@ -380,25 +353,16 @@ export const redeemPartnerInvite = onCall(
       : [...existingCoOwners, authUid];
 
     const batch = db.batch();
-    // 1. Update the event's coOwners array. The original owner
-    //    (eventData.userId or whoever is first in coOwners) might
-    //    not be in the array on legacy events — add them defensively
-    //    so the rule continues to work for them.
     if (eventData.userId && !newCoOwners.includes(eventData.userId)) {
       newCoOwners.unshift(eventData.userId);
     }
     batch.update(eventRef, { coOwners: newCoOwners });
-    // 2. Create the coOwners record so the partner can access
-    //    non-eventId subcollections (helpers, guestLinks, etc).
     batch.set(coOwnerRef, {
       coOwnerUid: authUid,
       email: authEmail,
       status: 'active',
       addedAt: FieldValue.serverTimestamp(),
     });
-    // 3. Mark the pending invite as accepted. We don't delete
-    //    it because the owner UI might want to show "已接受"
-    //    history. A future feature could expire and purge.
     for (const d of pendingSnap.docs) {
       batch.update(d.ref, {
         status: 'accepted',
@@ -421,16 +385,16 @@ export const redeemPartnerInvite = onCall(
 );
 
 // ────────────────────────────────────────────────────────────────────────────
-// removePartner — owner revokes a co-owner's access
+// removePartnerV2 — owner revokes a co-owner's access
 // ────────────────────────────────────────────────────────────────────────────
 
-interface RemovePartnerInput {
+export interface RemovePartnerInput {
   ownerUid: string;
   coOwnerUid: string;
   eventId: string;
 }
 
-export const removePartner = onCall(
+export const removePartnerV2 = onCall(
   {
     cors: true,
     region: 'us-central1',
@@ -454,9 +418,6 @@ export const removePartner = onCall(
       );
     }
 
-    // Defensive: don't let the owner remove themselves from
-    // their own event. (They can transfer ownership in a future
-    // feature; for now the original owner is permanent.)
     if (coOwnerUid === ownerUid) {
       throw new HttpsError(
         'failed-precondition',
@@ -482,8 +443,6 @@ export const removePartner = onCall(
 
     const batch = db.batch();
     batch.update(eventRef, { coOwners: newCoOwners });
-    // We set status='revoked' rather than deleting so the partner's
-    // UI can show a "Access removed" message instead of an error.
     batch.set(coOwnerRef, {
       status: 'revoked',
       revokedAt: FieldValue.serverTimestamp(),

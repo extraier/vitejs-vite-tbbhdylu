@@ -915,9 +915,13 @@ export {
 // for the full rationale).
 export { postJobRequest } from './jobBoard';
 
-// 2026-07-26 — Co-owners (couples / partners). The sendPartnerInvite
-// callable sends a magic-link email to a partner; redeemPartnerInvite
-// is what they call after signing in to finalize the join. removePartner
-// revokes a co-owner's access (owner-only). See partnerInvite.ts
-// for the full flow.
-export { sendPartnerInvite, redeemPartnerInvite, removePartner } from './partnerInvite';
+// 2026-07-26 — Co-owners (couples / partners). The sendPartnerInviteV2
+// callable sends a magic-link email to a partner; redeemPartnerInviteV2
+// is what they call after signing in to finalize the join. removePartnerV2
+// revokes a co-owner's access (owner-only). V2 suffix bypasses a
+// stuck Cloud Run 409 on the original names; see partnerInvite.ts.
+export {
+  sendPartnerInviteV2,
+  redeemPartnerInviteV2,
+  removePartnerV2,
+} from './partnerInvite';

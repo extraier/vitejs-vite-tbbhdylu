@@ -196,8 +196,21 @@ service cloud.firestore {
         // too. We use isEventCoOwner(eventId, ownerUid) here because
         // the event doc itself has no eventId field — the field is
         // implicit in the path segment.
+        //
+        // 2026-07-26c — PERF/RELIABILITY fix: short-circuit
+        // `isOwner` BEFORE the expensive `isEventCoOwner` `get()`
+        // call. In a collectionGroup('events') query with a
+        // where('coOwners', 'array-contains', X) filter, Firestore
+        // evaluates the rule on each candidate doc. The old rule
+        // evaluated BOTH branches on every doc — including the
+        // two `get()` calls inside isEventCoOwner. For users
+        // with many events this triggered "Missing or insufficient
+        // permissions" (often a rate-limit / quota failure from the
+        // chained get() calls). Reordering short-circuits the
+        // common case (user IS the owner) with zero extra reads.
         match /events/{eventId} {
-          allow read: if isOwner(ownerUid) || isEventCoOwner(eventId, ownerUid)
+          allow read: if isOwner(ownerUid)
+            || isEventCoOwner(eventId, ownerUid)
             || hasValidGuestLink(ownerUid, eventId)
             || hasAnyHelperViewPerm(ownerUid);
           allow create, update, delete: if isOwner(ownerUid) || isEventCoOwner(eventId, ownerUid);

@@ -683,14 +683,15 @@ export default function App() {
   // user is a CO-OWNER (not just owner). These come from the
   // `coOwners` array on each event. We use a collectionGroup
   // query with a where('coOwners', 'array-contains', user.uid)
-  // filter. Requires the implicit 'coOwners' index (which
-  // Firestore auto-creates for simple array-contains queries).
+  // filter.
   //
-  // Each result has the standard event shape PLUS the
-  // `_ownerUid` we derive from the ref (so the picker can
-  // fetch subcollections under the original owner, not under
-  // the current user's path).
-  const { data: coOwnedEvents } = useFirestoreCollection(
+  // IMPORTANT: this query can fail with "Missing or insufficient
+  // permissions" if ANY event in the user's collection set fails
+  // the read rule (e.g. legacy events without a coOwners field
+  // where the rule short-circuits unexpectedly). The error is
+  // caught at the App level — see `coOwnedEventsError` below —
+  // and we fall back to showing just the user's own events.
+  const { data: coOwnedEvents, error: coOwnedEventsError } = useFirestoreCollection(
     !guest.isGuestMode && user && !user.isAnonymous
       ? query(
           collectionGroup(db, 'events'),
@@ -699,6 +700,21 @@ export default function App() {
       : null,
     [user?.uid, guest.isGuestMode],
   );
+
+  // If the coOwnedEvents query fails, log once and degrade
+  // gracefully (use only own events). We don't want the
+  // dashboard to break just because the cross-owner picker
+  // isn't available yet — better to show fewer events than
+  // to show none.
+  useEffect(() => {
+    if (coOwnedEventsError) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[coOwnedEvents] collectionGroup query denied; falling back to own events only.',
+        coOwnedEventsError?.message,
+      );
+    }
+  }, [coOwnedEventsError]);
 
   // Merge own events + co-owned events. The dashboard doesn't
   // care which is which for the picker — it just shows the

@@ -1,9 +1,10 @@
 // 2026-07-26 — Co-owners (couples / partners) front-end library.
 //
-// Wraps the three Cloud Functions defined in functions/src/partnerInvite.ts:
-//   - sendPartnerInvite   — owner invokes; sends email to partner
-//   - redeemPartnerInvite — partner invokes after sign-in; finalizes join
-//   - removePartner       — owner revokes a co-owner
+// Wraps the three Cloud Functions defined in
+// functions/src/partnerInvite.ts:
+//   - sendPartnerInviteV2   — owner invokes; sends email to partner
+//   - redeemPartnerInviteV2 — partner invokes after sign-in; finalizes join
+//   - removePartnerV2       — owner revokes a co-owner
 //
 // Plus a small client-side helper to extract the ?t= token from
 // the URL (the front-end checks for it on every load to handle
@@ -11,6 +12,12 @@
 //
 // The shape mirrors sendHelperInviteEmail / acceptHelperInvite
 // in src/lib/helpers.ts so the call-site code reads uniformly.
+//
+// 2026-07-26b — Renamed to call the V2 Cloud Functions. The
+// original sendPartnerInvite / redeemPartnerInvite / removePartner
+// hit a stuck Cloud Run 409 on the original names; their CORS
+// preflight started returning 403 instead of 204. Renaming
+// bypasses the stuck resource.
 
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import type { Functions } from 'firebase/functions';
@@ -25,9 +32,6 @@ export interface SendPartnerInviteResult {
   ok: boolean;
   sent: boolean;
   dryRun?: boolean;
-  // Present only in dryRun. The front-end shows this in a
-  // "copy this link" modal so the owner can send it manually
-  // when SMTP isn't configured.
   magicLinkUrl?: string;
   html?: string;
   error?: string;
@@ -54,14 +58,10 @@ export interface RemovePartnerResult {
   ok: boolean;
 }
 
-// Singleton Functions instance. We import firebase/app lazily
-// because this module is also imported by tests that mock
-// getFunctions().
+// Singleton Functions instance.
 let cachedFn: Functions | null = null;
 function fns(): Functions {
   if (cachedFn) return cachedFn;
-  // Use the default app — App.jsx initializes it before
-  // any of these calls are made.
   cachedFn = getFunctions(undefined, 'us-central1');
   return cachedFn;
 }
@@ -70,7 +70,7 @@ export const partnerInviteApi = {
   async send(input: SendPartnerInviteInput): Promise<SendPartnerInviteResult> {
     const call = httpsCallable<SendPartnerInviteInput, SendPartnerInviteResult>(
       fns(),
-      'sendPartnerInvite',
+      'sendPartnerInviteV2',
     );
     const res = await call(input);
     return res.data;
@@ -79,7 +79,7 @@ export const partnerInviteApi = {
   async redeem(input: RedeemPartnerInviteInput): Promise<RedeemPartnerInviteResult> {
     const call = httpsCallable<RedeemPartnerInviteInput, RedeemPartnerInviteResult>(
       fns(),
-      'redeemPartnerInvite',
+      'redeemPartnerInviteV2',
     );
     const res = await call(input);
     return res.data;
@@ -88,7 +88,7 @@ export const partnerInviteApi = {
   async remove(input: RemovePartnerInput): Promise<RemovePartnerResult> {
     const call = httpsCallable<RemovePartnerInput, RemovePartnerResult>(
       fns(),
-      'removePartner',
+      'removePartnerV2',
     );
     const res = await call(input);
     return res.data;
@@ -103,10 +103,6 @@ export const partnerInviteApi = {
  * Look for ?t=<token> in the current URL. Returns the token
  * string, or null if not present. The token is the magic-link
  * value from the partner-invite email.
- *
- * After consuming the token, the caller should remove it from
- * the URL (so a page refresh doesn't trigger another redeem).
- * See usePartnerInviteRedeem hook for the standard pattern.
  */
 export function extractPartnerTokenFromUrl(): string | null {
   if (typeof window === 'undefined') return null;
@@ -124,7 +120,6 @@ export function clearPartnerTokenFromUrl(): void {
   const url = new URL(window.location.href);
   if (url.searchParams.has('t')) {
     url.searchParams.delete('t');
-    // Use history.replaceState so we don't pollute the back stack.
     window.history.replaceState({}, '', url.toString());
   }
 }
