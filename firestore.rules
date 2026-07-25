@@ -475,6 +475,62 @@ service cloud.firestore {
           allow delete: if isAdmin();
         }
 
+        // ---- 2026-07-24: 電子人情 (e-Red-Packet) QR codes ---------------
+        // Owner uploads their payment-app QR codes (PayMe / FPS /
+        // AlipayHK / WeChat Pay / 八達通) so guests can scan them
+        // directly from the PersonalGuestPortal payment modal.
+        //
+        // Storage shape (one doc per uploaded QR):
+        //   { provider: string, label: string, qrUrl: string,
+        //     qrPath: string, suggested: number|null,
+        //     note: string, sortOrder: number, createdAt: timestamp }
+        //
+        // Reads:
+        //   - owner: full CRUD on their own QRs
+        //   - guest: any signed-in user with a valid (non-expired)
+        //     guestLink to this owner can READ the QR list, so the
+        //     PersonalGuestPortal can render the actual scan targets.
+        //     We use the same hasValidGuestLink() helper used for
+        //     /guests reads — the guest's QR redemption is the trust
+        //     signal that they were invited to this wedding.
+        // Writes: owner only (create / update / delete).
+        match /redPackets/{redPacketId} {
+          // hasValidGuestLink takes (ownerUid, eventId). The QRs
+          // belong to the whole wedding, not a single event, but
+          // guestLinks are also per-event. We allow read if the
+          // guest has a valid link to ANY of the owner's events.
+          // We do this by checking that the guestLink doc exists
+          // and is not expired, without constraining the eventId
+          // (the eventId field on the link doc is what proves the
+          // guest was invited, and any event of the same owner
+          // counts as the same wedding).
+          allow read: if isOwner(ownerUid)
+            || (isSignedIn()
+              && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid))
+              && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.expiresAt > request.time);
+          allow create: if isOwner(ownerUid)
+            && request.resource.data.keys().hasAll([
+              'provider', 'label', 'qrUrl', 'createdAt'
+            ])
+            && request.resource.data.provider in [
+              'payme', 'fps', 'alipayhk', 'wechat', 'octopus', 'other'
+            ]
+            && request.resource.data.label is string
+            && request.resource.data.label.size() > 0
+            && request.resource.data.label.size() <= 80
+            && request.resource.data.qrUrl is string
+            && request.resource.data.qrUrl.matches('^https://firebasestorage\\.googleapis\\.com/.*')
+            && request.resource.data.createdAt is timestamp;
+          allow update: if isOwner(ownerUid)
+            // The owner can edit the metadata (label, suggested
+            // amount, note, sort order) but cannot swap the QR image
+            // by editing qrUrl — to replace an image they must
+            // delete and re-create the doc.
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['label', 'suggested', 'note', 'sortOrder', 'provider']);
+          allow delete: if isOwner(ownerUid);
+        }
+
         // ---- 2026-07-17: Big-day orchestration suite ---------------------
         // Five parallel collections under /users/{ownerUid}:
         //   • rundown   — 大日流程 (time-slot timeline)

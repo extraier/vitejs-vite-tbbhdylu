@@ -13,7 +13,7 @@ const {
   assertFails,
   assertSucceeds,
 } = require('@firebase/rules-unit-testing');
-const { setDoc, getDoc, doc, collection } = require('firebase/firestore');
+const { setDoc, getDoc, doc, collection, deleteDoc } = require('firebase/firestore');
 const fs = require('fs');
 const path = require('path');
 
@@ -470,6 +470,123 @@ async function runTests() {
     ),
   );
   log('Helper CANNOT mutate scanLog (immutable)', true);
+
+  console.log('\n=== 電子人情 (e-Red-Packet) QR codes ===');
+
+  // 2026-07-24 — owner can write their own QRs. Read is granted
+  // to guests with a valid (non-expired) guestLink.
+
+  // Seed a redPacket owned by alice
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(
+      doc(ctx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1'),
+      {
+        provider: 'payme',
+        label: 'PayMe - Jenny',
+        qrUrl: 'https://firebasestorage.googleapis.com/v0/b/test/o/red-packets%2Falice%2Fpayme-1%2Fqr.png',
+        qrPath: 'red-packets/alice/payme-1/qr.png',
+        suggested: 800,
+        note: '',
+        sortOrder: 1,
+        createdAt: Date.now(),
+      },
+    );
+  });
+
+  // Owner CAN read their own QR
+  await assertSucceeds(
+    getDoc(doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+  );
+  log('Owner CAN read own redPackets', true);
+
+  // Owner CAN create a new QR
+  await assertSucceeds(
+    setDoc(
+      doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/fps-1'),
+      {
+        provider: 'fps',
+        label: 'FPS',
+        qrUrl: 'https://firebasestorage.googleapis.com/v0/b/test/o/red-packets%2Falice%2Ffps-1%2Fqr.png',
+        sortOrder: 2,
+        createdAt: Date.now(),
+      },
+    ),
+  );
+  log('Owner CAN create redPackets', true);
+
+  // Guest with valid link CAN read owner's QRs
+  await assertSucceeds(
+    getDoc(doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+  );
+  log('Valid-link guest CAN read redPackets', true);
+
+  // Cross-tenant: bob (different owner) CANNOT read alice's QRs
+  await assertFails(
+    getDoc(doc(bob().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+  );
+  log("Cross-tenant: bob CANNOT read alice's redPackets", true);
+
+  // Cross-tenant: bob CANNOT write to alice's QRs
+  await assertFails(
+    setDoc(
+      doc(bob().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/evil'),
+      {
+        provider: 'payme',
+        label: 'Hijack',
+        qrUrl: 'https://firebasestorage.googleapis.com/v0/b/test/o/evil.png',
+        sortOrder: 0,
+        createdAt: Date.now(),
+      },
+    ),
+  );
+  log("Cross-tenant: bob CANNOT write to alice's redPackets", true);
+
+  // Guest with valid link CANNOT write
+  await assertFails(
+    setDoc(
+      doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/hostile'),
+      {
+        provider: 'payme',
+        label: 'Hostile',
+        qrUrl: 'https://firebasestorage.googleapis.com/v0/b/test/o/hostile.png',
+        sortOrder: 0,
+        createdAt: Date.now(),
+      },
+    ),
+  );
+  log('Valid-link guest CANNOT create redPackets', true);
+
+  // Owner CAN update metadata but NOT qrUrl (image swap must delete+recreate)
+  await assertSucceeds(
+    setDoc(
+      doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1'),
+      { label: 'PayMe - Jenny & Tom', suggested: 1000 },
+      { merge: true },
+    ),
+  );
+  log('Owner CAN update redPacket metadata', true);
+
+  await assertFails(
+    setDoc(
+      doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1'),
+      { qrUrl: 'https://firebasestorage.googleapis.com/v0/b/test/o/swapped.png' },
+      { merge: true },
+    ),
+  );
+  log('Owner CANNOT swap qrUrl via update (must delete+recreate)', true);
+
+  // Owner CAN delete
+  await assertSucceeds(
+    deleteDoc(doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/fps-1')),
+  );
+  log('Owner CAN delete redPackets', true);
+
+  // Expired-link guest CANNOT read
+  const expiredCtx = env.authenticatedContext('expired-uid');
+  await assertFails(
+    getDoc(doc(expiredCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+  );
+  log('Expired-link guest CANNOT read redPackets', true);
 
   console.log(`\n=== Result ===\n  ${passed} passed, ${failed} failed\n`);
 
