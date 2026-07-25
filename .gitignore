@@ -29,3 +29,5 @@ functions/.env.local
 *.sln
 *.sw?
 .vercel
+vercel.json.bak
+.vercel/output
