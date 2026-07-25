@@ -2873,7 +2873,24 @@ export default function App() {
         // the guest object as `qOwner`. Mirror the same pattern
         // the rest of the app uses (targetUid on line 573, plus
         // the many uses on lines 1794, 1809, 1817, 1826, 1938).
-        ownerUid={guest.isGuestMode ? guest.qOwner : currentEvent?.userId}
+        ownerUid={(() => {
+          // 2026-07-25 — debug: trace which branch is taken
+          // and what the actual ownerUid value is when the
+          // modal is shown. The previous log showed
+          // `ownerUid: undefined` even though
+          // guest.isGuestMode should be true when the user
+          // is in the guest portal.
+          const result = guest.isGuestMode ? guest.qOwner : currentEvent?.userId;
+          console.log('[PaymentModal] ownerUid resolved:', {
+            guestIsGuestMode: guest.isGuestMode,
+            guestQOwner: guest.qOwner,
+            currentEventUserId: currentEvent?.userId,
+            activeGuestPortalId: activeGuestPortal?.id,
+            result,
+            showPaymentModal,
+          });
+          return result;
+        })()}
       />
       <QrCodeModal
         guest={viewingQrCode}
