@@ -79,6 +79,13 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
   // Live-subscribe to this couple's red-packet QRs
   useEffect(() => {
     if (!ownerUid) return;
+    // 2026-07-25 — debug: log the owner-side subscription
+    // path so we can verify what's being read.
+    console.log('[redPackets/owner] subscribing to:', {
+      appId,
+      ownerUid,
+      path: `artifacts/${appId}/users/${ownerUid}/redPackets`,
+    });
     const colRef = collection(
       db,
       'artifacts',
@@ -93,11 +100,25 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         list.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+        // 2026-07-25 — debug
+        console.log('[redPackets/owner] received', list.length, 'docs:', list.map(r => ({
+          id: r.id,
+          provider: r.provider,
+          label: r.label,
+          hasQrUrl: !!r.qrUrl,
+        })));
         setItems(list);
         setLoading(false);
       },
       (err) => {
-        console.error('redPackets subscription failed:', err);
+        // 2026-07-25 — surface the actual error code/message
+        // so we can tell whether the read was rejected by
+        // rules, or the path is wrong, or something else.
+        console.error('[redPackets/owner] subscription FAILED:', {
+          code: err?.code,
+          message: err?.message,
+          ownerUid,
+        });
         setError('無法載入電子人情設定。請重新整理頁面再試。');
         setLoading(false);
       },
@@ -129,10 +150,13 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
     const path = `red-packets/${ownerUid}/${newId}/${safeName}`;
 
     try {
+      // 2026-07-25 — debug: trace the upload
+      console.log('[redPackets] uploading:', { ownerUid, newId, path, fileType: file.type, fileSize: file.size });
       // Upload image first; only write Firestore doc if upload succeeds.
       const sRef = storageRef(storage, path);
       await uploadBytes(sRef, file, { contentType: file.type });
       const url = await getDownloadURL(sRef);
+      console.log('[redPackets] storage upload OK, url:', url);
 
       const docRef = doc(
         db,
@@ -153,10 +177,19 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
         sortOrder: (items?.length || 0) + 1,
         createdAt: serverTimestamp(),
       });
+      console.log('[redPackets] Firestore doc created:', newId);
 
       showToast?.('✅ 電子人情 QR Code 已上載');
     } catch (e) {
-      console.error('red-packet upload failed:', e);
+      // 2026-07-25 — surface the actual error code so we
+      // can tell whether it's a storage-rules rejection
+      // (403) vs a Firestore-rules rejection vs network.
+      console.error('[redPackets] upload FAILED:', {
+        code: e?.code,
+        message: e?.message,
+        ownerUid,
+        newId,
+      });
       setError('上載失敗：' + (e.message || '請稍後再試'));
     }
   }
