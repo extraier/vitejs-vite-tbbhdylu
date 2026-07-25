@@ -1,13 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "// buildCommand": "Set explicitly so Vercel doesn't auto-detect this as a Node.js project because of the api/ folder. Without this, Vercel saw api/*.js and assumed Node.js, ignored dist/, and only deployed the api/ functions — leaving the SPA broken on custom domain.",
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "installCommand": "npm install --legacy-peer-deps",
-  "framework": null,
   "rewrites": [
     {
-      "source": "/((?!assets/|api/|.*\\..*).*)",
+      "source": "/((?!assets/|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]
