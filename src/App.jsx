@@ -334,7 +334,23 @@ export default function App() {
   // before userRole was initialised.)
   useEffect(() => {
     const token = extractPartnerTokenFromUrl();
-    if (!token) return;
+    // eslint-disable-next-line no-console
+    console.log('[partnerInvite] effect triggered', { hasToken: !!token, hasUser: !!user, userUid: user?.uid });
+    if (!token) {
+      // First visit might have stashed it. After auth, also check
+      // sessionStorage as a fallback (the URL token might still be
+      // there but we also want belt-and-suspenders to handle the
+      // case where the URL bar was wiped by a SPA navigation).
+      const stashed = (() => {
+        try { return sessionStorage.getItem('pendingPartnerToken'); } catch { return null; }
+      })();
+      if (stashed && user) {
+        // eslint-disable-next-line no-console
+        console.log('[partnerInvite] using stashed token from sessionStorage');
+        return processToken(stashed, user, userRole);
+      }
+      return;
+    }
     if (!user) {
       // Stash for after-auth replay
       try {
@@ -342,6 +358,13 @@ export default function App() {
       } catch {}
       return;
     }
+    return processToken(token, user, userRole);
+  }, [user?.uid]);
+  // (NOT [user?.uid, userRole] — that would re-run the redeem on
+  // every role change, which is wrong. The body reads userRole
+  // from the current closure; the ref keeps it fresh.)
+
+  function processToken(token, user, userRole) {
     // Keep the ref in sync so the TDZ-safe version of this
     // effect (if we need it) can read the latest userRole.
     userRoleRef.current = userRole;
@@ -386,10 +409,7 @@ export default function App() {
       }
     })();
     return () => { cancelled = true; };
-  }, [user?.uid]); // re-run only when the signed-in user changes
-  // (NOT [user?.uid, userRole] — that would re-run the redeem on
-  // every role change, which is wrong. The body reads userRole
-  // from the current closure; the ref keeps it fresh.)
+  }
 
   // Hermes 2026-07-03: derive helperPerms for the current event so the
   // GuestList (and any other per-event consumer) can read capabilities.
