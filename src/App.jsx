@@ -6,6 +6,7 @@ import {
      collectionGroup,
      deleteDoc,
      doc,
+     getDoc,
      limit,
      onSnapshot,
      orderBy,
@@ -56,6 +57,14 @@ import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { useFirestoreDoc } from './hooks/useFirestoreDoc';
 import { useToast } from './hooks/useToast';
+// 2026-07-26 — Co-owners (couples / partners) front-end bindings.
+// See src/lib/partnerInvite.ts for the shapes; the Cloud Functions
+// live at functions/src/partnerInvite.ts.
+import {
+  partnerInviteApi,
+  extractPartnerTokenFromUrl,
+  clearPartnerTokenFromUrl,
+} from './lib/partnerInvite';
 import { signInAnonymously } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from './lib/firebase';
@@ -103,6 +112,7 @@ import { HelperWaitingScreen } from './screens/HelperWaitingScreen';
 import { ScanResultModal } from './components/modals/ScanResultModal';
 import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
 import { SignUpPromptModal } from './components/modals/SignUpPromptModal';
+import { InvitePartnerModal } from './components/modals/InvitePartnerModal';
 
 export default function App() {
   // Auth
@@ -119,6 +129,82 @@ export default function App() {
     linkAnonymousWithEmail,
     logout,
   } = useAuth();
+  // 2026-07-26 — Co-owners (couples / partners) auto-redeem.
+  // The partner's magic-link email contains ?t=<token>. When they
+  // click it, the front-end detects the token on mount, calls
+  // redeemPartnerInvite, and switches to the joined event. The
+  // token is then cleared from the URL bar.
+  //
+  // We also handle the "user isn't signed in yet" case: stash the
+  // token and replay it after they sign in/up. Without this,
+  // the partner would have to keep the email tab open through
+  // the whole sign-up flow.
+  useEffect(() => {
+    const token = extractPartnerTokenFromUrl();
+    if (!token) return;
+    // Not signed in yet — stash for after-auth replay
+    if (!user) {
+      // eslint-disable-next-line no-console
+      console.log('[partnerInvite] token found but user not signed in; will retry after sign-in');
+      // Store in module-level (so it survives re-renders) — we
+      // use a localStorage flag so a page refresh doesn't lose it.
+      try {
+        sessionStorage.setItem('pendingPartnerToken', token);
+      } catch {
+        // sessionStorage might be blocked in some iframes
+      }
+      return;
+    }
+    // Signed in — redeem now
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await partnerInviteApi.redeem({ token });
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.log('[partnerInvite] redeemed:', result);
+        // Clear the token from the URL bar
+        clearPartnerTokenFromUrl();
+        try { sessionStorage.removeItem('pendingPartnerToken'); } catch {}
+        // Switch to the new event so the partner immediately sees
+        // the wedding they were just invited to. We need to
+        // fetch the event doc because we only have the id+name
+        // from the redeem result.
+        const eventDocRef = doc(
+          db,
+          'artifacts',
+          appId,
+          'users',
+          result.ownerUid,
+          'events',
+          result.eventId,
+        );
+        const eventDoc = await getDoc(eventDocRef);
+        if (cancelled) return;
+        if (eventDoc.exists()) {
+          setCurrentEvent({ id: eventDoc.id, ...eventDoc.data() });
+          // Also update userRole to 'owner' if they were a guest
+          // (the partner IS now an owner, not a guest)
+          if (userRole === 'guest_portal') {
+            setUserRole('owner');
+          }
+          setCurrentView('couple-checklist');
+          showToast?.(`💍 你已加入「${result.event.name}」！歡迎一起籌備婚禮。`);
+        } else {
+          showToast?.('⚠️ 邀請已接受，但找不到對應的婚禮資料。請聯絡你的另一半。');
+        }
+      } catch (err) {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.error('[partnerInvite] redeem failed:', err);
+        clearPartnerTokenFromUrl();
+        const msg = (err && err.message) || String(err);
+        showToast?.('❌ 接受邀請失敗：' + msg);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.uid, userRole]); // re-run when user signs in
+
   // 2026-07-03 — guest signup prompt state. Triggered by either the
   // GuestBanner CTA, the "create event" button, or any other write-
   // capable action when the user is anonymous. On successful link,
@@ -517,6 +603,10 @@ export default function App() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [showHelperManager, setShowHelperManager] = useState(false);
+  // 2026-07-26 — Co-owners (couples / partners). The "Invite
+  // Partner" modal lives at the dashboard level; the dashboard
+  // surfaces a "邀請另一半" button that flips this flag.
+  const [showInvitePartner, setShowInvitePartner] = useState(false);
   const [viewingVendorProfile, setViewingVendorProfile] = useState(null);
   const [viewingQrCode, setViewingQrCode] = useState(null);
   const [viewingProposals, setViewingProposals] = useState(null);
@@ -572,12 +662,90 @@ export default function App() {
   // ---- Firestore subscriptions (skip when in guest mode) ----
   const targetUid = guest.isGuestMode ? guest.qOwner : user?.uid;
 
-  const { data: events } = useFirestoreCollection(
+  const { data: ownEvents } = useFirestoreCollection(
     guestDataReady && targetUid && !guest.isGuestMode
       ? collection(db, 'artifacts', appId, 'users', targetUid, 'events')
       : null,
     [targetUid, guest.isGuestMode, guestDataReady],
   );
+
+  // 2026-07-26 — Co-owners: also pull events where the current
+  // user is a CO-OWNER (not just owner). These come from the
+  // `coOwners` array on each event. We use a collectionGroup
+  // query with a where('coOwners', 'array-contains', user.uid)
+  // filter. Requires the implicit 'coOwners' index (which
+  // Firestore auto-creates for simple array-contains queries).
+  //
+  // Each result has the standard event shape PLUS the
+  // `_ownerUid` we derive from the ref (so the picker can
+  // fetch subcollections under the original owner, not under
+  // the current user's path).
+  const { data: coOwnedEvents } = useFirestoreCollection(
+    !guest.isGuestMode && user && !user.isAnonymous
+      ? query(
+          collectionGroup(db, 'events'),
+          where('coOwners', 'array-contains', user.uid),
+        )
+      : null,
+    [user?.uid, guest.isGuestMode],
+  );
+
+  // Merge own events + co-owned events. The dashboard doesn't
+  // care which is which for the picker — it just shows the
+  // combined list. We also strip out duplicates (defensive: if
+  // somehow the same event shows up in both, the userUid is
+  // equal to user.uid AND coOwners contains user.uid).
+  const events = useMemo(() => {
+    if (!ownEvents && !coOwnedEvents) return [];
+    // For own events, attach `_ownerUid` so the picker can route
+    // subcollection reads correctly.
+    const ownWithOwner = (ownEvents || []).map((e) => ({
+      ...e,
+      _ownerUid: targetUid,
+    }));
+    // For co-owned events, the collectionGroup doc ref contains
+    // the ownerUid. extract via .ref.path.
+    // /artifacts/{appId}/users/{ownerUid}/events/{eventId}
+    const coOwnedWithOwner = (coOwnedEvents || []).map((e) => {
+      const pathParts = (e._ref || e.ref?.path || '').split('/');
+      // path = ['artifacts', appId, 'users', ownerUid, 'events', eventId]
+      const ownerUid = pathParts[3];
+      return { ...e, _ownerUid: ownerUid };
+    });
+    // Filter: own events where the user ISN'T already in coOwners
+    // (avoid duplicates); and co-owned events where the user
+    // ISN'T the original owner (avoid duplicates again).
+    const seen = new Set();
+    const merged = [];
+    for (const e of ownWithOwner) {
+      const key = `${e._ownerUid}/${e.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(e);
+    }
+    for (const e of coOwnedWithOwner) {
+      const key = `${e._ownerUid}/${e.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(e);
+    }
+    return merged;
+  }, [ownEvents, coOwnedEvents, targetUid]);
+
+  // 2026-07-26 — Co-owners: derive the data owner uid for the
+  // current event. This is the uid the event's subcollections
+  // (guests, vendors, tasks, redPackets, photos, ...) live
+  // under. Normally this is the signed-in user's uid, but for
+  // a co-owned event it points to the ORIGINAL owner (because
+  // the data stays in their /users/{uid}/ tree). All subcollection
+  // reads should use this value instead of `user.uid` directly.
+  const dataOwnerUid = useMemo(() => {
+    if (!currentEvent) return user?.uid;
+    // currentEvent has _ownerUid if it came from the events list
+    // (own or co-owned). If somehow it doesn't, fall back to
+    // the signed-in user's uid (the original-owner case).
+    return currentEvent._ownerUid || user?.uid;
+  }, [currentEvent, user?.uid]);
 
   // 2026-07-15 — Auto-link any vendor contacts (across owners)
   // whose vendorEmail matches the currently signed-in user's email
@@ -1297,6 +1465,13 @@ export default function App() {
       date: '2027-01-01',
       tier: 'free',
       budget: 350000,
+      // 2026-07-26 — Co-owners (couples/partners). The creator's
+      // uid is always the first entry. When a partner accepts an
+      // invite, the partner's uid gets pushed onto this array
+      // (see acceptPartnerInvite Cloud Function). Used by the
+      // Firestore rules (isEventCoOwner, isCoOwnerOfEventDoc) to
+      // grant equal CRUD access to the partner.
+      coOwners: [user.uid],
       createdAt: Date.now(),
     };
     const docRef = await addDoc(
@@ -2351,6 +2526,24 @@ export default function App() {
                         <span className="hidden sm:inline">兄弟姊妹</span>
                       </button>
                     )}
+                    {/* 2026-07-26 — Co-owners (couples/partners). Sits
+                        next to the 兄弟姊妹 button. Only the
+                        original owner can invite a partner (the
+                        partner can NEVER re-invite themselves in
+                        their own email). Hidden on mobile to keep
+                        the header compact; the desktop label is
+                        "邀請另一半". */}
+                    {userRole === 'owner' && (
+                      <button
+                        onClick={() => setShowInvitePartner(true)}
+                        className="flex items-center gap-1 text-sm font-bold text-rose-600 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-2 sm:px-3 py-1.5 rounded-lg border border-rose-200 transition-colors flex-shrink-0"
+                        title="邀請另一半共同管理婚禮"
+                        aria-label="邀請另一半"
+                      >
+                        <Heart className="w-4 h-4" />
+                        <span className="hidden sm:inline">邀請另一半</span>
+                      </button>
+                    )}
                     {/* 2026-07-19 — helper pill: visible whenever the
                         current user is an active helper somewhere.
                         Jumps them to the helper dashboard. Distinct
@@ -2979,6 +3172,21 @@ export default function App() {
           setPendingCreateEventName(null);
           await loginWithEmail(email, password);
         }}
+      />
+
+      {/* 2026-07-26 — Co-owners (couples / partners) modal. Owner
+          opens this from a button in the wedding dashboard. The
+          modal calls sendPartnerInvite and the partner receives a
+          magic-link email; on accept they're added to the event's
+          coOwners array and gain full CRUD access via the Firestore
+          rules. */}
+      <InvitePartnerModal
+        isOpen={showInvitePartner}
+        onClose={() => setShowInvitePartner(false)}
+        ownerUid={user?.uid}
+        eventId={currentEvent?.id}
+        eventName={currentEvent?.name}
+        showToast={showToast}
       />
 
       <style

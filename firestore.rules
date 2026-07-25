@@ -64,6 +64,78 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    // 2026-07-26 — Co-owners (couples, business partners). A co-owner
+    // gets FULL CRUD on the owner's data, same as the original
+    // owner. Implemented by storing a `coOwners: string[]` field on
+    // the event doc; anyone in that array (including the original
+    // userId) is a co-owner.
+    //
+    // For an EVENT doc: check the doc's own coOwners field.
+    function isEventCoOwner(eventId, ownerUid) {
+      return isSignedIn() && exists(
+        /databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)
+      ) && request.auth.uid in get(
+        /databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)
+      ).data.coOwners;
+    }
+
+    // For a NON-EVENT doc (guests, tasks, photos, etc.): the doc has
+    // an eventId field. Look up the event, then check the coOwners
+    // array on that event. The resource.data.eventId is required.
+    function isCoOwnerOfEventDoc(ownerUid) {
+      return isSignedIn()
+        && resource.data.eventId is string
+        && exists(
+          /databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(resource.data.eventId)
+        )
+        && request.auth.uid in get(
+          /databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(resource.data.eventId)
+        ).data.coOwners;
+    }
+
+    // For NEW writes where resource.data is not yet present (e.g.
+    // create): check via the request.resource.data.eventId field.
+    function isCoOwnerByRequestEvent(ownerUid) {
+      return isSignedIn()
+        && request.resource.data.eventId is string
+        && exists(
+          /databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(request.resource.data.eventId)
+        )
+        && request.auth.uid in get(
+          /databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(request.resource.data.eventId)
+        ).data.coOwners;
+    }
+
+    // 2026-07-26 — For collections WITHOUT an eventId field
+    // (e.g. /helpers, /guestLinks, /redPackets). A co-owner is
+    // anyone who has an active co-owner record at
+    // /users/{ownerUid}/coOwners/{auth.uid}.
+    //
+    // The /coOwners collection mirrors the /helpers pattern. It's
+    // owned (writeable) by the original owner; anyone in it gets
+    // full read access to the owner's non-eventId subcollections.
+    function isCoOwnerOfAnyEvent(ownerUid) {
+      return isSignedIn() && exists(
+        /databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/coOwners/$(request.auth.uid)
+      ) && get(
+        /databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/coOwners/$(request.auth.uid)
+      ).data.status == 'active';
+    }
+
+    // 2026-07-26 — Combined "owner OR any-flavor coOwner" check.
+    // Use this everywhere a match block currently uses
+    // isOwner(ownerUid). It tries every co-owner pattern and
+    // returns true on the first match. For most match blocks
+    // (with eventId), only the first two patterns apply. For
+    // /helpers and /guestLinks (no eventId), the third pattern
+    // is what unlocks access.
+    function isOwnerOrAnyCoOwner(ownerUid) {
+      return isOwner(ownerUid)
+        || isCoOwnerOfEventDoc(ownerUid)
+        || isCoOwnerByRequestEvent(ownerUid)
+        || isCoOwnerOfAnyEvent(ownerUid);
+    }
+
     function isAdmin() {
       return isSignedIn() && request.auth.token.admin == true;
     }
@@ -120,10 +192,26 @@ service cloud.firestore {
       match /users/{ownerUid} {
 
         // Events: owner CRUD. Guests + helpers (with at least one view perm) read-only.
+        // 2026-07-26 — co-owners (couples/partners) get full access
+        // too. We use isEventCoOwner(eventId, ownerUid) here because
+        // the event doc itself has no eventId field — the field is
+        // implicit in the path segment.
         match /events/{eventId} {
-          allow read: if isOwner(ownerUid)
+          allow read: if isOwner(ownerUid) || isEventCoOwner(eventId, ownerUid)
             || hasValidGuestLink(ownerUid, eventId)
             || hasAnyHelperViewPerm(ownerUid);
+          allow create, update, delete: if isOwner(ownerUid) || isEventCoOwner(eventId, ownerUid);
+        }
+
+        // 2026-07-26 — Co-owners collection. Each doc is keyed by
+        // the co-owner's uid. Pattern mirrors the /helpers
+        // collection: owner creates the doc (with status:'active')
+        // when the partner accepts an invite. Co-owners cannot
+        // modify their own doc; only the original owner can revoke
+        // by setting status to 'revoked' or deleting the doc.
+        match /coOwners/{coOwnerUid} {
+          allow read: if isOwner(ownerUid)
+            || (isSignedIn() && request.auth.uid == coOwnerUid);
           allow create, update, delete: if isOwner(ownerUid);
         }
 
@@ -134,19 +222,19 @@ service cloud.firestore {
         // hasValidGuestLink to fetch the guest's own row so the QR-code
         // recipient can see their seat + photo upload widgets.
         match /guests/{guestDocId} {
-          allow read: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid)
             || hasHelperPerm(ownerUid, 'canViewGuestList')
             || hasValidGuestLink(ownerUid, resource.data.eventId);
-          allow create, delete: if isOwner(ownerUid);
+          allow create, delete: if isOwnerOrAnyCoOwner(ownerUid);
           // canScan: only allow toggling attendance + audit fields.
-          allow update: if isOwner(ownerUid)
+          allow update: if isOwnerOrAnyCoOwner(ownerUid)
             || (hasHelperPerm(ownerUid, 'canScan')
                 && request.resource.data.diff(resource.data).affectedKeys()
                      .hasOnly(['hasAttended', 'lastScannedBy', 'lastScannedAt']))
             // canEditGuests: any update allowed (table numbers, names, etc).
             || hasHelperPerm(ownerUid, 'canEditGuests');
           // Guest updates: only their own row, only the safe fields.
-          allow update: if isOwner(ownerUid)
+          allow update: if isOwnerOrAnyCoOwner(ownerUid)
             || (
               hasValidGuestLink(ownerUid, resource.data.eventId)
               && resource.data.guestId != null
@@ -158,14 +246,14 @@ service cloud.firestore {
         // 2026-07-23 — owner was missing from the create allow list.
         // The owner could update/delete (line 173) but couldn't create,
         // which made the photo-upload flow fail when run from the
-        // owner's own session. Added isOwner(ownerUid) to the OR.
+        // owner's own session. Added isOwnerOrAnyCoOwner(ownerUid) to the OR.
         match /photos/{photoId} {
-          allow read: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid)
             || hasValidGuestLink(ownerUid, resource.data.eventId)
             || hasHelperPerm(ownerUid, 'canViewPhotos');
           allow create: if isSignedIn()
             && (
-              isOwner(ownerUid)
+              isOwnerOrAnyCoOwner(ownerUid)
               || (hasValidGuestLink(ownerUid, request.resource.data.eventId)
                 && request.resource.data.keys().hasAll(['eventId', 'url', 'uploaderId', 'uploaderName', 'createdAt'])
                 && request.resource.data.url is string
@@ -175,7 +263,7 @@ service cloud.firestore {
                   && request.resource.data.url is string
                   && request.resource.data.createdAt is number)
             );
-          allow update, delete: if isOwner(ownerUid);
+          allow update, delete: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // Tasks: owner CRUD. Helpers may read IF canViewChecklist (no write).
@@ -185,19 +273,19 @@ service cloud.firestore {
         // vendor dashboard so 主理新人 can hand off work to a vendor
         // they know from Instagram (post-onboarding flow).
         match /tasks/{taskId} {
-          allow read: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid)
             || hasHelperPerm(ownerUid, 'canViewChecklist')
             || (isSignedIn() && request.auth.uid == resource.data.assignedVendorUid)
             // 2026-07-19 — helpers assigned via `assignedHelperUid`
             // can read their own tasks too. Same shape as the vendor
             // check above.
             || (isSignedIn() && request.auth.uid == resource.data.assignedHelperUid);
-          allow create, delete: if isOwner(ownerUid);
+          allow create, delete: if isOwnerOrAnyCoOwner(ownerUid);
           // 2026-07-17: vendors can write — but ONLY the three status
           // fields, never title/dueDate/cost/etc. Enforced by checking
           // every key in the request is one of those three, OR the
           // caller's uid matches the owner (full-control path).
-          allow update: if isOwner(ownerUid)
+          allow update: if isOwnerOrAnyCoOwner(ownerUid)
             || (
               isSignedIn()
               && request.auth.uid == resource.data.assignedVendorUid
@@ -220,7 +308,7 @@ service cloud.firestore {
           // can write. Author always has edit+delete on their own
           // comments; statusUpdates are append-only.
           match /comments/{commentId} {
-            allow read: if isOwner(ownerUid)
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
               || hasHelperPerm(ownerUid, 'canViewChecklist')
               || (isSignedIn() && request.auth.uid == resource.data.authorUid)
               || (
@@ -237,7 +325,7 @@ service cloud.firestore {
             // doc could otherwise be entirely read-only). `parentCommentId`
             // is optional — omit for top-level, set to another
             // comment's id for a reply.
-            allow create: if isOwner(ownerUid)
+            allow create: if isOwnerOrAnyCoOwner(ownerUid)
               || (
                 isSignedIn()
                 && request.resource.data.authorUid == request.auth.uid
@@ -257,7 +345,7 @@ service cloud.firestore {
               );
             // Author can edit+delete their own; owner (couple) can
             // always delete for moderation.
-            allow update, delete: if isOwner(ownerUid)
+            allow update, delete: if isOwnerOrAnyCoOwner(ownerUid)
               || (isSignedIn() && request.auth.uid == resource.data.authorUid);
           }
           // 2026-07-19 — Audit-trail collection for status changes.
@@ -266,7 +354,7 @@ service cloud.firestore {
           // parent task's status fields; this collection is the
           // fine-grained timeline (who, when, from→to, optional reason).
           match /statusUpdates/{updateId} {
-            allow read: if isOwner(ownerUid)
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
               || hasHelperPerm(ownerUid, 'canViewChecklist')
               || (
                 isSignedIn()
@@ -277,7 +365,7 @@ service cloud.firestore {
                 )
               );
             allow create: if (
-              isOwner(ownerUid)
+              isOwnerOrAnyCoOwner(ownerUid)
               || (
                 isSignedIn()
                 && request.resource.data.byUid == request.auth.uid
@@ -303,7 +391,7 @@ service cloud.firestore {
         // callable reads to build the per-guest email/QR. No helper access —
         // inviting guests is an owner-only decision.
         match /invitations/{invitationId} {
-          allow read, write: if isOwner(ownerUid);
+          allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // 2026-07-03 — admin-managed invitation template catalog.
@@ -328,16 +416,16 @@ service cloud.firestore {
         // GuestLinks: owner generates + reads. Guest creates exactly ONE
         // (their own doc, keyed by auth.uid) during QR redemption.
         match /guestLinks/{linkDocId} {
-          allow read: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid)
             || (isSignedIn() && request.auth.uid == linkDocId);
-          allow create: if isOwner(ownerUid)
+          allow create: if isOwnerOrAnyCoOwner(ownerUid)
             || (
               isSignedIn() && request.auth.uid == linkDocId
               && request.resource.data.keys().hasAll(['ownerUid', 'eventId', 'guestId', 'expiresAt', 'redeemedByUid'])
               && request.resource.data.redeemedByUid == request.auth.uid
               && request.resource.data.expiresAt > request.time
             );
-          allow update, delete: if isOwner(ownerUid);
+          allow update, delete: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // Helpers: owner full CRUD on their own helpers collection.
@@ -345,9 +433,9 @@ service cloud.firestore {
         // Helpers CANNOT see other helpers (privacy between helpers).
         // Helpers CANNOT write their own doc (only owner can grant/revoke).
         match /helpers/{helperUid} {
-          allow read: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid)
             || (isSignedIn() && request.auth.uid == helperUid);
-          allow create, update, delete: if isOwner(ownerUid);
+          allow create, update, delete: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // 2026-07-17 — Pending helper invites (email-pending path).
@@ -358,15 +446,15 @@ service cloud.firestore {
         // via collectionGroup('pendingInvites') and migrates on first
         // sign-up.
         match /pendingInvites/{email} {
-          allow read: if isOwner(ownerUid);
-          allow create, update, delete: if isOwner(ownerUid);
+          allow read: if isOwnerOrAnyCoOwner(ownerUid);
+          allow create, update, delete: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // ScanLog: append-only audit trail of every QR-code scan.
         // Anyone signed-in can write (the helper doing the scan).
         // Only the owner can read the log.
         match /scanLog/{scanId} {
-          allow read: if isOwner(ownerUid);
+          allow read: if isOwnerOrAnyCoOwner(ownerUid);
           allow create: if isSignedIn()
             && request.resource.data.keys().hasAll(['guestId', 'helperUid', 'eventId', 'scannedAt'])
             && request.resource.data.helperUid == request.auth.uid;
@@ -379,9 +467,9 @@ service cloud.firestore {
         // linkedVendorUid field for contacts whose vendor later signs
         // up and gets auto-linked. Used by MyVendorsPanel + chat.
         match /vendorContacts/{contactId} {
-          allow read: if isOwner(ownerUid);
-          allow create, update: if isOwner(ownerUid);
-          allow delete: if isOwner(ownerUid);
+          allow read: if isOwnerOrAnyCoOwner(ownerUid);
+          allow create, update: if isOwnerOrAnyCoOwner(ownerUid);
+          allow delete: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // ---- Couple's vendor favorites (private) -------------------------
@@ -392,9 +480,9 @@ service cloud.firestore {
         // a vendor or to another couple. Used by DiscoverDirectory's
         // heart icon + '❤️ 我的最愛' filter chip.
         match /favorites/{favoriteId} {
-          allow read: if isOwner(ownerUid);
-          allow create, update: if isOwner(ownerUid);
-          allow delete: if isOwner(ownerUid);
+          allow read: if isOwnerOrAnyCoOwner(ownerUid);
+          allow create, update: if isOwnerOrAnyCoOwner(ownerUid);
+          allow delete: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // ---- 2026-07-21: Unlock grants (feature unlocks) ---------------
@@ -409,7 +497,7 @@ service cloud.firestore {
         // service account). Client write is denied so a malicious
         // couple can't grant themselves premium.
         match /unlocks/{unlockId} {
-          allow read: if isOwner(ownerUid) || isAdmin();
+          allow read: if isOwnerOrAnyCoOwner(ownerUid) || isAdmin();
           allow create, update, delete: if false;  // server-side only
         }
 
@@ -418,8 +506,8 @@ service cloud.firestore {
         // they tagged @savetheday.hk. Admin verifies and grants the
         // unlock via adminVerifySocialProof(). Read by owner + admin.
         match /socialProofs/{proofId} {
-          allow read: if isOwner(ownerUid) || isAdmin();
-          allow create: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid) || isAdmin();
+          allow create: if isOwnerOrAnyCoOwner(ownerUid)
             && request.resource.data.keys().hasAll(['unlockType', 'postUrl', 'status', 'createdAt'])
             && request.resource.data.unlockType in ['custom-template', 'permanent-archive']
             && request.resource.data.postUrl is string
@@ -435,8 +523,8 @@ service cloud.firestore {
         // Couple claims a friend used their referral code AND created
         // an event. Admin verifies and grants +500MB storage unlock.
         match /referralClaims/{claimId} {
-          allow read: if isOwner(ownerUid) || isAdmin();
-          allow create: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid) || isAdmin();
+          allow create: if isOwnerOrAnyCoOwner(ownerUid)
             && request.resource.data.keys().hasAll(['unlockType', 'friendUid', 'status', 'createdAt'])
             && request.resource.data.unlockType == 'storage-500mb'
             && request.resource.data.friendUid is string
@@ -455,8 +543,8 @@ service cloud.firestore {
         // Reads: owner (to see their own submissions) + admin (to verify).
         // Writes: create by owner, update by admin only.
         match /paymentReceipts/{receiptId} {
-          allow read: if isOwner(ownerUid) || isAdmin();
-          allow create: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid) || isAdmin();
+          allow create: if isOwnerOrAnyCoOwner(ownerUid)
             && request.resource.data.keys().hasAll([
               'unlockType', 'amount', 'paymentMethod', 'screenshotUrl', 'status', 'createdAt'
             ])
@@ -504,11 +592,11 @@ service cloud.firestore {
           // (the eventId field on the link doc is what proves the
           // guest was invited, and any event of the same owner
           // counts as the same wedding).
-          allow read: if isOwner(ownerUid)
+          allow read: if isOwnerOrAnyCoOwner(ownerUid)
             || (isSignedIn()
               && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid))
               && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.expiresAt > request.time);
-          allow create: if isOwner(ownerUid)
+          allow create: if isOwnerOrAnyCoOwner(ownerUid)
             && request.resource.data.keys().hasAll([
               'provider', 'label', 'qrUrl', 'createdAt'
             ])
@@ -521,14 +609,14 @@ service cloud.firestore {
             && request.resource.data.qrUrl is string
             && request.resource.data.qrUrl.matches('^https://firebasestorage\\.googleapis\\.com/.*')
             && request.resource.data.createdAt is timestamp;
-          allow update: if isOwner(ownerUid)
+          allow update: if isOwnerOrAnyCoOwner(ownerUid)
             // The owner can edit the metadata (label, suggested
             // amount, note, sort order) but cannot swap the QR image
             // by editing qrUrl — to replace an image they must
             // delete and re-create the doc.
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['label', 'suggested', 'note', 'sortOrder', 'provider']);
-          allow delete: if isOwner(ownerUid);
+          allow delete: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // ---- 2026-07-17: Big-day orchestration suite ---------------------
@@ -544,16 +632,16 @@ service cloud.firestore {
         // helpers see only what they need at scan time (guest list +
         // helperPerms.canViewChecklist for tasks).
         match /rundown/{entryId} {
-          allow read, write: if isOwner(ownerUid);
+          allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
         }
         match /resources/{itemId} {
-          allow read, write: if isOwner(ownerUid);
+          allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
         }
         match /teaCeremony/{personId} {
-          allow read, write: if isOwner(ownerUid);
+          allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
         }
         match /playlist/{songId} {
-          allow read, write: if isOwner(ownerUid);
+          allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
         }
       }
 

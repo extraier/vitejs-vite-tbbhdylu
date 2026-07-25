@@ -914,3 +914,10 @@ export {
 // blocked by the catch-all deny (see functions/src/jobBoard.ts
 // for the full rationale).
 export { postJobRequest } from './jobBoard';
+
+// 2026-07-26 — Co-owners (couples / partners). The sendPartnerInvite
+// callable sends a magic-link email to a partner; redeemPartnerInvite
+// is what they call after signing in to finalize the join. removePartner
+// revokes a co-owner's access (owner-only). See partnerInvite.ts
+// for the full flow.
+export { sendPartnerInvite, redeemPartnerInvite, removePartner } from './partnerInvite';
