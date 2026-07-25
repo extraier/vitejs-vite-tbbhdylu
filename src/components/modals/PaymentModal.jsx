@@ -23,21 +23,9 @@ export function PaymentModal({ isOpen, onClose, onSend, ownerUid, onCopyQrLink }
   useEffect(() => {
     if (!isOpen || !ownerUid) {
       setLoading(false);
-      // 2026-07-25 — debug: surface why the subscription
-      // is short-circuited. Without this we can't tell
-      // whether the modal isn't getting ownerUid, or the
-      // read IS happening but returning empty.
-      console.log('[redPackets] subscription skipped:', { isOpen, ownerUid });
       return;
     }
     setLoading(true);
-    // 2026-07-25 — debug: log the path we're subscribing to
-    // so we can verify ownerUid is what we expect.
-    console.log('[redPackets] subscribing to:', {
-      appId,
-      ownerUid,
-      path: `artifacts/${appId}/users/${ownerUid}/redPackets`,
-    });
     const colRef = collection(
       db,
       'artifacts',
@@ -52,27 +40,11 @@ export function PaymentModal({ isOpen, onClose, onSend, ownerUid, onCopyQrLink }
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         list.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-        // 2026-07-25 — debug: log the result so we can see
-        // if the read returned data or empty.
-        console.log('[redPackets] received', list.length, 'docs:', list.map(r => ({
-          id: r.id,
-          provider: r.provider,
-          label: r.label,
-          hasQrUrl: !!r.qrUrl,
-        })));
         setRedPackets(list);
         setLoading(false);
       },
       (err) => {
-        // 2026-07-25 — make this more visible than the default
-        // Firestore error logger, which is easy to miss in
-        // a busy console.
-        console.error('[redPackets] subscription FAILED:', {
-          code: err?.code,
-          message: err?.message,
-          ownerUid,
-          path: `artifacts/${appId}/users/${ownerUid}/redPackets`,
-        });
+        console.error('redPackets subscription failed:', err);
         setLoading(false);
       },
     );
