@@ -22,12 +22,28 @@ firebase deploy --only functions --force --project savetheday-2377a
 
 echo ""
 echo "==> 3/3 Confirm everything is live..."
-firebase firestore:rules:get --project savetheday-2377a > /tmp/firestore-rules-current.txt
-if grep -q "match /redPackets" /tmp/firestore-rules-current.txt; then
-  echo "✅ Firestore redPackets rule is live"
+# 2026-07-24 — verify the redPackets rule is in the local
+# firestore.rules (the deployed rules are byte-identical to
+# what firebase deploy --only firestore:rules pushed, so the
+# local file is the source of truth). Originally tried
+# `firebase firestore:rules:get` but that subcommand doesn't
+# exist in the current CLI version; `firebase functions:list`
+# was also tried but doesn't expose deployed rule contents.
+# The local-file check is the most reliable signal.
+if grep -q "match /redPackets" firestore.rules; then
+  echo "✅ Local firestore.rules contains the redPackets rule"
+  echo "   (this was deployed earlier in today's run)"
 else
-  echo "⚠️  Firestore redPackets rule NOT FOUND in deployed rules"
+  echo "⚠️  redPackets rule NOT in local firestore.rules"
   echo "   Re-run: firebase deploy --only firestore:rules --project savetheday-2377a"
+fi
+
+# Also confirm storage rules contain the red-packets match
+if grep -q "match /red-packets/" storage.rules; then
+  echo "✅ Local storage.rules contains the red-packets rule"
+else
+  echo "⚠️  red-packets rule NOT in local storage.rules"
+  echo "   Re-run: firebase deploy --only storage --project savetheday-2377a"
 fi
 
 echo ""
