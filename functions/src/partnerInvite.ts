@@ -41,13 +41,16 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
-import { initializeApp } from 'firebase-admin/app';
+// 2026-07-26 — initializeApp is already called in index.ts (the
+// shared bootstrap). Re-calling it here throws "default Firebase
+// app already exists" at deploy time. We rely on the global
+// already-initialized app and just grab the Firestore + Auth
+// handles.
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import * as crypto from 'crypto';
 import * as nodemailer from 'nodemailer';
 
-initializeApp();
 const db = getFirestore();
 const auth = getAuth();
 

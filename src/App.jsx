@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Heart, LogOut, Users, MessageCircle, ChevronLeft } from 'lucide-react';
 import {
      addDoc,
@@ -139,72 +139,16 @@ export default function App() {
   // token and replay it after they sign in/up. Without this,
   // the partner would have to keep the email tab open through
   // the whole sign-up flow.
-  useEffect(() => {
-    const token = extractPartnerTokenFromUrl();
-    if (!token) return;
-    // Not signed in yet — stash for after-auth replay
-    if (!user) {
-      // eslint-disable-next-line no-console
-      console.log('[partnerInvite] token found but user not signed in; will retry after sign-in');
-      // Store in module-level (so it survives re-renders) — we
-      // use a localStorage flag so a page refresh doesn't lose it.
-      try {
-        sessionStorage.setItem('pendingPartnerToken', token);
-      } catch {
-        // sessionStorage might be blocked in some iframes
-      }
-      return;
-    }
-    // Signed in — redeem now
-    let cancelled = false;
-    (async () => {
-      try {
-        const result = await partnerInviteApi.redeem({ token });
-        if (cancelled) return;
-        // eslint-disable-next-line no-console
-        console.log('[partnerInvite] redeemed:', result);
-        // Clear the token from the URL bar
-        clearPartnerTokenFromUrl();
-        try { sessionStorage.removeItem('pendingPartnerToken'); } catch {}
-        // Switch to the new event so the partner immediately sees
-        // the wedding they were just invited to. We need to
-        // fetch the event doc because we only have the id+name
-        // from the redeem result.
-        const eventDocRef = doc(
-          db,
-          'artifacts',
-          appId,
-          'users',
-          result.ownerUid,
-          'events',
-          result.eventId,
-        );
-        const eventDoc = await getDoc(eventDocRef);
-        if (cancelled) return;
-        if (eventDoc.exists()) {
-          setCurrentEvent({ id: eventDoc.id, ...eventDoc.data() });
-          // Also update userRole to 'owner' if they were a guest
-          // (the partner IS now an owner, not a guest)
-          if (userRole === 'guest_portal') {
-            setUserRole('owner');
-          }
-          setCurrentView('couple-checklist');
-          showToast?.(`💍 你已加入「${result.event.name}」！歡迎一起籌備婚禮。`);
-        } else {
-          showToast?.('⚠️ 邀請已接受，但找不到對應的婚禮資料。請聯絡你的另一半。');
-        }
-      } catch (err) {
-        if (cancelled) return;
-        // eslint-disable-next-line no-console
-        console.error('[partnerInvite] redeem failed:', err);
-        clearPartnerTokenFromUrl();
-        const msg = (err && err.message) || String(err);
-        showToast?.('❌ 接受邀請失敗：' + msg);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [user?.uid, userRole]); // re-run when user signs in
-
+  //
+  // IMPORTANT: this useEffect is at the TOP of the function
+  // (right after useAuth) so it can fire as early as possible.
+  // The dependency array deliberately does NOT include
+  // `userRole` — that state is declared further down the
+  // function body, and reading it here would hit the
+  // Temporal Dead Zone (TDZ), crashing the entire app with
+  // "Cannot access 'X' before initialization". We read the
+  // current userRole via a ref instead.
+  const userRoleRef = useRef(null);
   // 2026-07-03 — guest signup prompt state. Triggered by either the
   // GuestBanner CTA, the "create event" button, or any other write-
   // capable action when the user is anonymous. On successful link,
@@ -380,6 +324,72 @@ export default function App() {
   // Current selection
   const [currentEvent, setCurrentEvent] = useState(null);
   const [activeCategory, setActiveCategory] = useState(null);
+
+  // 2026-07-26 — Co-owners (couples / partners) auto-redeem. This
+  // is split out from the top-of-function declaration so it can
+  // safely reference setCurrentEvent, setUserRole, setCurrentView,
+  // and showToast — all of which are declared below the top.
+  // (Putting this useEffect up top with userRole in the deps
+  // caused a TDZ crash because the deps array was evaluated
+  // before userRole was initialised.)
+  useEffect(() => {
+    const token = extractPartnerTokenFromUrl();
+    if (!token) return;
+    if (!user) {
+      // Stash for after-auth replay
+      try {
+        sessionStorage.setItem('pendingPartnerToken', token);
+      } catch {}
+      return;
+    }
+    // Keep the ref in sync so the TDZ-safe version of this
+    // effect (if we need it) can read the latest userRole.
+    userRoleRef.current = userRole;
+    // Signed in — redeem now
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await partnerInviteApi.redeem({ token });
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.log('[partnerInvite] redeemed:', result);
+        clearPartnerTokenFromUrl();
+        try { sessionStorage.removeItem('pendingPartnerToken'); } catch {}
+        const eventDocRef = doc(
+          db,
+          'artifacts',
+          appId,
+          'users',
+          result.ownerUid,
+          'events',
+          result.eventId,
+        );
+        const eventDoc = await getDoc(eventDocRef);
+        if (cancelled) return;
+        if (eventDoc.exists()) {
+          setCurrentEvent({ id: eventDoc.id, ...eventDoc.data() });
+          if (userRole === 'guest_portal') {
+            setUserRole('owner');
+          }
+          setCurrentView('couple-checklist');
+          showToast?.(`💍 你已加入「${result.event.name}」！歡迎一起籌備婚禮。`);
+        } else {
+          showToast?.('⚠️ 邀請已接受，但找不到對應的婚禮資料。請聯絡你的另一半。');
+        }
+      } catch (err) {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.error('[partnerInvite] redeem failed:', err);
+        clearPartnerTokenFromUrl();
+        const msg = (err && err.message) || String(err);
+        showToast?.('❌ 接受邀請失敗：' + msg);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.uid]); // re-run only when the signed-in user changes
+  // (NOT [user?.uid, userRole] — that would re-run the redeem on
+  // every role change, which is wrong. The body reads userRole
+  // from the current closure; the ref keeps it fresh.)
 
   // Hermes 2026-07-03: derive helperPerms for the current event so the
   // GuestList (and any other per-event consumer) can read capabilities.
