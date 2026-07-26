@@ -695,7 +695,24 @@ export default function App() {
   // page shows "loading" forever because rules hasValidGuestLink fails.
   const guestDataReady = redeemStatus === 'ok';
 
-  // ---- Firestore subscriptions (skip when in guest mode) ----
+    // 2026-07-26 — Co-owners: derive the data owner uid for the
+  // current event. This is the uid the event's subcollections
+  // (guests, vendors, tasks, redPackets, photos, ...) live
+  // under. Normally this is the signed-in user's uid, but for
+  // a co-owned event it points to the ORIGINAL owner (because
+  // the data stays in their /users/{uid}/ tree). All subcollection
+  // reads AND writes should use this value instead of `user.uid`
+  // or `targetUid` directly. Defined early (before targetUid) so
+  // it can be used in the Firestore subscriptions below.
+  const dataOwnerUid = useMemo(() => {
+    if (!currentEvent) return user?.uid;
+    // currentEvent has _ownerUid if it came from the events list
+    // (own or co-owned). If somehow it doesn't, fall back to
+    // the signed-in user's uid (the original-owner case).
+    return currentEvent._ownerUid || user?.uid;
+  }, [currentEvent, user?.uid]);
+
+// ---- Firestore subscriptions (skip when in guest mode) ----
   const targetUid = guest.isGuestMode ? guest.qOwner : user?.uid;
 
   const { data: ownEvents } = useFirestoreCollection(
@@ -784,21 +801,6 @@ export default function App() {
     return merged;
   }, [ownEvents, coOwnedEvents, targetUid]);
 
-  // 2026-07-26 — Co-owners: derive the data owner uid for the
-  // current event. This is the uid the event's subcollections
-  // (guests, vendors, tasks, redPackets, photos, ...) live
-  // under. Normally this is the signed-in user's uid, but for
-  // a co-owned event it points to the ORIGINAL owner (because
-  // the data stays in their /users/{uid}/ tree). All subcollection
-  // reads should use this value instead of `user.uid` directly.
-  const dataOwnerUid = useMemo(() => {
-    if (!currentEvent) return user?.uid;
-    // currentEvent has _ownerUid if it came from the events list
-    // (own or co-owned). If somehow it doesn't, fall back to
-    // the signed-in user's uid (the original-owner case).
-    return currentEvent._ownerUid || user?.uid;
-  }, [currentEvent, user?.uid]);
-
   // 2026-07-15 — Auto-link any vendor contacts (across owners)
   // whose vendorEmail matches the currently signed-in user's email
   // and which are unlinked.
@@ -859,9 +861,9 @@ export default function App() {
     }, [user?.uid, user?.email]);
 
    const { data: allGuests } = useFirestoreCollection(
-       guestDataReady && targetUid
+       guestDataReady && dataOwnerUid
          ? query(
-             collection(db, 'artifacts', appId, 'users', targetUid, 'guests'),
+             collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'guests'),
              // Firestore rules reference resource.data.eventId — the query must
              // include a where() filter matching that field or list queries are
              // denied. In guest mode we use guest.qEvent, in owner mode we use
@@ -877,15 +879,15 @@ export default function App() {
      // other events the owner might own. Limited to the last 50 (Firestore
      // requires descending + limit for cost control).
      const { data: recentScans } = useFirestoreCollection(
-       targetUid && !guest.isGuestMode && currentEvent
+       dataOwnerUid && !guest.isGuestMode && currentEvent
          ? query(
-             collection(db, 'artifacts', appId, 'users', targetUid, 'scanLog'),
+             collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'scanLog'),
              where('eventId', '==', currentEvent.id),
              orderBy('scannedAt', 'desc'),
              limit(50),
            )
          : null,
-       [targetUid, currentEvent?.id],
+       [dataOwnerUid, currentEvent?.id],
      );
 
    // 2026-07-15 — chat inquiries subscription. Couples and vendors
@@ -1295,7 +1297,7 @@ export default function App() {
          try {
            const { getDocs } = await import('firebase/firestore');
            const tasksQ = query(
-             collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'),
+             collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks'),
              where('assignedContactId', '==', contact.id),
            );
            const snap = await getDocs(tasksQ);
@@ -1303,7 +1305,7 @@ export default function App() {
            for (const t of snap.docs) {
              if (t.data().assignedVendorUid) continue;
              await updateDoc(
-               doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', t.id),
+               doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', t.id),
                {
                  assignedVendorUid: vendorUid,
                  assignedVendorName:
@@ -1329,21 +1331,21 @@ export default function App() {
 
 
   const { data: allPhotos } = useFirestoreCollection(
-    targetUid && (guest.isGuestMode || currentEvent)
+    dataOwnerUid && (guest.isGuestMode || currentEvent)
       ? query(
-          collection(db, 'artifacts', appId, 'users', targetUid, 'photos'),
+          collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'photos'),
           // Rules reference resource.data.eventId — must filter by it in queries.
           where('eventId', '==', guest.isGuestMode ? guest.qEvent : currentEvent.id)
         )
       : null,
-    [targetUid, guest.isGuestMode, guest.qEvent, currentEvent?.id],
+    [dataOwnerUid, guest.isGuestMode, guest.qEvent, currentEvent?.id],
   );
 
   const { data: tasks } = useFirestoreCollection(
-    targetUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', targetUid, 'tasks')
+    dataOwnerUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks')
       : null,
-    [targetUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode],
   );
 
   // ---- 2026-07-17: Big Day (大日統籌) suite (rundown / resources / teaCeremony / playlist).
@@ -1351,28 +1353,28 @@ export default function App() {
   // writes go through the parent via callback props. Helper users do NOT see
   // these (rules allow owner-only).
   const { data: rundown } = useFirestoreCollection(
-    targetUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', targetUid, 'rundown')
+    dataOwnerUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'rundown')
       : null,
-    [targetUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode],
   );
   const { data: resources } = useFirestoreCollection(
-    targetUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', targetUid, 'resources')
+    dataOwnerUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources')
       : null,
-    [targetUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode],
   );
   const { data: teaCeremony } = useFirestoreCollection(
-    targetUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', targetUid, 'teaCeremony')
+    dataOwnerUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'teaCeremony')
       : null,
-    [targetUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode],
   );
   const { data: playlist } = useFirestoreCollection(
-    targetUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', targetUid, 'playlist')
+    dataOwnerUid && !guest.isGuestMode
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'playlist')
       : null,
-    [targetUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode],
   );
 
   // 2026-07-15 — VendorDashboard live data. Previously the dashboard
@@ -1652,7 +1654,7 @@ export default function App() {
       assignedHelperName: chosenHelperName,
       assignedHelperUid: chosenHelperUid,
     };
-    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'tasks'), newTask);
+    await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks'), newTask);
     setNewTaskForm({
       categoryTop: '',
       categorySub: '',
@@ -1675,7 +1677,7 @@ export default function App() {
   const toggleTask = async (task, e) => {
     e.stopPropagation();
     if (!user || userRole !== 'owner') return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id);
+    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', task.id);
     await updateDoc(taskRef, {
       isCompleted: !task.isCompleted,
       actualCost: !task.isCompleted ? task.estimatedCost : 0,
@@ -1699,7 +1701,7 @@ export default function App() {
   // Restore 2026-07-02: inline edit budget target from CoupleBudget EditableBudgetCard
   const handleSaveBudget = async (newBudget) => {
     if (!user || !currentEvent) return;
-    const eventRef = doc(db, 'artifacts', appId, 'users', user.uid, 'events', currentEvent.id);
+    const eventRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id);
     await updateDoc(eventRef, { budget: Number(newBudget) });
     // Optimistic local update so the UI reflects the change immediately
     setCurrentEvent({ ...currentEvent, budget: Number(newBudget) });
@@ -1718,7 +1720,7 @@ export default function App() {
   // and writes both fields so totals stay correct.
   const handleUpdateTaskCost = async (taskId, estimatedCost, actualCost) => {
     if (!user) return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
+    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', taskId);
     await updateDoc(taskRef, {
       estimatedCost: Number(estimatedCost) || 0,
       actualCost: Number(actualCost) || 0,
@@ -1732,7 +1734,7 @@ export default function App() {
   // helper, and costs from the same place via <TaskFullEditor>.
   const handleUpdateTask = async (taskId, updates) => {
     if (!user) return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', taskId);
+    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', taskId);
     const cleaned = {};
     Object.entries(updates).forEach(([k, v]) => {
       if (v !== undefined) cleaned[k] = v;
@@ -1744,7 +1746,7 @@ export default function App() {
 
   const handleDeleteTask = async (task) => {
     if (!user) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id));
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', task.id));
     setActiveCategory(null);
   };
 
@@ -1769,7 +1771,7 @@ export default function App() {
   // Per-collection wrappers — pass these to <WeddingDay/>:
   const upsertWeddingDoc = async (name, data) => {
     if (!user || !data?.id) return;
-    const ref = doc(db, 'artifacts', appId, 'users', user.uid, name, data.id);
+    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, name, data.id);
     // Strip the id itself — Firestore stores it as the doc key
     const { id: _id, ...rest } = data;
     try {
@@ -1786,7 +1788,7 @@ export default function App() {
   };
   const deleteWeddingDoc = async (name, id) => {
     if (!user || !id) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, name, id));
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', dataOwnerUid, name, id));
   };
 
   // Per-collection wrappers — pass these to <WeddingDay/>:
@@ -1809,7 +1811,7 @@ export default function App() {
     if (total > 24 * 60 - 1) total = 24 * 60 - 1;
     const nh = Math.floor(total / 60);
     const nm = total % 60;
-    const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'rundown', id);
+    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'rundown', id);
     await setDoc(ref, { startTime: `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}` }, { merge: true });
   };
   // 2026-07-22b — Bulk manualPosition setter for 大日流程 drag-
@@ -1818,7 +1820,7 @@ export default function App() {
     if (!user || !writes || writes.length === 0) return;
     const refs = writes.map(({ id, manualPosition }) =>
       setDoc(
-        doc(db, 'artifacts', appId, 'users', user.uid, 'rundown', id),
+        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'rundown', id),
         { manualPosition },
         { merge: true },
       ),
@@ -1829,7 +1831,7 @@ export default function App() {
   const handleDeleteResource = (id) => deleteWeddingDoc('resources', id);
   const handleToggleResource = async (id, checked) => {
     if (!user) return;
-    const ref = doc(db, 'artifacts', appId, 'users', user.uid, 'resources', id);
+    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources', id);
     await setDoc(ref, { checked }, { merge: true });
   };
   // 2026-07-22 — 物資 reorder. Same algorithm as playlist:
@@ -1837,8 +1839,8 @@ export default function App() {
   // category. O(1) parallel writes.
   const handleReorderResource = async (idA, posA, idB, posB) => {
     if (!user || !idA || !idB) return;
-    const a = doc(db, 'artifacts', appId, 'users', user.uid, 'resources', idA);
-    const b = doc(db, 'artifacts', appId, 'users', user.uid, 'resources', idB);
+    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources', idA);
+    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources', idB);
     await Promise.all([
       setDoc(a, { manualPosition: posA }, { merge: true }),
       setDoc(b, { manualPosition: posB }, { merge: true }),
@@ -1851,7 +1853,7 @@ export default function App() {
     if (!user || !writes || writes.length === 0) return;
     const refs = writes.map(({ id, manualPosition }) =>
       setDoc(
-        doc(db, 'artifacts', appId, 'users', user.uid, 'resources', id),
+        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources', id),
         { manualPosition },
         { merge: true },
       ),
@@ -1865,8 +1867,8 @@ export default function App() {
   // are O(1) — no renumbering of subsequent rows needed.
   const handleReorderTeaCeremony = async (idA, orderA, idB, orderB) => {
     if (!user || !idA || !idB) return;
-    const a = doc(db, 'artifacts', appId, 'users', user.uid, 'teaCeremony', idA);
-    const b = doc(db, 'artifacts', appId, 'users', user.uid, 'teaCeremony', idB);
+    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'teaCeremony', idA);
+    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'teaCeremony', idB);
     await Promise.all([
       setDoc(a, { order: orderA }, { merge: true }),
       setDoc(b, { order: orderB }, { merge: true }),
@@ -1882,7 +1884,7 @@ export default function App() {
     if (!user || !writes || writes.length === 0) return;
     const refs = writes.map(({ id, order }) =>
       setDoc(
-        doc(db, 'artifacts', appId, 'users', user.uid, 'teaCeremony', id),
+        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'teaCeremony', id),
         { order },
         { merge: true },
       ),
@@ -1897,8 +1899,8 @@ export default function App() {
   // args is a no-op (setDoc with merge=true on unchanged data).
   const handleReorderPlaylist = async (idA, posA, idB, posB) => {
     if (!user || !idA || !idB) return;
-    const a = doc(db, 'artifacts', appId, 'users', user.uid, 'playlist', idA);
-    const b = doc(db, 'artifacts', appId, 'users', user.uid, 'playlist', idB);
+    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'playlist', idA);
+    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'playlist', idB);
     // Parallel writes — both should succeed independently. If one
     // fails (e.g. network glitch) the UI will rerender on the next
     // subscription tick from the partial state, and a fresh ▲/▼
@@ -1916,7 +1918,7 @@ export default function App() {
     if (!user || !writes || writes.length === 0) return;
     const refs = writes.map(({ id, manualPosition }) =>
       setDoc(
-        doc(db, 'artifacts', appId, 'users', user.uid, 'playlist', id),
+        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'playlist', id),
         { manualPosition },
         { merge: true },
       ),
@@ -1941,7 +1943,7 @@ export default function App() {
       hasGifted: false,
       giftAmount: 0,
     };
-    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'guests'), newGuest);
+    await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'guests'), newGuest);
     setNewGuestForm({ name: '', group: '男家親戚', headCount: 1, tableNumber: '' });
     showToast('✅ 嘉賓已加入名單，已生成專屬 QR Code！');
   };
@@ -1967,7 +1969,7 @@ export default function App() {
     // Parent gets its own random guestId; children reference it.
     const parentGuestId = Math.random().toString(36).substring(2, 8).toUpperCase();
     const batch = writeBatch(db);
-    const guestsCol = collection(db, 'artifacts', appId, 'users', user.uid, 'guests');
+    const guestsCol = collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'guests');
 
     // Parent row (carries household-level fields: contact email, head count)
     const parentRef = doc(guestsCol);
@@ -2141,7 +2143,7 @@ export default function App() {
 
   const upgradeToPremium = async () => {
     if (!user || !currentEvent) return;
-    const eventRef = doc(db, 'artifacts', appId, 'users', user.uid, 'events', currentEvent.id);
+    const eventRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id);
     await updateDoc(eventRef, { tier: 'premium' });
     setShowUpgradeModal(false);
     showToast('👑 已成功升級至 Premium！無限容量已開啟。');
@@ -2178,7 +2180,7 @@ export default function App() {
       // 2026-07-23 — firestore.rules now allows isOwner(ownerUid) to
       // create photos (was only guests + helpers before). Photo upload
       // from the owner's own session was failing on addDoc.
-      await addDoc(collection(db, 'artifacts', appId, 'users', targetUid, 'photos'), {
+      await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'photos'), {
         eventId: currentEvent.id,
         url,
         thumbnailUrl: thumbnailUrl || url,  // fall back to full URL for legacy photos
@@ -2260,7 +2262,7 @@ export default function App() {
       'artifacts',
       appId,
       'users',
-      user.uid,
+      dataOwnerUid,
       'photos',
       photoId,
     );
@@ -2274,7 +2276,7 @@ export default function App() {
       'artifacts',
       appId,
       'users',
-      user.uid,
+      dataOwnerUid,
       'photos',
       photoId,
     );
