@@ -91,13 +91,27 @@ export function usePartnerInvitePreview() {
     const token = urlToken || readStashedToken();
     if (!token) return;
 
-    // Stash + strip URL token immediately so a refresh doesn't trigger
-    // a second preview. We do this even before the CF call returns —
-    // the worst case is the token is "used up" but the CF fails; the
-    // user just gets the standard login screen which is fine.
+    // Stash the token in BOTH localStorage AND sessionStorage so the
+    // App.jsx redeem effect (which reads sessionStorage['pendingPartnerToken'])
+    // can find it after auth. We do NOT strip the URL token until the
+    // preview SUCCEEDS — App.jsx's redeem effect also reads from the URL
+    // via extractPartnerTokenFromUrl() and the two effects run in parallel.
+    //
+    // Previously this hook stripped the URL token immediately at effect
+    // start, which raced with App.jsx's redeem effect: if the user wasn't
+    // signed in yet, the URL token was gone by the time they signed in
+    // and App.jsx's extractPartnerTokenFromUrl() returned null. Combined
+    // with the sessionStorage/localStorage split (this hook wrote
+    // localStorage; App.jsx read sessionStorage), the redeem silently
+    // never fired. Bug seen 2026-07-26 on savetheday-2377a.
     if (urlToken) {
       stashToken(urlToken);
-      stripTokenFromUrl();
+      try {
+        sessionStorage.setItem(
+          'pendingPartnerToken',
+          JSON.stringify({ token: urlToken, stashedAt: Date.now() }),
+        );
+      } catch { /* sessionStorage blocked — fallback to URL/localStorage */ }
     }
 
     let cancelled = false;
@@ -111,6 +125,8 @@ export function usePartnerInvitePreview() {
         if (cancelled) return;
         const data = res?.data;
         if (data && data.ok && data.partnerEmail) {
+          // Preview succeeded — safe to strip URL now.
+          stripTokenFromUrl();
           setInvite({
             partnerEmail: data.partnerEmail,
             eventId: data.eventId,
@@ -126,9 +142,10 @@ export function usePartnerInvitePreview() {
         // eslint-disable-next-line no-console
         console.warn('[usePartnerInvitePreview] preview failed:', code, err?.message);
         setError(code);
-        // Bad/expired token — clear the stash so the user gets a clean
-        // login screen on next reload.
-        clearStash();
+        // DO NOT clearStash() here — the redeem effect (App.jsx) might
+        // still succeed via sessionStorage['pendingPartnerToken'].
+        // The redeem path is independent and shouldn't be blocked by
+        // a preview-only failure (e.g. CORS, network blip).
       } finally {
         if (!cancelled) setLoading(false);
       }
