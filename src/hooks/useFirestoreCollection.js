@@ -16,6 +16,12 @@
 // in production. The standalone function works because it accepts a Query
 // / CollectionReference as its first argument directly.
 //
+// 2026-07-26 — IMPORTANT: we now expose `ref` on each returned doc so the
+// App.jsx events-merge dedup can compute `_ownerUid` from `e.ref.path`.
+// Without this, collectionGroup('events') results have no path binding,
+// the dedup produces duplicate keys (undefined/ownerUid), and the partner
+// sees the same event rendered twice on the dashboard.
+//
 // Usage:
 //   const { data: events } = useFirestoreCollection(
 //     user ? collection(db, 'artifacts', appId, 'users', user.uid, 'events') : null,
@@ -42,7 +48,7 @@ export function useFirestoreCollection(collectionRef, deps = []) {
     const unsub = onSnapshot(
       collectionRef,
       (snapshot) => {
-        setData(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setData(snapshot.docs.map((d) => ({ id: d.id, ref: d.ref, ...d.data() })));
         setLoading(false);
       },
       (err) => {
