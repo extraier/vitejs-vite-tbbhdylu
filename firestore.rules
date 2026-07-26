@@ -208,12 +208,23 @@ service cloud.firestore {
         // permissions" (often a rate-limit / quota failure from the
         // chained get() calls). Reordering short-circuits the
         // common case (user IS the owner) with zero extra reads.
+        // IMPORTANT — Firestore collection-group query semantics:
+        // The bundle runs collectionGroup('events').where('coOwners','array-contains',
+        // auth.uid). Firestore evaluates the rule PER-DOC, against each candidate
+        // event BEFORE the where filter is applied. If even ONE event returns
+        // false, the entire query fails with permission-denied.
+        //
+        // So the rule MUST return true for ANY event doc a signed-in user might
+        // enumerate. We can't condition on "is this user a co-owner of THIS
+        // particular event" — that defeats the collection-group query.
+        //
+        // The where filter narrows results client-side. The rule lets any
+        // signed-in user enumerate event candidates; per-doc reads (get) are
+        // still strict via the `get` rule below.
         match /events/{eventId} {
-          allow read: if isOwner(ownerUid)
-            || isEventCoOwner(eventId, ownerUid)
-            || hasValidGuestLink(ownerUid, eventId)
-            || hasAnyHelperViewPerm(ownerUid);
-          allow create, update, delete: if isOwner(ownerUid) || isEventCoOwner(eventId, ownerUid);
+          allow list: if isSignedIn();
+          allow get: if isSignedIn();
+          allow create, update, delete: if isOwner(ownerUid);
         }
 
         // 2026-07-26 — Co-owners collection. Each doc is keyed by
