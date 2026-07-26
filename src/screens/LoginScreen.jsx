@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Heart,
   Mail,
@@ -103,16 +103,35 @@ const STRINGS = {
 //   onEmailLogin      — (email, password) => Promise<void>
 //   onEmailRegister   — (email, password) => Promise<void>
 //   onContinueAsGuest — optional () => Promise<void> (renders guest button)
+//
+// Partner-invite pre-fill (2026-07-26):
+//   defaultEmail      — pre-fill the email input (used for partner invites)
+//   defaultMode       — 'signin' | 'signup' — pre-select the mode toggle
+//                       (signup for new partner, signin for existing one)
+//   inviteMessage     — ReactNode rendered above the form, e.g.
+//                       "You've been invited to co-plan 'Test' wedding."
+//   readOnlyEmail     — when true, the email input is read-only
+//                       (prevents typos from creating a wrong account)
 
-export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup }) {
+export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, defaultEmail, defaultMode, inviteMessage, readOnlyEmail }) {
   const [lang, setLang] = useState('zh'); // 'zh' | 'en'
   const t = STRINGS[lang];
 
-  const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
-  const [email, setEmail] = useState('');
+  const [mode, setMode] = useState(defaultMode || 'signin'); // 'signin' | 'signup'
+  const [email, setEmail] = useState(defaultEmail || '');
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  // If defaultEmail/defaultMode change after mount (e.g. preview CF resolved
+  // late), update the form state to match. This handles the race where the
+  // App.jsx useEffect fires before the preview CF returns.
+  useEffect(() => {
+    if (defaultEmail && !email) setEmail(defaultEmail);
+  }, [defaultEmail]);
+  useEffect(() => {
+    if (defaultMode && mode !== defaultMode) setMode(defaultMode);
+  }, [defaultMode]);
 
   const submitEmail = async (e) => {
     e.preventDefault();
@@ -247,6 +266,14 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           </p>
           <p className="text-slate-500 mb-6 text-sm leading-relaxed">{t.tagline}</p>
 
+          {/* Partner-invite welcome message (2026-07-26) */}
+          {inviteMessage && (
+            <div className="mb-5 bg-gradient-to-r from-rose-50 to-pink-50 border border-rose-200 rounded-xl px-4 py-3 text-left">
+              <div className="text-xs font-bold text-rose-600 mb-1">💍 婚禮共同籌備邀請</div>
+              <div className="text-sm text-slate-700 leading-relaxed">{inviteMessage}</div>
+            </div>
+          )}
+
           {/* Google button */}
           <button
             onClick={handleGoogle}
@@ -275,12 +302,13 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               <input
                 type="email"
                 required
+                readOnly={readOnlyEmail}
                 autoComplete="email"
                 placeholder={t.emailPlaceholder}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={busy}
-                className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-rose-400 focus:border-rose-400 disabled:opacity-50"
+                className={`w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-rose-400 focus:border-rose-400 disabled:opacity-50 ${readOnlyEmail ? 'cursor-not-allowed bg-slate-100 text-slate-600' : ''}`}
               />
             </div>
             <div className="relative">

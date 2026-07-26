@@ -53,6 +53,7 @@ import {
 } from './lib/chat';
 import { tryAutoLinkContacts } from './lib/contactLink';
 import { useAuth } from './hooks/useAuth';
+import { usePartnerInvitePreview } from './hooks/usePartnerInvitePreview';
 import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { useFirestoreDoc } from './hooks/useFirestoreDoc';
@@ -129,6 +130,11 @@ export default function App() {
     linkAnonymousWithEmail,
     logout,
   } = useAuth();
+  // 2026-07-26 — Partner-invite pre-fill. Detects ?t=<token> in URL,
+  // calls previewPartnerInvite CF, and exposes the partnerEmail + eventName
+  // so the LoginScreen can pre-fill the form and show a welcome message.
+  // See src/hooks/usePartnerInvitePreview.js for the full flow.
+  const { invite: partnerInvite } = usePartnerInvitePreview();
   // 2026-07-26 — Co-owners (couples / partners) auto-redeem.
   // The partner's magic-link email contains ?t=<token>. When they
   // click it, the front-end detects the token on mount, calls
@@ -2323,6 +2329,14 @@ export default function App() {
         onEmailRegister={registerWithEmail}
         onContinueAsGuest={continueAsGuest}
         onVendorSignup={() => setSigningUpAs('vendor')}
+        defaultEmail={partnerInvite?.partnerEmail}
+        defaultMode={partnerInvite ? 'signup' : undefined}
+        inviteMessage={
+          partnerInvite
+            ? `你已被邀請一同籌備「${partnerInvite.eventName}」婚禮。請用 ${partnerInvite.partnerEmail} 建立帳戶以加入。\n(You've been invited to co-plan the "${partnerInvite.eventName}" wedding. Sign up with ${partnerInvite.partnerEmail} to join.)`
+            : undefined
+        }
+        readOnlyEmail={Boolean(partnerInvite)}
       />
     );
   }

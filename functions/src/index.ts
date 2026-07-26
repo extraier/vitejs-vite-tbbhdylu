@@ -923,5 +923,6 @@ export { postJobRequest } from './jobBoard';
 export {
   sendPartnerInviteV2,
   redeemPartnerInviteV2,
+  previewPartnerInvite,
   removePartnerV2,
 } from './partnerInvite';

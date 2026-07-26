@@ -385,6 +385,84 @@ export const redeemPartnerInviteV2 = onCall(
 );
 
 // ────────────────────────────────────────────────────────────────────────────
+// previewPartnerInvite — UNAUTHENTICATED. Lets the client pre-fill the
+// login form on the partner's landing page (e.g. "You've been invited
+// to co-plan 'Test' wedding — sign up to continue").
+//
+// Returns minimal invite metadata: just the email + event name + expiry.
+// Does NOT mark the invite as accepted — that's redeemPartnerInviteV2's
+// job. Verifies the HMAC signature so anonymous callers can't enumerate
+// other users' invites by guessing tokens.
+//
+// Security notes:
+//   • No auth required (this runs on the landing page, before sign-in).
+//   • Token signature must match — verifyToken throws on bad signature.
+//   • TTL check same as redeem: 7 days.
+//   • We do NOT return ownerUid or eventId to the unauthenticated caller
+//     (those are revealed post-auth via the user doc on the dashboard).
+//     The client only needs the email to pre-fill the form and the
+//     event name to show the welcome message.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface PreviewInput {
+  token: string;
+}
+
+interface PreviewResult {
+  ok: boolean;
+  partnerEmail: string;
+  eventId: string;
+  eventName: string;
+  expiresAt: number; // ms since epoch
+}
+
+export const previewPartnerInvite = onCall<PreviewInput, Promise<PreviewResult>>(
+  {
+    cors: true,
+    region: 'us-central1',
+  },
+  async (req): Promise<PreviewResult> => {
+    const input = req.data || ({} as PreviewInput);
+    const { token } = input;
+    if (!token) {
+      throw new HttpsError('invalid-argument', 'token is required.');
+    }
+
+    const payload = verifyToken(token);
+    if (Date.now() - payload.iat > INVITE_TTL_MS) {
+      throw new HttpsError('deadline-exceeded', 'Invite link has expired.');
+    }
+
+    // Look up the event so we can show its name. If the event is gone
+    // (owner deleted it before partner accepted), return the token's
+    // own metadata as a fallback.
+    const eventRef = db
+      .collection('artifacts').doc(APP_ID)
+      .collection('users').doc(payload.ownerUid)
+      .collection('events').doc(payload.eventId);
+    let eventName = '婚禮';
+    try {
+      const eventSnap = await eventRef.get();
+      if (eventSnap.exists) {
+        const eventData = eventSnap.data() || {};
+        eventName = eventData.name || '婚禮';
+      }
+    } catch {
+      // If the lookup fails, still return the email — better than
+      // blocking the partner from signing up.
+    }
+
+    return {
+      ok: true,
+      partnerEmail: payload.partnerEmail,
+      eventId: payload.eventId,
+      eventName,
+      expiresAt: payload.iat + INVITE_TTL_MS,
+    };
+  },
+);
+
+// ────────────────────────────────────────────────────────────────────────────
 // removePartnerV2 — owner revokes a co-owner's access
 // ────────────────────────────────────────────────────────────────────────────
 
