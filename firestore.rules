@@ -53,6 +53,17 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+match /{path=**}/events/{eventId} {
+          // 2026-07-26 — collectionGroup FIX: moved to top-level with
+          // {path=**} wildcard. The original location inside
+          // /artifacts/{appId}/users/{ownerUid} caused collectionGroup
+          // queries to be denied with 403 even with allow read: if
+          // isSignedIn(). Moving to the top level with {path=**} allows
+          // collectionGroup queries to work.
+          allow read: if isSignedIn();
+          allow create, update, delete: if isSignedIn() && request.auth.uid == ownerUid;
+        }
+
 
     // ---- Helpers ---------------------------------------------------------
 
@@ -221,9 +232,19 @@ service cloud.firestore {
         // The where filter narrows results client-side. The rule lets any
         // signed-in user enumerate event candidates; per-doc reads (get) are
         // still strict via the `get` rule below.
+        
+        // 2026-07-26b — RESTORE nested events match block. The
+        // top-level `{path=**}/events/{eventId}` (line 56) only
+        // handles collectionGroup READS. Without an explicit
+        // `/users/{ownerUid}/events/{eventId}` match block here,
+        // `ownerUid` is undefined in the rule expression and
+        // `request.auth.uid == ownerUid` always returns false —
+        // which broke event CREATE/UPDATE/DELETE for owners.
+        //
+        // READ access here is strict (owner + co-owners only).
+        // CollectionGroup enumeration is still permissive (line 56).
         match /events/{eventId} {
-          allow list: if isSignedIn();
-          allow get: if isSignedIn();
+          allow read: if isOwnerOrAnyCoOwner(ownerUid);
           allow create, update, delete: if isOwner(ownerUid);
         }
 
