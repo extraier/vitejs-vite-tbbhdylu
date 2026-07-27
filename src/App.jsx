@@ -2950,7 +2950,22 @@ export default function App() {
                 to display the actual scan targets. */}
             {userRole === 'owner' && currentEvent && currentView === 'red-packet' && (
               <RedPacketManager
-                ownerUid={currentEvent.userId || user?.uid}
+                // 2026-07-27 — Use dataOwnerUid (resolved via the
+                // events list's _ownerUid, which comes from the
+                // collectionGroup query path) instead of
+                // currentEvent.userId || user?.uid. The latter two
+                // are wrong for coOwner sessions:
+                //   - currentEvent.userId is not set on event docs
+                //     (the field is in the path, not the doc)
+                //   - user?.uid is the coOwner's OWN uid, not the
+                //     original event owner's uid. Subscribing to
+                //     /users/{coOwnerUid}/events/{eid}/redPackets
+                //     returns 0 docs when the actual data is under
+                //     /users/{originalOwnerUid}/events/{eid}/redPackets.
+                // Verified live 2026-07-27 23:54 — both partners
+                // uploaded to their OWN path instead of the shared
+                // event path, so neither could see the other's QRs.
+                ownerUid={dataOwnerUid}
                 eventId={currentEvent.id}
                 showToast={showToast}
               />
@@ -3139,7 +3154,7 @@ export default function App() {
         // after navigation, before the event store hydrates).
         ownerUid={guest.isGuestMode
           ? guest.qOwner
-          : (currentEvent?.userId || user?.uid)}
+          : (dataOwnerUid || user?.uid)}
         // eventId: currentEvent.id in owner mode, guest.qEvent in
         // guest mode (no currentEvent is set). qEvent is the eventId
         // pulled from the guest's URL params.
