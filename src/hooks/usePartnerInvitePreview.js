@@ -96,11 +96,16 @@ export function usePartnerInvitePreview() {
     const token = urlToken || readStashedToken();
     if (!token) return;
 
-    // Stash the token in BOTH localStorage AND sessionStorage so the
-    // App.jsx redeem effect (which reads sessionStorage['pendingPartnerToken'])
-    // can find it after auth. We do NOT strip the URL token until the
-    // preview SUCCEEDS — App.jsx's redeem effect also reads from the URL
-    // via extractPartnerTokenFromUrl() and the two effects run in parallel.
+    // Stash the resolved token in BOTH localStorage AND sessionStorage so
+    // App.jsx's redeem effect can find it after auth. This intentionally
+    // mirrors localStorage-only resumes too (not just fresh URL arrivals).
+    // Keep the sessionStorage value as the RAW token: App.jsx passes that
+    // value directly to redeem({ token }), so a JSON envelope here would
+    // be sent as the token and fail signature verification.
+    //
+    // We do NOT strip the URL token until preview SUCCEEDS — App.jsx's
+    // redeem effect also reads from the URL via extractPartnerTokenFromUrl()
+    // and the two effects run in parallel.
     //
     // Previously this hook stripped the URL token immediately at effect
     // start, which raced with App.jsx's redeem effect: if the user wasn't
@@ -109,15 +114,10 @@ export function usePartnerInvitePreview() {
     // with the sessionStorage/localStorage split (this hook wrote
     // localStorage; App.jsx read sessionStorage), the redeem silently
     // never fired. Bug seen 2026-07-26 on savetheday-2377a.
-    if (urlToken) {
-      stashToken(urlToken);
-      try {
-        sessionStorage.setItem(
-          'pendingPartnerToken',
-          JSON.stringify({ token: urlToken, stashedAt: Date.now() }),
-        );
-      } catch { /* sessionStorage blocked — fallback to URL/localStorage */ }
-    }
+    stashToken(token);
+    try {
+      sessionStorage.setItem('pendingPartnerToken', token);
+    } catch { /* sessionStorage blocked — fallback to URL/localStorage */ }
 
     let cancelled = false;
     setLoading(true);
