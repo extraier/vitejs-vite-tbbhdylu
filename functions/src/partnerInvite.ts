@@ -601,8 +601,12 @@ export const removePartnerV2 = onCall(
 // attempt at the top.
 // ────────────────────────────────────────────────────────────────────────────
 
+// 2026-07-27 — added optional `eventId` filter. When the caller
+// passes one, only invites for that event are returned. Without
+// it, returns all invites (legacy behavior).
 export interface ListPartnerInvitesInput {
   ownerUid: string;
+  eventId?: string;
 }
 
 export interface PartnerInviteHistoryRow {
@@ -635,7 +639,7 @@ export const listPartnerInvites = onCall(
       throw new HttpsError('unauthenticated', 'Sign in first.');
     }
     const input: Partial<ListPartnerInvitesInput> = req.data || {};
-    const { ownerUid } = input;
+    const { ownerUid, eventId } = input;
     if (!ownerUid) {
       throw new HttpsError('invalid-argument', 'ownerUid is required.');
     }
@@ -646,13 +650,19 @@ export const listPartnerInvites = onCall(
       );
     }
 
-    // One query for all pending invites owned by this user.
-    const pendingSnap = await db
+    // 2026-07-27 — Optional eventId filter. When the caller passes
+    // one, only invites for that event are returned. Lets
+    // InvitePartnerModal scope to the current event instead of
+    // showing every invite this owner has ever sent.
+    let pendingQuery = db
       .collection('artifacts').doc(APP_ID)
       .collection('users').doc(ownerUid)
       .collection('pendingPartnerInvites')
-      .orderBy('createdAt', 'desc')
-      .get();
+      .orderBy('createdAt', 'desc');
+    if (eventId) {
+      pendingQuery = pendingQuery.where('eventId', '==', eventId);
+    }
+    const pendingSnap = await pendingQuery.get();
 
     if (pendingSnap.empty) {
       return { ok: true, rows: [] };

@@ -52,13 +52,16 @@ export function InvitePartnerModal({
   const [history, setHistory] = useState<PartnerInviteHistoryRow[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
-  // Load history when the modal opens (or ownerUid changes).
+  // Load history when the modal opens (or ownerUid/eventId changes).
+  // 2026-07-27 — Pass eventId so the modal shows ONLY invites for
+  // this event (the partner invite for a previous event shouldn't
+  // appear when the user is working on a new event).
   useEffect(() => {
     if (!isOpen || !ownerUid) return;
     let cancelled = false;
     setHistoryLoading(true);
     partnerInviteApi
-      .list({ ownerUid })
+      .list({ ownerUid, eventId })
       .then((res) => {
         if (cancelled) return;
         setHistory(Array.isArray(res?.rows) ? res.rows : []);
@@ -76,7 +79,7 @@ export function InvitePartnerModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, ownerUid]);
+  }, [isOpen, ownerUid, eventId]);
 
   // After a successful send, prepend the new row to the history so
   // the user sees their action reflected immediately. The server

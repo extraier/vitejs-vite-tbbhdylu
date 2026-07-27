@@ -64,6 +64,10 @@ export interface RemovePartnerResult {
 // need a separate write to mark expired invites.
 export interface ListPartnerInvitesInput {
   ownerUid: string;
+  // 2026-07-27 — optional eventId filter. When set, only invites
+  // for that event are returned (used by InvitePartnerModal so
+  // the modal doesn't show partner invites from a previous event).
+  eventId?: string;
 }
 
 export type PartnerInviteStatus = 'pending' | 'accepted' | 'expired';

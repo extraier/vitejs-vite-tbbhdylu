@@ -845,35 +845,37 @@ export default function App() {
       };
     }, [user?.uid, user?.email]);
 
-   const { data: allGuests } = useFirestoreCollection(
-       guestDataReady && dataOwnerUid
-         ? query(
-             collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'guests'),
-             // Firestore rules reference resource.data.eventId — the query must
-             // include a where() filter matching that field or list queries are
-             // denied. In guest mode we use guest.qEvent, in owner mode we use
-             // the currently selected event ID.
-             where('eventId', '==', guest.isGuestMode ? guest.qEvent : (currentEvent?.id || '__no_event__'))
-           )
-         : null,
-       [targetUid, guestDataReady, guest.qEvent, currentEvent?.id],
-     );
+   // 2026-07-27 — Migrated to event-scoped path: /users/{ownerUid}/events/{eventId}/guests.
+     // The old path used a where('eventId', '==') filter, which kept
+     // the data scoped but was fragile (rules had to allowlist the
+     // field on every operation). Moving the path makes the scope
+     // structural and rules uniform.
+     const { data: allGuests } = useFirestoreCollection(
+         guestDataReady && dataOwnerUid && currentEvent
+           ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'guests')
+           : (guestDataReady && dataOwnerUid && guest.isGuestMode && guest.qEvent
+               ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', guest.qEvent, 'guests')
+               : null),
+         [targetUid, guestDataReady, guest.qEvent, currentEvent?.id],
+       );
 
      // 2026-07-15 — scanLog subscription for the reception scanner's
      // "最近掃描" list. Bounded by eventId so we don't fetch scans from
      // other events the owner might own. Limited to the last 50 (Firestore
      // requires descending + limit for cost control).
-     const { data: recentScans } = useFirestoreCollection(
-       dataOwnerUid && !guest.isGuestMode && currentEvent
-         ? query(
-             collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'scanLog'),
-             where('eventId', '==', currentEvent.id),
-             orderBy('scannedAt', 'desc'),
-             limit(50),
-           )
-         : null,
-       [dataOwnerUid, currentEvent?.id],
-     );
+     // 2026-07-27 — Migrated to event-scoped path: /users/{ownerUid}/events/{eventId}/scanLog.
+         // Old owner-scoped path required a where('eventId') filter at query
+         // time; now the path itself scopes the query.
+         const { data: recentScans } = useFirestoreCollection(
+           dataOwnerUid && !guest.isGuestMode && currentEvent
+             ? query(
+                 collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'scanLog'),
+                 orderBy('scannedAt', 'desc'),
+                 limit(50),
+               )
+             : null,
+           [dataOwnerUid, currentEvent?.id],
+         );
 
    // 2026-07-15 — chat inquiries subscription. Couples and vendors
    // both subscribe so the inbox is shared (each side sees the same
@@ -1279,18 +1281,19 @@ export default function App() {
            return;
          }
          // Back-fill tasks for this contact in this owner scope.
-         try {
-           const { getDocs } = await import('firebase/firestore');
-           const tasksQ = query(
-             collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks'),
-             where('assignedContactId', '==', contact.id),
-           );
-           const snap = await getDocs(tasksQ);
-           let count = 0;
-           for (const t of snap.docs) {
-             if (t.data().assignedVendorUid) continue;
-             await updateDoc(
-               doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', t.id),
+         // 2026-07-27 — Migrated to event-scoped path.
+                 try {
+                   const { getDocs } = await import('firebase/firestore');
+                   const tasksQ = query(
+                     collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks'),
+                     where('assignedContactId', '==', contact.id),
+                   );
+                   const snap = await getDocs(tasksQ);
+                   let count = 0;
+                   for (const t of snap.docs) {
+                     if (t.data().assignedVendorUid) continue;
+                     await updateDoc(
+                       doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks', t.id),
                {
                  assignedVendorUid: vendorUid,
                  assignedVendorName:
@@ -1315,51 +1318,55 @@ export default function App() {
      };
 
 
-  const { data: allPhotos } = useFirestoreCollection(
-    dataOwnerUid && (guest.isGuestMode || currentEvent)
-      ? query(
-          collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'photos'),
-          // Rules reference resource.data.eventId — must filter by it in queries.
-          where('eventId', '==', guest.isGuestMode ? guest.qEvent : currentEvent.id)
-        )
-      : null,
-    [dataOwnerUid, guest.isGuestMode, guest.qEvent, currentEvent?.id],
-  );
+  // 2026-07-27 — Migrated to event-scoped path: /users/{ownerUid}/events/{eventId}/photos.
+   const { data: allPhotos } = useFirestoreCollection(
+     dataOwnerUid && (guest.isGuestMode ? guest.qEvent : currentEvent)
+       ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events',
+                    guest.isGuestMode ? guest.qEvent : currentEvent.id, 'photos')
+       : null,
+     [dataOwnerUid, guest.isGuestMode, guest.qEvent, currentEvent?.id],
+   );
 
+  // 2026-07-27 — Migrated to event-scoped path: /users/{ownerUid}/events/{eventId}/tasks.
+  // Old owner-scoped path leaked tasks from sibling events.
   const { data: tasks } = useFirestoreCollection(
-    dataOwnerUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks')
+    dataOwnerUid && !guest.isGuestMode && currentEvent
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks')
       : null,
-    [dataOwnerUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode, currentEvent?.id],
   );
 
   // ---- 2026-07-17: Big Day (大日統籌) suite (rundown / resources / teaCeremony / playlist).
-  // All four collections live under /users/{ownerUid}/{name}. Read-only here;
-  // writes go through the parent via callback props. Helper users do NOT see
-  // these (rules allow owner-only).
+  // 2026-07-27 — Migrated from /users/{ownerUid}/{name} to
+  // /users/{ownerUid}/events/{eventId}/{name} (event-scoped).
+  // Old owner-scoped path was shared across all events the owner
+  // owns — sneakerciaga opening a brand-new empty event was seeing
+  // rundown items from her other event "test again and again". Same
+  // path shape as redPackets (which was already event-scoped).
+  // Helper users do NOT see these (rules allow owner-only).
   const { data: rundown } = useFirestoreCollection(
-    dataOwnerUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'rundown')
+    dataOwnerUid && !guest.isGuestMode && currentEvent
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'rundown')
       : null,
-    [dataOwnerUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode, currentEvent?.id],
   );
   const { data: resources } = useFirestoreCollection(
-    dataOwnerUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources')
+    dataOwnerUid && !guest.isGuestMode && currentEvent
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'resources')
       : null,
-    [dataOwnerUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode, currentEvent?.id],
   );
   const { data: teaCeremony } = useFirestoreCollection(
-    dataOwnerUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'teaCeremony')
+    dataOwnerUid && !guest.isGuestMode && currentEvent
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'teaCeremony')
       : null,
-    [dataOwnerUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode, currentEvent?.id],
   );
   const { data: playlist } = useFirestoreCollection(
-    dataOwnerUid && !guest.isGuestMode
-      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'playlist')
+    dataOwnerUid && !guest.isGuestMode && currentEvent
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'playlist')
       : null,
-    [dataOwnerUid, guest.isGuestMode],
+    [dataOwnerUid, guest.isGuestMode, currentEvent?.id],
   );
 
   // 2026-07-15 — VendorDashboard live data. Previously the dashboard
@@ -1644,7 +1651,8 @@ export default function App() {
       assignedHelperName: chosenHelperName,
       assignedHelperUid: chosenHelperUid,
     };
-    await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks'), newTask);
+    // 2026-07-27 — Migrated to event-scoped path.
+    await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks'), newTask);
     setNewTaskForm({
       categoryTop: '',
       categorySub: '',
@@ -1664,10 +1672,11 @@ export default function App() {
     showToast('✅ 任務已新增');
   };
 
+  // 2026-07-27 — Migrated to event-scoped path.
   const toggleTask = async (task, e) => {
     e.stopPropagation();
-    if (!user || userRole !== 'owner') return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', task.id);
+    if (!user || userRole !== 'owner' || !currentEvent?.id) return;
+    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks', task.id);
     await updateDoc(taskRef, {
       isCompleted: !task.isCompleted,
       actualCost: !task.isCompleted ? task.estimatedCost : 0,
@@ -1708,9 +1717,10 @@ export default function App() {
   // undefined)` would either throw a permission error or write to
   // the wrong path. Now matches the caller: takes (taskId, est, act)
   // and writes both fields so totals stay correct.
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleUpdateTaskCost = async (taskId, estimatedCost, actualCost) => {
-    if (!user) return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', taskId);
+    if (!user || !currentEvent?.id) return;
+    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks', taskId);
     await updateDoc(taskRef, {
       estimatedCost: Number(estimatedCost) || 0,
       actualCost: Number(actualCost) || 0,
@@ -1722,9 +1732,10 @@ export default function App() {
   // 2026-07-24 — full task edit. Previously only cost was editable.
   // Now owners can change title, category, venue, due date, vendor,
   // helper, and costs from the same place via <TaskFullEditor>.
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleUpdateTask = async (taskId, updates) => {
-    if (!user) return;
-    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', taskId);
+    if (!user || !currentEvent?.id) return;
+    const taskRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks', taskId);
     const cleaned = {};
     Object.entries(updates).forEach(([k, v]) => {
       if (v !== undefined) cleaned[k] = v;
@@ -1734,9 +1745,10 @@ export default function App() {
     showToast('✅ 任務已更新');
   };
 
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleDeleteTask = async (task) => {
-    if (!user) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'tasks', task.id));
+    if (!user || !currentEvent?.id) return;
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks', task.id));
     setActiveCategory(null);
   };
 
@@ -1759,38 +1771,32 @@ export default function App() {
   // — see git blame if you're curious why all four tabs were
   // silently failing to persist writes today.
   // Per-collection wrappers — pass these to <WeddingDay/>:
+  // 2026-07-27 — Migrated from /users/{ownerUid}/{name} to
+  // /users/{ownerUid}/events/{eventId}/{name}. Per-collection wrapper
+  // refuses to write when no currentEvent is selected, instead of
+  // writing to the old owner-scoped slot.
   const upsertWeddingDoc = async (name, data) => {
-    if (!user || !data?.id) return;
-    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, name, data.id);
+    if (!user || !data?.id || !currentEvent?.id) return;
+    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, name, data.id);
     // Strip the id itself — Firestore stores it as the doc key
     const { id: _id, ...rest } = data;
     try {
-      await setDoc(ref, { ...rest, eventId: currentEvent?.id || null, updatedAt: Date.now() }, { merge: true });
+      await setDoc(ref, { ...rest, eventId: currentEvent.id, updatedAt: Date.now() }, { merge: true });
     } catch (err) {
-      // 2026-07-18 — the error stays visible to the user via
-      // the surrounding screen's UI fallbacks; we used to
-      // console.log here while tracking down the original
-      // `setDoc is not defined` ReferenceError. Now that
-      // `setDoc` is properly imported (commit a08523d) we
-      // can rethrow cleanly and stop spamming the dev console.
       throw err;
     }
   };
   const deleteWeddingDoc = async (name, id) => {
-    if (!user || !id) return;
-    await deleteDoc(doc(db, 'artifacts', appId, 'users', dataOwnerUid, name, id));
+    if (!user || !id || !currentEvent?.id) return;
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, name, id));
   };
 
   // Per-collection wrappers — pass these to <WeddingDay/>:
   const handleUpsertRundown = (d) => upsertWeddingDoc('rundown', d);
   const handleDeleteRundown = (id) => deleteWeddingDoc('rundown', id);
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleReorderRundown = async (id, direction) => {
-    // Lightweight re-order: shift the moved doc's startTime by ±15min
-    // so the natural startTime-based sort in the screen changes.
-    // Avoids a heavy "order" int field while still letting users
-    // nudge conflicting slots. Not perfect but good enough for
-    // event-day planning.
-    if (!user || !id) return;
+    if (!user || !id || !currentEvent?.id) return;
     const snap = (rundown || []).find((e) => e.id === id);
     if (!snap) return;
     const cur = snap.startTime || '12:00';
@@ -1801,16 +1807,17 @@ export default function App() {
     if (total > 24 * 60 - 1) total = 24 * 60 - 1;
     const nh = Math.floor(total / 60);
     const nm = total % 60;
-    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'rundown', id);
+    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'rundown', id);
     await setDoc(ref, { startTime: `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}` }, { merge: true });
   };
   // 2026-07-22b — Bulk manualPosition setter for 大日流程 drag-
   // and-drop reorder. Writes all affected positions in parallel.
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleSetRundownPositions = async (writes) => {
-    if (!user || !writes || writes.length === 0) return;
+    if (!user || !writes || writes.length === 0 || !currentEvent?.id) return;
     const refs = writes.map(({ id, manualPosition }) =>
       setDoc(
-        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'rundown', id),
+        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'rundown', id),
         { manualPosition },
         { merge: true },
       ),
@@ -1819,18 +1826,20 @@ export default function App() {
   };
   const handleUpsertResource = (d) => upsertWeddingDoc('resources', d);
   const handleDeleteResource = (id) => deleteWeddingDoc('resources', id);
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleToggleResource = async (id, checked) => {
-    if (!user) return;
-    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources', id);
+    if (!user || !currentEvent?.id) return;
+    const ref = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'resources', id);
     await setDoc(ref, { checked }, { merge: true });
   };
   // 2026-07-22 — 物資 reorder. Same algorithm as playlist:
   // swap manualPosition between two adjacent items in the same
   // category. O(1) parallel writes.
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleReorderResource = async (idA, posA, idB, posB) => {
-    if (!user || !idA || !idB) return;
-    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources', idA);
-    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources', idB);
+    if (!user || !idA || !idB || !currentEvent?.id) return;
+    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'resources', idA);
+    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'resources', idB);
     await Promise.all([
       setDoc(a, { manualPosition: posA }, { merge: true }),
       setDoc(b, { manualPosition: posB }, { merge: true }),
@@ -1839,11 +1848,12 @@ export default function App() {
   // 2026-07-22b — Bulk manualPosition setter for drag-and-drop
   // reorder. Takes [{id, manualPosition}, ...] and writes them
   // in parallel. Used by both 物資 and 歌單.
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleSetResourcePositions = async (writes) => {
-    if (!user || !writes || writes.length === 0) return;
+    if (!user || !writes || writes.length === 0 || !currentEvent?.id) return;
     const refs = writes.map(({ id, manualPosition }) =>
       setDoc(
-        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'resources', id),
+        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'resources', id),
         { manualPosition },
         { merge: true },
       ),
@@ -1855,10 +1865,11 @@ export default function App() {
   // 2026-07-22 — 敬茶名單 reorder. Swaps the existing `order`
   // field on two adjacent people in the same group. Both writes
   // are O(1) — no renumbering of subsequent rows needed.
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleReorderTeaCeremony = async (idA, orderA, idB, orderB) => {
-    if (!user || !idA || !idB) return;
-    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'teaCeremony', idA);
-    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'teaCeremony', idB);
+    if (!user || !idA || !idB || !currentEvent?.id) return;
+    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'teaCeremony', idA);
+    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'teaCeremony', idB);
     await Promise.all([
       setDoc(a, { order: orderA }, { merge: true }),
       setDoc(b, { order: orderB }, { merge: true }),
@@ -1870,11 +1881,12 @@ export default function App() {
   // We batch the writes into Promise.all for a single network
   // round-trip. The swap-pair handler above is kept for any
   // callers still using the older ▲▼ semantics.
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleSetTeaCeremonyOrders = async (writes) => {
-    if (!user || !writes || writes.length === 0) return;
+    if (!user || !writes || writes.length === 0 || !currentEvent?.id) return;
     const refs = writes.map(({ id, order }) =>
       setDoc(
-        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'teaCeremony', id),
+        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'teaCeremony', id),
         { order },
         { merge: true },
       ),
@@ -1887,10 +1899,11 @@ export default function App() {
   // sort mode of the 歌單 tab. We write manualPosition on the two
   // swapped songs. Idempotent: re-running the swap with the same
   // args is a no-op (setDoc with merge=true on unchanged data).
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleReorderPlaylist = async (idA, posA, idB, posB) => {
-    if (!user || !idA || !idB) return;
-    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'playlist', idA);
-    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'playlist', idB);
+    if (!user || !idA || !idB || !currentEvent?.id) return;
+    const a = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'playlist', idA);
+    const b = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'playlist', idB);
     // Parallel writes — both should succeed independently. If one
     // fails (e.g. network glitch) the UI will rerender on the next
     // subscription tick from the partial state, and a fresh ▲/▼
@@ -1904,11 +1917,12 @@ export default function App() {
   };
   // 2026-07-22b — Bulk manualPosition setter for 歌單 drag-and-
   // drop reorder. Same parallel-write pattern as the others.
+  // 2026-07-27 — Migrated to event-scoped path.
   const handleSetPlaylistPositions = async (writes) => {
-    if (!user || !writes || writes.length === 0) return;
+    if (!user || !writes || writes.length === 0 || !currentEvent?.id) return;
     const refs = writes.map(({ id, manualPosition }) =>
       setDoc(
-        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'playlist', id),
+        doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'playlist', id),
         { manualPosition },
         { merge: true },
       ),
@@ -1933,7 +1947,8 @@ export default function App() {
       hasGifted: false,
       giftAmount: 0,
     };
-    await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'guests'), newGuest);
+    // 2026-07-27 — Migrated to event-scoped path.
+    await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'guests'), newGuest);
     setNewGuestForm({ name: '', group: '男家親戚', headCount: 1, tableNumber: '' });
     showToast('✅ 嘉賓已加入名單，已生成專屬 QR Code！');
   };
@@ -1959,7 +1974,8 @@ export default function App() {
     // Parent gets its own random guestId; children reference it.
     const parentGuestId = Math.random().toString(36).substring(2, 8).toUpperCase();
     const batch = writeBatch(db);
-    const guestsCol = collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'guests');
+    // 2026-07-27 — Migrated to event-scoped path.
+    const guestsCol = collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'guests');
 
     // Parent row (carries household-level fields: contact email, head count)
     const parentRef = doc(guestsCol);
@@ -2170,7 +2186,8 @@ export default function App() {
       // 2026-07-23 — firestore.rules now allows isOwner(ownerUid) to
       // create photos (was only guests + helpers before). Photo upload
       // from the owner's own session was failing on addDoc.
-      await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'photos'), {
+      // 2026-07-27 — Migrated to event-scoped path.
+      await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'photos'), {
         eventId: currentEvent.id,
         url,
         thumbnailUrl: thumbnailUrl || url,  // fall back to full URL for legacy photos
