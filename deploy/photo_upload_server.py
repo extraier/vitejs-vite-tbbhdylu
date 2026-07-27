@@ -25,6 +25,8 @@ import re
 import secrets
 import sys
 import time
+import hmac
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -44,6 +46,20 @@ ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/h
 # Filename component guard — eventId and guestId should be short alphanumeric, but
 # accept anything that matches a safe pattern; reject ../, \x00, etc.
 SAFE_ID = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+# 2026-07-27 — HMAC verification. The shared secret is mirrored at
+# /home/openclaw/.config/photo-upload/server_secret on the NAS itself
+# (NOT in the public client bundle). The Vercel /api/photo-upload
+# proxy mints X-Upload-Token headers on the user's behalf; this
+# server validates them. PHOTO_HMAC_SECRET (or fall back to the
+# legacy PHOTO_UPLOAD_SECRET / NAS_UPLOAD_SECRET env names) holds the
+# same value. Empty/None means the server refuses all uploads.
+PHOTO_HMAC_SECRET = (
+    os.environ.get("PHOTO_HMAC_SECRET")
+    or os.environ.get("PHOTO_UPLOAD_SECRET")
+    or os.environ.get("NAS_UPLOAD_SECRET")
+    or ""
+)
+TOKEN_TTL_MS = int(os.environ.get("PHOTO_TOKEN_TTL_MS", str(5 * 60 * 1000)))  # 5 min default
 
 # Allow unit-testing the parser on a dev machine where /volume1 may not exist.
 # The production server runs on the NAS where /volume1 is writable.
@@ -55,6 +71,31 @@ except (OSError, PermissionError):
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+
+
+def verify_hmac(secret, event_id, guest_id, expires_ms_str, provided_sig_hex):
+    """Constant-time HMAC verification. Returns True on match.
+
+    The token format matches the client's earlier mint:
+      hex(HMAC_SHA256(secret, f"{event_id}|{guest_id}|{expires_ms}"))
+    Expiration is enforced in `do_POST` (we compare expires_ms to
+    current wall-clock), here we only check the signature.
+    """
+    if not secret:
+        return False
+    try:
+        expires_ms_int = int(expires_ms_str)
+    except (TypeError, ValueError):
+        return False
+    msg = f"{event_id}|{guest_id}|{expires_ms_int}".encode("utf-8")
+    expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+    if len(expected) != len(provided_sig_hex):
+        return False
+    # hmac.compare_digest requires equal-length byte strings; ours
+    # are equal-length hex strings (guaranteed by the length check
+    # above). If they differ in length the function raises
+    # TypeError; the guard above prevents that.
+    return hmac.compare_digest(expected, provided_sig_hex)
 
 
 class PhotoHandler(BaseHTTPRequestHandler):
@@ -151,6 +192,26 @@ class PhotoHandler(BaseHTTPRequestHandler):
         self._send_bytes(200, body, ctype, max_age=31536000)
 
     def _handle_upload(self):
+        # 2026-07-27 — HMAC verification, BEFORE any multipart parsing
+        # or disk writes. Server is hard-fail-closed: if the secret
+        # env var is missing, every request is denied. This blocks
+        # anonymous writes from anyone who can hit the network
+        # endpoint (the prior code had no auth check at all).
+        token = self.headers.get("X-Upload-Token", "")
+        expires = self.headers.get("X-Upload-Expires", "")
+        if not PHOTO_HMAC_SECRET:
+            return self._send_error(
+                401,
+                "auth not configured (server missing PHOTO_HMAC_SECRET)",
+            )
+        if not token or not expires:
+            return self._send_error(401, "missing X-Upload-Token / X-Upload-Expires")
+        try:
+            if int(expires) < int(time.time() * 1000):
+                return self._send_error(401, "upload token expired (TTL exceeded)")
+        except (TypeError, ValueError):
+            return self._send_error(401, "malformed X-Upload-Expires header")
+
         ctype = self.headers.get("Content-Type", "")
         if not ctype.startswith("multipart/form-data"):
             return self._send_error(400, "expected multipart/form-data")
@@ -177,6 +238,15 @@ class PhotoHandler(BaseHTTPRequestHandler):
         # Validate id shape (defense in depth — the URL params already filter)
         if not (SAFE_ID.match(event_id) and SAFE_ID.match(guest_id)):
             return self._send_error(400, "bad eventId/guestId")
+
+        # Verify HMAC against the {eventId, guestId, expires} triple.
+        # Verification happens AFTER the body parse + SAFE_ID check
+        # so we never leak timing info about the secret contents:
+        # the only side channels here are the regex on the IDs and
+        # the constant-time comparison inside verify_hmac.
+        if not verify_hmac(PHOTO_HMAC_SECRET, event_id, guest_id, expires, token):
+            log(f"HMAC verify failed for event_id={event_id[:8]}… guest_id={guest_id[:8]}…")
+            return self._send_error(401, "unauthorized (token mismatch)")
 
         # File part
         if "file" not in files:

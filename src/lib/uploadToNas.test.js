@@ -93,8 +93,13 @@ describe('uploadToNas', () => {
     FakeXHR._lastInstance = null;
   });
 
-  // ---------- HMAC token shape ----------
-  test('mints a 64-char hex HMAC-SHA256 token', async () => {
+  // 2026-07-27 — RED→GREEN reset. The proxy now mints the HMAC
+  // server-side; the client never sends X-Upload-Token /
+  // X-Upload-Expires headers. We verify the request shape that
+  // the proxy expects (multipart body with the named fields,
+  // POSTed to /api/photo-upload) and that NO auth headers leak
+  // out of the client bundle.
+  test('posts multipart to /api/photo-upload with no auth headers', async () => {
     const file = new File(['fake-bytes'], 'photo.jpg', { type: 'image/jpeg' });
     const promise = uploadPhotoToNas({
       file,
@@ -102,31 +107,28 @@ describe('uploadToNas', () => {
       guestId: 'gT',
       uploaderName: 'Tester',
     });
-    // The promise is pending; meanwhile FakeXHR has captured the call
     const xhr = await waitForXhr();
     xhr._respond(200, { url: 'http://example.com/photos/x.jpg', bytes: 10 });
     await promise;
 
     expect(xhr).not.toBeNull();
     expect(xhr.method).toBe('POST');
-    // 2026-07-23 — POST goes to /api/photo-upload (Vercel proxy),
-    // not the NAS directly. The proxy forwards to the NAS server-side.
     expect(xhr.url).toBe('/api/photo-upload');
-    expect(xhr.headers['X-Upload-Token']).toMatch(/^[0-9a-f]{64}$/);
-    const expires = parseInt(xhr.headers['X-Upload-Expires'], 10);
-    expect(expires).toBeGreaterThan(Date.now());
-    expect(expires).toBeLessThan(Date.now() + 6 * 60 * 1000); // within 5–6 min
+    // CRITICAL: client must NOT leak the HMAC secret by sending
+    // X-Upload-Token (the proxy now mints that server-side).
+    expect(xhr.headers['X-Upload-Token']).toBeUndefined();
+    expect(xhr.headers['X-Upload-Expires']).toBeUndefined();
   });
 
-  // ---------- Header correctness ----------
-  test('sends X-Upload-Token and X-Upload-Expires headers', async () => {
+  // Header-free body
+  test('sends only Content-Type; no auth headers', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
     const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
     const xhr = await waitForXhr();
     xhr._respond(200, { url: 'http://example.com/x.jpg', bytes: 1 });
     await p;
-    expect(xhr.headers['X-Upload-Token']).toBeTruthy();
-    expect(xhr.headers['X-Upload-Expires']).toBeTruthy();
+    expect(xhr.headers['X-Upload-Token']).toBeUndefined();
+    expect(xhr.headers['X-Upload-Expires']).toBeUndefined();
   });
 
   // ---------- Multipart body ----------
