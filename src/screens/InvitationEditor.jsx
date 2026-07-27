@@ -129,6 +129,22 @@ export function InvitationEditor({
     ? `${typeof window !== 'undefined' ? window.location.origin : ''}/?o=${ownerUid}&e=${eventId}&g=${previewGuest.guestId}`
     : '';
 
+  // 2026-07-23 — switched from direct NAS POST to /api/photo-upload.
+  // The HMAC token is no longer minted client-side: the proxy mints
+  // it with the server-only HMAC secret after reading the multipart
+  // body. The browser only ever knows the *destination URL* (/api/
+  // photo-upload, same-origin) and never touches the HMAC secret.
+  // The receiver (deploy/photo_upload_server.py) verifies the
+  // server-minted token with constant-time HMAC compare.
+  //
+  // 2026-07-27 — replaced literal "PLACEHOLDER_FIXED_BY_TASK_10"
+  // X-Upload-Token (which leaked the auth bypass string into the
+  // public bundle) with the standard /api/photo-upload path. The
+  // background upload reuses the same proxy as guest photos by
+  // mapping (vendorId, file) -> (eventId="inv-bg", guestId=vendorUid,
+  // file). The receiver's storage layout becomes
+  // /photos/inv-bg/<vendorUid>/<ts>_abcd.jpg, distinct from any
+  // real event's guest uploads. SAFE_ID regex accepts both ids.
   const handleBgUpload = async (file) => {
     if (ownerTier !== 'premium') {
       setShowUpgrade(true);
@@ -137,11 +153,20 @@ export function InvitationEditor({
     setIsUploading(true);
     try {
       const fd = new FormData();
-      fd.append('vendorId', ownerUid);
+      // Field names MUST match what the Vercel proxy and the NAS
+      // receiver expect: eventId / guestId / uploaderName / file.
+      // ownerUid is the vendor's Firebase UID (defense in depth:
+      // SAFE_ID regex on the receiver side caps at 64 chars; Firebase
+      // UIDs are 28 chars, fits).
+      fd.append('eventId', 'inv-bg');
+      fd.append('guestId', ownerUid);
+      fd.append('uploaderName', ownerUid); // vendor's uid as uploader name
       fd.append('file', file);
-      const res = await fetch('https://cdn.savetheday.io/upload?kind=inv-bg', {
+      const res = await fetch('/api/photo-upload', {
         method: 'POST',
-        headers: { 'X-Upload-Token': 'PLACEHOLDER_FIXED_BY_TASK_10' },
+        // No X-Upload-Token / X-Upload-Expires — the proxy mints
+        // them server-side now. Removing the literal placeholder
+        // closes the prior leak. Client never sees the secret.
         body: fd,
       });
       const json = await res.json();
