@@ -140,11 +140,36 @@ match /{path=**}/events/{eventId} {
     // (with eventId), only the first two patterns apply. For
     // /helpers and /guestLinks (no eventId), the third pattern
     // is what unlocks access.
+    //
+    // 2026-07-27 — REORDERED to put isCoOwnerOfAnyEvent FIRST.
+    // The previous order was: isOwner -> isCoOwnerOfEventDoc ->
+    // isCoOwnerByRequestEvent -> isCoOwnerOfAnyEvent.
+    //
+    // BUG: For collectionGroup('events') queries, Firestore
+    // evaluates the rule on the EVENT DOC itself. The event doc
+    // has NO `eventId` field (it's in the URL path, not the
+    // doc), so `isCoOwnerOfEventDoc` checked `resource.data.eventId
+    // is string` and returned false. Then `isCoOwnerByRequestEvent`
+    // checked `request.resource.data.eventId is string` and
+    // ALSO returned false. The OR chain then reached
+    // `isCoOwnerOfAnyEvent` — which checks the /coOwners/
+    // collection and would have returned true.
+    //
+    // The OLD code technically reached that branch too — but
+    // collectionGroup queries are evaluated PER-DOC and an
+    // exception in any branch aborts the whole query.
+    //
+    // Moving `isCoOwnerOfAnyEvent` to the front fixes this:
+    // - It does NOT depend on resource.data having any field
+    //   (it only reads the /coOwners/ collection).
+    // - It's the only branch that works for /coOwners-style
+    //   permissions (the original partner invite pattern).
+    // - For owners, isOwner short-circuits as before.
     function isOwnerOrAnyCoOwner(ownerUid) {
       return isOwner(ownerUid)
+        || isCoOwnerOfAnyEvent(ownerUid)
         || isCoOwnerOfEventDoc(ownerUid)
-        || isCoOwnerByRequestEvent(ownerUid)
-        || isCoOwnerOfAnyEvent(ownerUid);
+        || isCoOwnerByRequestEvent(ownerUid);
     }
 
     function isAdmin() {
