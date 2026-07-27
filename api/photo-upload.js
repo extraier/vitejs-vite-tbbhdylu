@@ -124,6 +124,10 @@ async function _handler(req, res) {
     });
     return;
   }
+  // Pull the multipart Content-Type from the request so we can
+  // extract the boundary for parsing. The receiver needs the
+  // original boundary for its own multipart parser.
+  const contentType = String(req.headers['content-type'] || '');
   // (2) Pull eventId + guestId from the multipart body, then strip
   // them so the upstream forward doesn't carry them twice (once
   // as a multipart field, once as the bound headers).
