@@ -47,9 +47,18 @@ export function useAuth() {
   // Hermes 2026-07-03 — dev-only auth bypass for headless debugging.
   // Visit ?__herotoken=<firebase_custom_token> to sign in as that UID
   // without a password. The token is consumed exactly once and stripped
-  // from the URL. Safe to leave in the build: tokens are short-lived
-  // (60 min) and the param has zero effect if no token is passed.
+  // from the URL.
+  //
+  // 2026-07-27 — hard-gated behind import.meta.env.DEV. Previously the
+  // comment claimed "safe to leave in the build" because tokens are
+  // short-lived, but any signed-in user could share their own
+  // still-valid token via a URL and the recipient would be signed in
+  // as them. In dev we need it for `curl` + headless browsers; in prod
+  // we MUST NOT sign anyone in via URL params.
   useEffect(() => {
+    // import.meta.env.DEV is statically replaced by Vite at build time.
+    // In production builds this entire block is dead-code eliminated.
+    if (!import.meta.env.DEV) return;
     const params = new URLSearchParams(window.location.search);
     const token = params.get('__herotoken');
     if (!token) return;

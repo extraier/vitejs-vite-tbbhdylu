@@ -28,9 +28,9 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import * as nodemailer from 'nodemailer';
 import * as QRCode from 'qrcode';
 import * as crypto from 'node:crypto';
+import { sendViaSendgrid } from './sendgridMailer';
 
 // HMAC-signed token helpers — signs (ownerUid|eventId|guestId|expires) so a
 // guest who clicks the email link can be redeemed exactly once into
@@ -264,9 +264,6 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
       smtpUrlRaw !== 'undefined' &&
       /^[a-z]+:\/\//.test(smtpUrlRaw);
     const dryRun = !smtpUrlValid;
-    const transporter = dryRun
-      ? null
-      : nodemailer.createTransport(smtpUrlRaw!);
 
     // Group guestIds by household. A household parent receives ONE email that
     // bundles every member's QR code. Singles receive their own email.
@@ -392,16 +389,28 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
           (event.ownerEmail as string | undefined) ||
           (invitation.ownerEmail as string | undefined);
         const fromAddress = SMTP_FROM.value() || 'no-reply@savetheday.io';
-        await transporter!.sendMail({
-          from: `"${ownerDisplayName} 敬邀" <${fromAddress}>`,
-          replyTo: ownerReplyEmail,
+        const sendResult = await sendViaSendgrid({
+          smtpUrl: smtpUrlRaw,
+          from: fromAddress,
+          fromName: `${ownerDisplayName} 敬邀`,
           to: email,
           subject: isFamily
             ? `${event.name || '婚禮'} · ${guest.name} 家庭專屬電子喜帖（${unit.memberRows.length + 1}位）`
             : `${event.name || '婚禮'} · 您的專屬電子喜帖`,
           html: html.replace(/\{\{PRIMARY_QR\}\}/g, primaryShareUrl),
-          attachments,
+          replyTo: ownerReplyEmail ?? undefined,
+          attachments: attachments.map(a => ({
+            filename: a.filename,
+            content: Buffer.isBuffer(a.content) ? a.content : Buffer.from(a.content),
+            type: 'image/png',
+            disposition: 'inline',
+            cid: a.cid,
+          })),
         });
+        if (!sendResult.ok) {
+          console.error('[sendInvitationsV2] mail error:', sendResult.error);
+          throw new HttpsError('internal', `mail send failed: ${sendResult.error}`);
+        }
         // Mark the parent + every member as "sent" in the results array so the
         // editor's per-guest counts stay accurate.
         results.push({ guestId: guest.guestId, email, status: 'sent' });

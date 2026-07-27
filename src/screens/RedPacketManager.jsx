@@ -14,21 +14,14 @@ import {
   ImageIcon,
 } from 'lucide-react';
 import {
-  ref as storageRef,
-  uploadBytes,
-  getDownloadURL,
-  deleteObject,
-} from 'firebase/storage';
-import {
   collection,
   query,
   onSnapshot,
   doc,
   setDoc,
-  deleteDoc,
-  serverTimestamp,
 } from 'firebase/firestore';
-import { db, storage, appId } from '../lib/firebase';
+import { db, appId } from '../lib/firebase';
+import { callFirebaseFn } from '../lib/firebaseFn';
 
 // 2026-07-24 — 電子人情 (e-Red-Packet) manager.
 //
@@ -152,42 +145,48 @@ export function RedPacketManager({ ownerUid, eventId, onClose, showToast }) {
     setError(null);
     const newId = `rp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
-    const path = `red-packets/${ownerUid}/${eventId}/${newId}/${safeName}`;
 
     try {
-      console.log('[redPackets] uploading:', { ownerUid, eventId, newId, path, fileType: file.type, fileSize: file.size });
-      // Upload image first; only write Firestore doc if upload succeeds.
-      const sRef = storageRef(storage, path);
-      await uploadBytes(sRef, file, { contentType: file.type });
-      const url = await getDownloadURL(sRef);
-      console.log('[redPackets] storage upload OK, url:', url);
+      console.log('[redPackets] uploading via CF (server-side):', { ownerUid, eventId, newId, fileType: file.type, fileSize: file.size });
 
-      // 2026-07-27 — event-scoped doc path. eventId is required by
-      // the firestore rule and must equal the parent eventId.
-      const docRef = doc(
-        db,
-        'artifacts',
-        appId,
-        'users',
+      // 2026-07-27 — Route the upload through `uploadRedPacketV2`
+      // Cloud Function (functions/src/redPackets.ts). The CF verifies
+      // the caller is owner OR active coOwner via Admin SDK (more
+      // reliable than client-side Storage rules with firestore.exists())
+      // and writes both the Storage object and the Firestore doc.
+      //
+      // The file is sent as base64 because Firebase callable functions
+      // don't accept raw bytes — `request.data` is JSON-serializable.
+      // 2 MB cap (matches MAX_IMAGE_BYTES) keeps the payload under the
+      // CF's 10 MB request limit with margin.
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          if (typeof result !== 'string') return reject(new Error('FileReader did not return a string'));
+          // Strip "data:image/png;base64," prefix
+          const comma = result.indexOf(',');
+          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+
+      const cfResult = await callFirebaseFn('uploadRedPacketV2', {
         ownerUid,
-        'events',
         eventId,
-        'redPackets',
-        newId,
-      );
-      await setDoc(docRef, {
+        qrId: newId,
+        filename: safeName,
+        contentType: file.type,
+        base64,
         provider,
-        label: label?.trim() || PROVIDERS[provider]?.label || '電子人情',
-        qrUrl: url,
-        qrPath: path,
+        label: (label?.trim() || PROVIDERS[provider]?.label || '電子人情'),
         suggested: suggested || null,
         note: note?.trim() || '',
         sortOrder: (items?.length || 0) + 1,
-        createdAt: serverTimestamp(),
-        eventId,
       });
-      console.log('[redPackets] Firestore doc created:', newId);
 
+      console.log('[redPackets] CF upload OK:', cfResult?.data);
       showToast?.('✅ 電子人情 QR Code 已上載');
     } catch (e) {
       console.error('[redPackets] upload FAILED:', {
@@ -230,31 +229,16 @@ export function RedPacketManager({ ownerUid, eventId, onClose, showToast }) {
     if (!window.confirm(`確定刪除「${item.label}」？`)) return;
     setError(null);
     try {
-      // Best-effort delete the image; if it fails, still drop the doc
-      // (orphaned files are cheap to clean up later).
-      if (item.qrPath) {
-        try {
-          await deleteObject(storageRef(storage, item.qrPath));
-        } catch (e) {
-          console.warn('qrPath delete failed (continuing):', e);
-        }
-      }
-      // 2026-07-27 — event-scoped delete path. Falls back to the
-      // owner-scoped path for legacy docs created before this refactor
-      // (cs.kupid's test doc from 2026-07-24). The legacy fallback
-      // fails silently if the doc is gone — both paths are best-effort.
-      const eventDocRef = doc(
-        db,
-        'artifacts',
-        appId,
-        'users',
+      // 2026-07-27 — Route delete through `deleteRedPacketV2` Cloud
+      // Function (functions/src/redPackets.ts). The CF verifies
+      // owner/coOwner and removes both the Storage object (via Admin
+      // SDK) and the Firestore doc. Client-side storage.rules is
+      // deny-by-default now (2026-07-27b).
+      await callFirebaseFn('deleteRedPacketV2', {
         ownerUid,
-        'events',
         eventId,
-        'redPackets',
-        item.id,
-      );
-      await deleteDoc(eventDocRef);
+        qrId: item.id,
+      });
       showToast?.('🗑 已刪除');
     } catch (e) {
       console.error('red-packet delete failed:', e);

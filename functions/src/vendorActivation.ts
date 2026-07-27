@@ -31,8 +31,8 @@ import { defineSecret } from 'firebase-functions/params';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
-import * as nodemailer from 'nodemailer';
 import * as crypto from 'crypto';
+import { sendViaSendgrid } from './sendgridMailer';
 
 try {
   initializeApp();
@@ -651,7 +651,6 @@ export const sendVendorInviteEmail = onCall(
     }
 
     try {
-      const transport = nodemailer.createTransport(smtpUrl);
       const subject = `歡迎加入 Save The Day · ${vendorName}`;
       const text = [
         `Hi ${vendorName},`,
@@ -666,13 +665,17 @@ export const sendVendorInviteEmail = onCall(
         `— Save The Day 團隊`,
       ].join('\n');
       const html = renderVendorInviteHtml({ vendorName, signupUrl, expiresAt: new Date(Date.now() + INVITE_TTL_MS) });
-      await transport.sendMail({
+      const mailResult = await sendViaSendgrid({
+        smtpUrl,
         from: smtpFrom,
         to: email,
         subject,
         text,
         html,
       });
+      if (!mailResult.ok) {
+        throw new Error(mailResult.error ?? 'mail send failed');
+      }
       // Analytics — log the admin actor + recipient for attribution.
       // "ok: false" path emits email_failed below.
       await logActivationEvent({
@@ -792,13 +795,12 @@ export const bulkActivateSeededVendors = onCall(
     const baseUrl = (process.env.APP_BASE_URL || '').replace(/\/+$/, '');
     const fallbackBase = baseUrl || 'https://savetheday.io';
 
-    // Lazily create SMTP transport — only if at least one item has
-    // an email AND sendEmails is true. Skipping the createTransport
-    // on pure-link batches saves ~50ms and avoids touching secret.
+    // Lazily obtain the API helper handle — only if at least one item has
+    // an email AND sendEmails is true. Skipping the API client binding
+    // on pure-link batches saves a tiny bit and avoids touching the secret.
     const smtpUrl = process.env.SMTP_URL;
     const smtpFrom = process.env.SMTP_FROM;
     const canSendEmail = sendEmails && !!smtpUrl && !!smtpFrom;
-    const transport = canSendEmail ? nodemailer.createTransport(smtpUrl!) : null;
 
     const rows: BulkActivateVendorRow[] = [];
     let minted = 0;
@@ -856,8 +858,8 @@ export const bulkActivateSeededVendors = onCall(
           invitationExpiresAt: expiresAt.toISOString(),
         };
 
-        // Send email if requested + we have an email + transport.
-        if (item.email && transport && smtpFrom) {
+        // Send email if requested + we have an email + smtp env.
+        if (item.email && canSendEmail && smtpFrom && smtpUrl) {
           try {
             const vendorName = data.name || item.slug;
             const subject = `歡迎加入 Save The Day · ${vendorName}`;
@@ -878,13 +880,17 @@ export const bulkActivateSeededVendors = onCall(
               signupUrl,
               expiresAt,
             });
-            await transport.sendMail({
+            const mailResult = await sendViaSendgrid({
+              smtpUrl,
               from: smtpFrom,
               to: item.email,
               subject,
               text,
               html,
             });
+            if (!mailResult.ok) {
+              throw new Error(mailResult.error ?? 'mail send failed');
+            }
             row.emailSent = true;
             emailsSent++;
             await logActivationEvent({

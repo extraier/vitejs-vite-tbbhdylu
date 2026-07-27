@@ -103,38 +103,21 @@ service firebase.storage {
     // running into the rule's variable-substitution quirks.
     //
     // Reads: public so guests can scan directly from the guest
-    // portal via the doc's qrUrl (matches old owner-scoped rule).
+    // portal via the doc's qrUrl.
     //
-    // Writes: the original owner (request.auth.uid == ownerUid)
-    // OR any signed-in user with an active coOwner record at
-    // /users/{ownerUid}/coOwners/{auth.uid}. firestore.exists()
-    // works in Storage rules — it's the standard Firebase pattern
-    // for cross-resource security gates.
+    // Writes: 2026-07-27b — DISABLED client-side. Initial attempt
+    // was to use `firestore.exists(/coOwners/{auth.uid})` to gate
+    // coOwner uploads. Verified live (2026-07-27): that approach
+    // returns false even when the coOwner doc exists — Firebase
+    // Storage rules don't reliably see Firestore docs cross-service.
+    // Replaced with server-side upload via `uploadRedPacketV2`
+    // Cloud Function (functions/src/redPackets.ts) which uses the
+    // Admin SDK and bypasses these rules. Reads stay public so the
+    // guest portal can render QR images via downloadUrl.
     match /red-packets/{ownerUid}/{eventId}/{redPacketId}/{fileName} {
       allow read: if true;
-      allow write: if request.auth != null
-        && request.resource.size < 2 * 1024 * 1024
-        && (
-          request.resource.contentType == 'image/png'
-          || request.resource.contentType == 'image/jpeg'
-          || request.resource.contentType == 'image/webp'
-        )
-        && (
-          request.auth.uid == ownerUid
-          || firestore.exists(
-            /databases/(default)/documents/artifacts/savetheday-production/users/$(ownerUid)/coOwners/$(request.auth.uid)
-          )
-        );
-      // Delete allows the original owner OR any coOwner (they may
-      // need to remove an upload). firestore.exists() gate is the
-      // same as write.
-      allow delete: if request.auth != null
-        && (
-          request.auth.uid == ownerUid
-          || firestore.exists(
-            /databases/(default)/documents/artifacts/savetheday-production/users/$(ownerUid)/coOwners/$(request.auth.uid)
-          )
-        );
+      allow write: if false;
+      allow delete: if false;
     }
 
     // Default deny everything else (photos, vendor assets, etc. live

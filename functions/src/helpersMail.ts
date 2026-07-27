@@ -41,7 +41,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
-import * as nodemailer from 'nodemailer';
+import { sendViaSendgrid } from './sendgridMailer';
 
 const db = getFirestore();
 
@@ -238,24 +238,31 @@ async function _sendHelperInviteEmailImpl(req: any): Promise<SendHelperInviteEma
     };
   }
 
-  // ─── Real send ──────────────────────────────────────────────────────────
-  const transporter = nodemailer.createTransport(smtpUrlRaw!);
+  // ─── Real send (SendGrid v3 HTTP API, not SMTP) ──────────────────────────
   try {
-    await transporter.sendMail({
-      from: `"${resolvedOwnerName} 敬邀" <${fromAddress}>`,
-      replyTo: ownerReplyEmail,
+    const result = await sendViaSendgrid({
+      smtpUrl: smtpUrlRaw,
+      from: fromAddress,
+      fromName: `${resolvedOwnerName} 敬邀`,
       to: helperEmail,
       subject,
       html,
+      replyTo: ownerReplyEmail,
     });
+    if (!result.ok) {
+      const msg = result.error ?? 'unknown';
+      console.error('[sendHelperInviteEmail] mail send failed:', msg);
+      // Re-throw as HttpsError so the client can decide whether to fall
+      // back to sendSignInLinkToEmail. Returning { ok: false, sent: false }
+      // here would be ambiguous (caller can't tell mail error from
+      // dryRun), so we surface the failure loudly.
+      throw new HttpsError('internal', `mail send failed: ${msg}`);
+    }
   } catch (err: unknown) {
+    if (err instanceof HttpsError) throw err;
     const msg = err instanceof Error ? err.message : 'unknown';
     console.error('[sendHelperInviteEmail] sendMail failed:', msg);
-    // Re-throw as HttpsError so the client can decide whether to fall
-    // back to sendSignInLinkToEmail. Returning { ok: false, sent: false }
-    // here would be ambiguous (caller can't tell SMTP error from
-    // dryRun), so we surface the failure loudly.
-    throw new HttpsError('internal', `SMTP send failed: ${msg}`);
+    throw new HttpsError('internal', `mail send failed: ${msg}`);
   }
 
   return { ok: true, sent: true };

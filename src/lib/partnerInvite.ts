@@ -58,6 +58,33 @@ export interface RemovePartnerResult {
   ok: boolean;
 }
 
+// 2026-07-27 — list-partner-invites history (powers the 邀請另一半
+// history list in the dashboard + modal). Server derives the
+// status field from the pending-doc + expiresAt so we don't
+// need a separate write to mark expired invites.
+export interface ListPartnerInvitesInput {
+  ownerUid: string;
+}
+
+export type PartnerInviteStatus = 'pending' | 'accepted' | 'expired';
+
+export interface PartnerInviteHistoryRow {
+  id: string;
+  email: string;
+  eventId: string;
+  eventName: string;
+  status: PartnerInviteStatus;
+  createdAt: number;
+  expiresAt: number;
+  acceptedAt?: number;
+  acceptedByUid?: string;
+}
+
+export interface ListPartnerInvitesResult {
+  ok: boolean;
+  rows: PartnerInviteHistoryRow[];
+}
+
 // Singleton Functions instance.
 let cachedFn: Functions | null = null;
 function fns(): Functions {
@@ -89,6 +116,18 @@ export const partnerInviteApi = {
     const call = httpsCallable<RemovePartnerInput, RemovePartnerResult>(
       fns(),
       'removePartnerV2',
+    );
+    const res = await call(input);
+    return res.data;
+  },
+
+  // 2026-07-27 — list partner-invite history. Used by
+  // InvitePartnerModal and the dashboard card to show "which
+  // emails were sent, and the accept status".
+  async list(input: ListPartnerInvitesInput): Promise<ListPartnerInvitesResult> {
+    const call = httpsCallable<ListPartnerInvitesInput, ListPartnerInvitesResult>(
+      fns(),
+      'listPartnerInvites',
     );
     const res = await call(input);
     return res.data;

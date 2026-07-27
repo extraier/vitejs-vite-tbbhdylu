@@ -920,9 +920,25 @@ export { postJobRequest } from './jobBoard';
 // is what they call after signing in to finalize the join. removePartnerV2
 // revokes a co-owner's access (owner-only). V2 suffix bypasses a
 // stuck Cloud Run 409 on the original names; see partnerInvite.ts.
+//
+// 2026-07-27 — listPartnerInvites returns the invite history
+// (which emails were sent, per-event, with derived accept status:
+// pending / accepted / expired). Owner-only. Used by the
+// InvitePartnerModal and the dashboard card.
 export {
   sendPartnerInviteV2,
   redeemPartnerInviteV2,
   previewPartnerInvite,
   removePartnerV2,
+  listPartnerInvites,
 } from './partnerInvite';
+
+// 2026-07-27 — Server-side QR upload + delete for 電子人情. See
+// ./redPackets.ts for why client-side Storage rules + firestore.exists()
+// turned out to be unreliable for coOwner writes. These functions verify
+// the caller via the Admin SDK and use Admin SDK writes that bypass
+// storage.rules + firestore.rules entirely.
+export {
+  uploadRedPacketV2,
+  deleteRedPacketV2,
+} from './redPackets';

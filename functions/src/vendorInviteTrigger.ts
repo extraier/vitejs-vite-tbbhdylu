@@ -25,8 +25,8 @@ import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/fire
 import { defineSecret } from 'firebase-functions/params';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import * as nodemailer from 'nodemailer';
 import * as crypto from 'crypto';
+import { sendViaSendgrid } from './sendgridMailer';
 
 try {
   initializeApp();
@@ -216,7 +216,6 @@ async function processPendingInvite(
 
   const vendorName = vendorData.name || slug;
   try {
-    const transport = nodemailer.createTransport(smtpUrl);
     const subject = `新人想搵你 · ${vendorName} · 加入 Save The Day`;
     const text = [
       `Hi ${vendorName},`,
@@ -233,13 +232,17 @@ async function processPendingInvite(
       `— Save The Day 團隊`,
     ].join('\n');
     const html = renderCoupleInviteHtml({ vendorName, signupUrl, expiresAt });
-    await transport.sendMail({
+    const mailResult = await sendViaSendgrid({
+      smtpUrl,
       from: smtpFrom,
       to: email,
       subject,
       text,
       html,
     });
+    if (!mailResult.ok) {
+      throw new Error(mailResult.error ?? 'mail send failed');
+    }
     await inviteRef.update({
       status: 'invited',
       sentAt: FieldValue.serverTimestamp(),
@@ -249,7 +252,7 @@ async function processPendingInvite(
     return { sent: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error('[onPendingInviteCreated] SMTP send failed:', msg);
+    console.error('[onPendingInviteCreated] mail send failed:', msg);
     await inviteRef.update({
       status: 'invite_failed',
       failReason: msg.slice(0, 500),

@@ -54,12 +54,10 @@ import { defineSecret } from 'firebase-functions/params';
 // 2026-07-26 — initializeApp is already called in index.ts (the
 // shared bootstrap). Re-calling it here throws "default Firebase
 // app already exists" at deploy time. We rely on the global
-// already-initialized app and just grab the Firestore + Auth
-// handles.
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import * as crypto from 'crypto';
-import * as nodemailer from 'nodemailer';
+import { sendViaSendgrid } from './sendgridMailer';
 
 const db = getFirestore();
 const auth = getAuth();
@@ -275,17 +273,25 @@ export const sendPartnerInviteV2 = onCall(
       };
     }
     try {
-      const transporter = nodemailer.createTransport(smtpUrl);
-      await transporter.sendMail({
-        from: `${ownerName} 敬邀 <${fromAddr}>`,
+      const sendResult = await sendViaSendgrid({
+        smtpUrl: process.env.SMTP_URL,
+        from: fromAddr,
+        fromName: ownerName,
         to: partnerEmail,
         subject,
         html,
       });
-      return { ok: true, sent: true };
+      if (sendResult.ok && sendResult.sent) {
+        return { ok: true, sent: true };
+      }
+      // Capture the human-readable error from the API path; mirror the
+      // shape of the previous nodemailer error so callers / clients
+      // don't need to know which transport is in use.
+      console.error('[sendPartnerInviteV2] mail error:', sendResult.error);
+      return { ok: false, sent: false, error: sendResult.error };
     } catch (err) {
       const msg = (err as Error).message || String(err);
-      console.error('[sendPartnerInviteV2] SMTP error:', msg);
+      console.error('[sendPartnerInviteV2] mail error:', msg);
       return { ok: false, sent: false, error: msg };
     }
   },
@@ -562,5 +568,169 @@ export const removePartnerV2 = onCall(
     await batch.commit();
 
     return { ok: true };
+  },
+);
+
+// ────────────────────────────────────────────────────────────────────────────
+// listPartnerInvites — owner-only. Returns the full invite history for
+// the calling owner so the dashboard / modal can render
+// "which emails were sent, and the accept status" rows.
+//
+// 2026-07-27 — first version. The existing /pendingPartnerInvites
+// docs are already being written by sendPartnerInviteV2 and updated
+// by redeemPartnerInviteV2; this just exposes them in one batch
+// read with status derivation. No writes.
+//
+// Status semantics (no backend write needed for 'expired' — derived):
+//   - 'pending'   — status field still 'pending' AND expiresAt > now
+//   - 'accepted'  — status field is 'accepted'
+//   - 'expired'   — status field still 'pending' but expiresAt <= now
+//                   (we don't need a scheduled job to mark this — the
+//                   read computes it)
+//
+// Revoked invites: there's no dedicated revoke path that touches the
+// pending doc (removePartnerV2 flips the coOwners doc to status=
+// 'revoked' but leaves the pending doc alone, since acceptance is a
+// one-way transition). So revoked invites will appear here as
+// 'accepted' if redeemed first, then 'pending' if not — which is
+// fine for the history view. We could enhance later by adding a
+// separate revoked field on the pending doc; for now we ship the
+// minimal history surface.
+//
+// Returns the rows newest-first so the UI can show the most recent
+// attempt at the top.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface ListPartnerInvitesInput {
+  ownerUid: string;
+}
+
+export interface PartnerInviteHistoryRow {
+  id: string;
+  email: string;
+  eventId: string;
+  // Resolved from the event doc on the server so the UI doesn't have
+  // to make N+1 reads. Falls back to '婚禮' if the event is gone.
+  eventName: string;
+  // 'pending' | 'accepted' | 'expired' — derived as described above.
+  status: 'pending' | 'accepted' | 'expired';
+  createdAt: number;        // ms since epoch
+  expiresAt: number;        // ms since epoch
+  acceptedAt?: number;      // ms since epoch (only when status==='accepted')
+  acceptedByUid?: string;
+}
+
+interface ListPartnerInvitesResult {
+  ok: boolean;
+  rows: PartnerInviteHistoryRow[];
+}
+
+export const listPartnerInvites = onCall(
+  {
+    cors: true,
+    region: 'us-central1',
+  },
+  async (req): Promise<ListPartnerInvitesResult> => {
+    if (!req.auth) {
+      throw new HttpsError('unauthenticated', 'Sign in first.');
+    }
+    const input: Partial<ListPartnerInvitesInput> = req.data || {};
+    const { ownerUid } = input;
+    if (!ownerUid) {
+      throw new HttpsError('invalid-argument', 'ownerUid is required.');
+    }
+    if (req.auth.uid !== ownerUid) {
+      throw new HttpsError(
+        'permission-denied',
+        'You can only list invites for your own account.',
+      );
+    }
+
+    // One query for all pending invites owned by this user.
+    const pendingSnap = await db
+      .collection('artifacts').doc(APP_ID)
+      .collection('users').doc(ownerUid)
+      .collection('pendingPartnerInvites')
+      .orderBy('createdAt', 'desc')
+      .get();
+
+    if (pendingSnap.empty) {
+      return { ok: true, rows: [] };
+    }
+
+    // Resolve event names in parallel so the UI doesn't need an extra
+    // round-trip. Each row's eventId → event.name lookup.
+    const eventIds = Array.from(
+      new Set(pendingSnap.docs.map((d) => (d.data().eventId as string) || '').filter(Boolean)),
+    );
+    const eventSnaps = await Promise.all(
+      eventIds.map((eid) =>
+        db
+          .collection('artifacts').doc(APP_ID)
+          .collection('users').doc(ownerUid)
+          .collection('events').doc(eid)
+          .get(),
+      ),
+    );
+    const eventNameById = new Map<string, string>();
+    eventSnaps.forEach((snap, i) => {
+      const eid = eventIds[i];
+      if (snap.exists) {
+        eventNameById.set(eid, (snap.data()?.name as string) || '婚禮');
+      } else {
+        // Event was deleted after the invite was sent — show the
+        // raw id so the owner can still distinguish rows.
+        eventNameById.set(eid, '(已刪除的婚禮)');
+      }
+    });
+
+    const now = Date.now();
+    const rows: PartnerInviteHistoryRow[] = pendingSnap.docs.map((d) => {
+      const data = d.data() as Record<string, unknown>;
+      const email = ((data.email as string) || '').toLowerCase();
+      const eventId = (data.eventId as string) || '';
+      const statusRaw = (data.status as string) || 'pending';
+      const expiresAtMs =
+        data.expiresAt instanceof Timestamp
+          ? (data.expiresAt as Timestamp).toMillis()
+          : Number(data.expiresAt) || 0;
+      const createdAtMs =
+        data.createdAt instanceof Timestamp
+          ? (data.createdAt as Timestamp).toMillis()
+          : Number(data.createdAt) || 0;
+      const acceptedAtMs =
+        data.acceptedAt instanceof Timestamp
+          ? (data.acceptedAt as Timestamp).toMillis()
+          : data.acceptedAt ? Number(data.acceptedAt) : undefined;
+
+      // Derived status:
+      //   - 'accepted' wins over everything else if it's set
+      //   - 'expired' if still pending but past expiresAt
+      //   - 'pending' otherwise
+      let status: 'pending' | 'accepted' | 'expired';
+      if (statusRaw === 'accepted') {
+        status = 'accepted';
+      } else if (expiresAtMs > 0 && expiresAtMs <= now) {
+        status = 'expired';
+      } else {
+        status = 'pending';
+      }
+
+      const row: PartnerInviteHistoryRow = {
+        id: d.id,
+        email,
+        eventId,
+        eventName: eventNameById.get(eventId) || '婚禮',
+        status,
+        createdAt: createdAtMs,
+        expiresAt: expiresAtMs,
+      };
+      if (acceptedAtMs !== undefined) row.acceptedAt = acceptedAtMs;
+      const acceptedByUid = data.acceptedByUid as string | undefined;
+      if (acceptedByUid) row.acceptedByUid = acceptedByUid;
+      return row;
+    });
+
+    return { ok: true, rows };
   },
 );
