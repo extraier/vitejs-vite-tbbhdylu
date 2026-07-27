@@ -4,7 +4,12 @@
 // welcome message.
 //
 // Returns:
-//   invite        — { partnerEmail, eventId, eventName, expiresAt } | null
+//   invite        — { partnerEmail, eventName, expiresAt } | null
+//     (eventId intentionally omitted — the previewPartnerInvite
+//     Cloud Function dropped it from its response to fix a
+//     minor info-disclosure leak. The hook is defensive: if a
+//     payload that includes eventId ever arrives, the field is
+//     simply absent from the parsed object.)
 //   loading       — true while the preview CF is in flight
 //   error         — error string if the CF failed (bad token, expired, etc.)
 //   clearInvite   — () => void; call after the user signs up / in to
@@ -129,7 +134,6 @@ export function usePartnerInvitePreview() {
           stripTokenFromUrl();
           setInvite({
             partnerEmail: data.partnerEmail,
-            eventId: data.eventId,
             eventName: data.eventName,
             expiresAt: data.expiresAt,
           });

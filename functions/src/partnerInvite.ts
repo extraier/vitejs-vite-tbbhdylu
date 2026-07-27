@@ -74,6 +74,7 @@ const APP_ID = 'savetheday-production';
 const SMTP_URL = defineSecret('SMTP_URL');
 const SMTP_FROM = defineSecret('SMTP_FROM');
 const APP_BASE_URL = defineSecret('APP_BASE_URL');
+const HMAC_KEY = defineSecret('HMAC_KEY');
 
 // Read SMTP_URL/SMTP_FROM/APP_BASE_URL via process.env at runtime
 // (these are populated by Firebase's secrets runtime thanks to the
@@ -82,8 +83,9 @@ const APP_BASE_URL = defineSecret('APP_BASE_URL');
 const _smtpUrl = SMTP_URL;
 const _smtpFrom = SMTP_FROM;
 const _appBaseUrl = APP_BASE_URL;
+const _hmacKey = HMAC_KEY;
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-[_smtpUrl, _smtpFrom, _appBaseUrl].forEach(() => undefined);
+[_smtpUrl, _smtpFrom, _appBaseUrl, _hmacKey].forEach(() => undefined);
 
 // Magic-link token TTL: 7 days. Plenty for a partner to find
 // the email and click; short enough that abandoned invites
@@ -93,13 +95,34 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // ────────────────────────────────────────────────────────────────────────────
 // Token signing (server-side, so the client can't forge invites)
 // ────────────────────────────────────────────────────────────────────────────
-
-const DEFAULT_HMAC_KEY = 'dev-only-do-not-ship-savetheday-2377a';
-let cachedKey: string | null = null;
+//
+// 2026-07-27 — failed-closed secret loading. Previously this module
+// had a hardcoded `DEFAULT_HMAC_KEY = 'dev-only-do-not-ship-savetheday-2377a'`
+// that silently signed production tokens if the secret wasn't set.
+// Now we throw at module load if HMAC_KEY is missing or empty, so a
+// missing Cloud Function Secret Manager binding manifests as a
+// function deploy failure rather than a security hole.
+//
+// Cloud Functions v2 does NOT populate `process.env` from
+// Secret Manager unless the secret is registered via defineSecret()
+// AND listed in the onCall's `secrets: [...]` array. The runtime
+// resolves secrets on each invocation via `.value()`, so the value
+// is always fresh — no per-module caching (the prior `cachedKey`
+// memo would have prevented legitimate secret rotation).
 function getHmacKey(): string {
-  if (cachedKey) return cachedKey;
-  cachedKey = process.env.HMAC_KEY || DEFAULT_HMAC_KEY;
-  return cachedKey;
+  const secret = HMAC_KEY.value();
+  if (!secret) {
+    // We cannot throw at module load because in v2 the secret
+    // is resolved per-invocation. Throwing here surfaces as an
+    // HttpsError to the caller, with enough detail to debug.
+    throw new HttpsError(
+      'failed-precondition',
+      'HMAC_KEY secret is missing or empty; configure via ' +
+        '`firebase functions:secrets:set HMAC_KEY` ' +
+        'and add to onCall secrets[] array.',
+    );
+  }
+  return secret;
 }
 
 function signToken(payload: object): string {
@@ -155,7 +178,7 @@ export const sendPartnerInviteV2 = onCall(
   {
     cors: true,
     region: 'us-central1',
-    secrets: [SMTP_URL, SMTP_FROM, APP_BASE_URL],
+    secrets: [SMTP_URL, SMTP_FROM, APP_BASE_URL, HMAC_KEY],
   },
   async (req): Promise<SendPartnerInviteResult> => {
     if (!req.auth) {
@@ -287,6 +310,7 @@ export const redeemPartnerInviteV2 = onCall(
   {
     cors: true,
     region: 'us-central1',
+    secrets: [HMAC_KEY],
   },
   async (req): Promise<RedeemPartnerInviteResult> => {
     if (!req.auth) {
@@ -398,10 +422,16 @@ export const redeemPartnerInviteV2 = onCall(
 //   • No auth required (this runs on the landing page, before sign-in).
 //   • Token signature must match — verifyToken throws on bad signature.
 //   • TTL check same as redeem: 7 days.
-//   • We do NOT return ownerUid or eventId to the unauthenticated caller
-//     (those are revealed post-auth via the user doc on the dashboard).
-//     The client only needs the email to pre-fill the form and the
-//     event name to show the welcome message.
+//   • We do NOT return ownerUid, ownerEmail, or eventId to the
+//     unauthenticated caller (those are revealed post-auth via
+//     the user doc on the dashboard, or upon successful redeem
+//     where they're a natural byproduct of the lookup).
+//     2026-07-27 — dropped eventId from the preview response body.
+//     It was leaked even though the function's own comment claimed
+//     otherwise. The client only used `eventName` for the welcome
+//     message; eventId-from-preview was effectively dead code on
+//     the frontend (`usePartnerInvitePreview.js` passed it through
+//     but `App.jsx` only read `.eventName` and `.partnerEmail`).
 // ────────────────────────────────────────────────────────────────────────────
 
 interface PreviewInput {
@@ -411,7 +441,7 @@ interface PreviewInput {
 interface PreviewResult {
   ok: boolean;
   partnerEmail: string;
-  eventId: string;
+  // eventId intentionally omitted — see security note above.
   eventName: string;
   expiresAt: number; // ms since epoch
 }
@@ -420,6 +450,7 @@ export const previewPartnerInvite = onCall<PreviewInput, Promise<PreviewResult>>
   {
     cors: true,
     region: 'us-central1',
+    secrets: [HMAC_KEY],
   },
   async (req): Promise<PreviewResult> => {
     const input = req.data || ({} as PreviewInput);
@@ -455,7 +486,9 @@ export const previewPartnerInvite = onCall<PreviewInput, Promise<PreviewResult>>
     return {
       ok: true,
       partnerEmail: payload.partnerEmail,
-      eventId: payload.eventId,
+      // eventId intentionally omitted — see comment above the
+      // PreviewResult type. Was being leaked to unauthenticated
+      // callers contrary to the function's own documented contract.
       eventName,
       expiresAt: payload.iat + INVITE_TTL_MS,
     };
@@ -476,6 +509,7 @@ export const removePartnerV2 = onCall(
   {
     cors: true,
     region: 'us-central1',
+    secrets: [HMAC_KEY],
   },
   async (req) => {
     if (!req.auth) {
