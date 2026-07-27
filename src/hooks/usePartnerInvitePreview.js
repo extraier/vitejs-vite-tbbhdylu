@@ -23,7 +23,7 @@
 //   • Makes the unit-test surface clean — see tests/usePartnerInvitePreview.test.js
 
 import { useEffect, useState, useCallback } from 'react';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { callFirebaseFn } from '../lib/firebaseFn';
 
 const STORAGE_KEY = '__heropartnerinvite_token';
 // Keep the token around in case the user closes the tab and resumes.
@@ -125,8 +125,13 @@ export function usePartnerInvitePreview() {
 
     (async () => {
       try {
-        const fn = httpsCallable(getFunctions(undefined, 'us-central1'), 'previewPartnerInvite');
-        const res = await fn({ token });
+        // 2026-07-27 — route through the Vercel proxy (same as
+        // uploadRedPacketV2, sendInvitationsV2, etc.) instead of a
+        // direct httpsCallable() call. Direct calls hit Cloud Run's
+        // preflight rejection (403 Bad signature) because the SDK
+        // sends an OPTIONS probe before the POST. The proxy bypasses
+        // preflight entirely (same-origin request → no probe).
+        const res = await callFirebaseFn('previewPartnerInvite', { token });
         if (cancelled) return;
         const data = res?.data;
         if (data && data.ok && data.partnerEmail) {

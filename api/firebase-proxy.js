@@ -59,6 +59,17 @@ export default async function handler(req, res) {
     // but the collection lives at the top level).
     'postJobRequest',
     'verifyShareToken',
+    // 2026-07-27 — 電子人情 QR upload/delete. Server-side because
+    // client-side Storage rules with firestore.exists() don't work
+    // reliably (see memory). The CFs verify owner/coOwner via Admin
+    // SDK and write both Storage + Firestore.
+    'uploadRedPacketV2',
+    'deleteRedPacketV2',
+    // 2026-07-27 — Partner invite preview (?t=<token> on landing).
+    // Previously called directly via httpsCallable() which hit Cloud
+    // Run's preflight rejection at the edge (403 Bad signature).
+    // Routing through the proxy bypasses preflight entirely.
+    'previewPartnerInvite',
   ]);
   if (!ALLOWED.has(fnName)) {
     return res.status(403).json({
