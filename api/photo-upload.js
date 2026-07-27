@@ -208,50 +208,48 @@ function parseMultipartForIds(buf, contentTypeHeader) {
   const match = contentTypeHeader.match(/boundary=(?:"([^"]+)"|([^;]+))/);
   if (!match) return { ok: false, error: 'no multipart boundary' };
   const boundary = (match[1] || match[2] || '').trim();
-  const delim = `--${boundary}`;
+  const delimStr = `--${boundary}`;
   const closing = `--${boundary}--`;
-  // Locate the part headers + body for eventId / guestId so we can
-  // strip just those parts and keep everything (file, uploaderName).
+  // Strip eventId / guestId fields, keep everything else (file,
+  // uploaderName, etc.) intact for forwarding.
   const idsToStrip = new Set(['eventId', 'guestId']);
-  const stripped = [];
-  // Position by position — multipart is deterministic given the
-  // boundary. We don't try to handle nested multiparts or fancy
-  // encodings; the client uses default FormData which is straightforward.
-  const parts = splitBufferOnBoundary(buf, delim);
+  const parts = splitBufferOnBoundary(buf, delimStr);
   let out = Buffer.alloc(0);
+  const delimBuf = Buffer.from(delimStr, 'utf-8');
   let eventId = null;
   let guestId = null;
   for (const part of parts) {
     if (part.length === 0) continue;
-    // Find the name
-    const nameMatch = part.match(/name="([^"]+)"/);
+    // Look at the headers as a string so .match()/.indexOf() work
+    // and we can keep the file body as raw bytes.
+    const headEnd = findCrlfCrlf(part);
+    if (headEnd === -1) {
+      // No header/body separator found — keep the part as-is.
+      out = Buffer.concat([out, delimBuf, part]);
+      continue;
+    }
+    const headStr = part.subarray(0, headEnd).toString('utf-8');
+    const nameMatch = headStr.match(/name="([^"]+)"/);
     if (!nameMatch) {
-      // Unrecognized part (boundary, etc) — keep as-is.
-      out = Buffer.concat([out, delim, part]);
+      out = Buffer.concat([out, delimBuf, part]);
       continue;
     }
     const name = nameMatch[1];
     if (idsToStrip.has(name)) {
-      // Extract value (everything after the blank line).
-      const bodyStart = part.indexOf('\r\n\r\n');
-      if (bodyStart > -1) {
-        const valueStart = bodyStart + 4;
-        // The value ends at the closing CRLF before the next delim.
-        // For our purposes a trailing CRLF is enough — we don't
-        // care to preserve the trailing CRLF since we're discarding.
-        let valueEnd = part.length;
-        if (part.subarray(valueEnd - 2, valueEnd).toString() === '\r\n') {
-          valueEnd -= 2;
-        }
-        const value = part.subarray(valueStart, valueEnd).toString('utf-8');
-        if (name === 'eventId') eventId = value;
-        else if (name === 'guestId') guestId = value;
+      // Extract the value as a UTF-8 string from the body slice.
+      const body = part.subarray(headEnd + 4);
+      let bodyEnd = body.length;
+      if (bodyEnd >= 2 && body[bodyEnd - 2] === 0x0d && body[bodyEnd - 1] === 0x0a) {
+        bodyEnd -= 2;
       }
-      // Strip this part entirely.
+      const value = body.subarray(0, bodyEnd).toString('utf-8');
+      if (name === 'eventId') eventId = value;
+      else if (name === 'guestId') guestId = value;
+      // Strip this part — don't include it in `out`.
       continue;
     }
     // Keep this part (file, uploaderName, anything else).
-    out = Buffer.concat([out, delim, part]);
+    out = Buffer.concat([out, delimBuf, part]);
   }
   // Append the closing boundary.
   out = Buffer.concat([out, Buffer.from('\r\n' + closing)]);
@@ -261,9 +259,19 @@ function parseMultipartForIds(buf, contentTypeHeader) {
   return { ok: true, eventId, guestId, bodyWithoutIds: out };
 }
 
+// Returns the byte offset of the CRLFCRLF separator inside a Buffer,
+// or -1 if not found. Buffer.prototype.indexOf with a Buffer subarray
+// is supported on Node 16+, so this avoids UTF-8 conversion of the
+// part body (which can be a multi-MB photo).
+function findCrlfCrlf(buf) {
+  return buf.indexOf('\r\n\r\n');
+}
+
 function splitBufferOnBoundary(buf, delim) {
   const out = [];
   let i = 0;
+  // delim is a Node Buffer when called from parseMultipartForIds.
+  if (typeof delim === 'string') delim = Buffer.from(delim, 'utf-8');
   while (i < buf.length) {
     const start = buf.indexOf(delim, i);
     if (start === -1) break;
