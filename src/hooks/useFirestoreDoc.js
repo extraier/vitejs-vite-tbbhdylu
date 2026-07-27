@@ -29,20 +29,31 @@ export function useFirestoreDoc(docRef, deps = []) {
       return undefined;
     }
     setLoading(true);
+    // 2026-07-27 — cancelled-flag pattern. See
+    // useFirestoreCollection.js for the rationale (Firestore can
+    // resolve onSnapshot after unmount, leading to
+    // "Can't perform a React state update on an unmounted
+    // component" warnings and torn closures).
+    let cancelled = false;
     const unsub = onSnapshot(
       docRef,
       (snapshot) => {
+        if (cancelled) return;
         setData(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
         setLoading(false);
       },
       (err) => {
+        if (cancelled) return;
         // eslint-disable-next-line no-console
         console.error('useFirestoreDoc error:', err);
         setError(err);
         setLoading(false);
       },
     );
-    return unsub;
+    return () => {
+      cancelled = true;
+      unsub();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 

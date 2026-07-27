@@ -43,21 +43,35 @@ export function useFirestoreCollection(collectionRef, deps = []) {
       return undefined;
     }
     setLoading(true);
+    // 2026-07-27 — cancelled-flag pattern. Firestore can resolve
+    // onSnapshot AFTER the component unmounts (race between the
+    // subscription's first tick and our cleanup). The previous
+    // code called setData on a torn-down component, which logs
+    // "Can't perform a React state update on an unmounted
+    // component" in dev. See https://github.com/savetheday-io
+    // session 20260726_110814 for context.
+    let cancelled = false;
     // Standalone-function form (works in modular SDK v10.x). NOT the method
     // form (`collectionRef.onSnapshot(...)`) which throws in production.
     const unsub = onSnapshot(
       collectionRef,
       (snapshot) => {
+        if (cancelled) return;
         setData(snapshot.docs.map((d) => ({ id: d.id, ref: d.ref, ...d.data() })));
         setLoading(false);
       },
       (err) => {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
         console.error('useFirestoreCollection error:', err);
         setError(err);
         setLoading(false);
       },
     );
-    return unsub;
+    return () => {
+      cancelled = true;
+      unsub();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
