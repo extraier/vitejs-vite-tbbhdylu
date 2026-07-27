@@ -8,20 +8,22 @@ const SUGGESTED_AMOUNTS = [800, 1000, 1500];
 
 // 2026-07-24 — PaymentModal for the guest-side 電子人情 flow.
 //
-// Renders the owner's uploaded QR codes (loaded live from Firestore)
+// Renders the couple's uploaded QR codes (loaded live from Firestore)
 // plus a few suggested amounts the guest can tap to acknowledge
 // they've sent that figure (writes to the guest's hasGifted flag).
 //
-// Live subscription: we listen to /artifacts/{appId}/users/{ownerUid}/
-// redPackets for the current owner. The owner's QR uploads show up
-// here in real-time so a guest can refresh and see the latest one.
-export function PaymentModal({ isOpen, onClose, onSend, ownerUid, onCopyQrLink }) {
+// Live subscription (event-scoped as of 2026-07-27):
+//   /artifacts/{appId}/users/{ownerUid}/events/{eventId}/redPackets
+// Both partners' QR uploads show up here in real-time regardless of
+// who uploaded them — the QR list belongs to the wedding, not a single
+// owner. The old owner-scoped path broke coOwner reads.
+export function PaymentModal({ isOpen, onClose, onSend, ownerUid, eventId, onCopyQrLink }) {
   const [redPackets, setRedPackets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState(null);
 
   useEffect(() => {
-    if (!isOpen || !ownerUid) {
+    if (!isOpen || !ownerUid || !eventId) {
       setLoading(false);
       return;
     }
@@ -32,6 +34,8 @@ export function PaymentModal({ isOpen, onClose, onSend, ownerUid, onCopyQrLink }
       appId,
       'users',
       ownerUid,
+      'events',
+      eventId,
       'redPackets',
     );
     const q = query(colRef);
@@ -49,7 +53,7 @@ export function PaymentModal({ isOpen, onClose, onSend, ownerUid, onCopyQrLink }
       },
     );
     return () => unsub();
-  }, [isOpen, ownerUid]);
+  }, [isOpen, ownerUid, eventId]);
 
   if (!isOpen) return null;
 

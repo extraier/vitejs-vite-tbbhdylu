@@ -2951,6 +2951,7 @@ export default function App() {
             {userRole === 'owner' && currentEvent && currentView === 'red-packet' && (
               <RedPacketManager
                 ownerUid={currentEvent.userId || user?.uid}
+                eventId={currentEvent.id}
                 showToast={showToast}
               />
             )}
@@ -3108,8 +3109,12 @@ export default function App() {
         onSend={handleGiveRedPacket}
         // 2026-07-24 — pass the owner's uid so the modal can
         // subscribe to /artifacts/{appId}/users/{ownerUid}/
-        // redPackets and display the actual QR codes the owner
-        // uploaded in RedPacketManager.
+        // events/{eventId}/redPackets and display the actual QR
+        // codes the couple uploaded in RedPacketManager.
+        //
+        // 2026-07-27 — added eventId prop (event-scoped refactor).
+        // Both the owner AND any coOwner of the same event get the
+        // same QR list. Path is event-scoped, not owner-scoped.
         //
         // 2026-07-24b — bug fix. Previously used
         // `currentEvent?.userId` but in guest mode `currentEvent`
@@ -3135,6 +3140,12 @@ export default function App() {
         ownerUid={guest.isGuestMode
           ? guest.qOwner
           : (currentEvent?.userId || user?.uid)}
+        // eventId: currentEvent.id in owner mode, guest.qEvent in
+        // guest mode (no currentEvent is set). qEvent is the eventId
+        // pulled from the guest's URL params.
+        eventId={guest.isGuestMode
+          ? guest.qEvent
+          : currentEvent?.id}
       />
       <QrCodeModal
         guest={viewingQrCode}

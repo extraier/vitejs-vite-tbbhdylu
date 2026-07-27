@@ -91,22 +91,49 @@ service firebase.storage {
         );
     }
 
-    // 2026-07-24 — 電子人情 (e-Red-Packet) QR code images. Owner
-    // uploads their payment-app QR (PayMe / FPS / AlipayHK) to
-    // /red-packets/{ownerUid}/{redPacketId}/{filename}. Reads are
-    // public so guests can scan directly from the guest portal
-    // without needing to be authed — but we keep the same image
-    // type + size limits so the bucket can't be abused.
-    match /red-packets/{ownerUid}/{redPacketId}/{fileName} {
-      allow read: if true;  // public so guests can scan via the
-                            // storage URL on the redPackets doc
+    // 2026-07-27 — 電子人情 (e-Red-Packet) QR code images. The couple
+    // uploads their payment-app QRs (PayMe / FPS / AlipayHK) to
+    // /red-packets/{ownerUid}/{eventId}/{redPacketId}/{filename}.
+    //
+    // Event-scoped (not owner-scoped) as of 2026-07-27 — both
+    // partners of a couple share one QR list, so the path must be
+    // event-scoped, not just keyed by the original event creator.
+    // Storage is namespaced under {ownerUid} so the rule can use
+    // firestore.exists() to check the coOwners collection without
+    // running into the rule's variable-substitution quirks.
+    //
+    // Reads: public so guests can scan directly from the guest
+    // portal via the doc's qrUrl (matches old owner-scoped rule).
+    //
+    // Writes: the original owner (request.auth.uid == ownerUid)
+    // OR any signed-in user with an active coOwner record at
+    // /users/{ownerUid}/coOwners/{auth.uid}. firestore.exists()
+    // works in Storage rules — it's the standard Firebase pattern
+    // for cross-resource security gates.
+    match /red-packets/{ownerUid}/{eventId}/{redPacketId}/{fileName} {
+      allow read: if true;
       allow write: if request.auth != null
-        && request.auth.uid == ownerUid
         && request.resource.size < 2 * 1024 * 1024
         && (
           request.resource.contentType == 'image/png'
           || request.resource.contentType == 'image/jpeg'
           || request.resource.contentType == 'image/webp'
+        )
+        && (
+          request.auth.uid == ownerUid
+          || firestore.exists(
+            /databases/(default)/documents/artifacts/savetheday-production/users/$(ownerUid)/coOwners/$(request.auth.uid)
+          )
+        );
+      // Delete allows the original owner OR any coOwner (they may
+      // need to remove an upload). firestore.exists() gate is the
+      // same as write.
+      allow delete: if request.auth != null
+        && (
+          request.auth.uid == ownerUid
+          || firestore.exists(
+            /databases/(default)/documents/artifacts/savetheday-production/users/$(ownerUid)/coOwners/$(request.auth.uid)
+          )
         );
     }
 

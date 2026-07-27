@@ -42,21 +42,25 @@ import { db, storage, appId } from '../lib/firebase';
 // mainland guests). Letting them upload one per app gives every guest
 // a familiar scan target instead of forcing a single provider.
 //
-// Storage layout:
-//   /artifacts/{appId}/users/{ownerUid}/redPackets/{qrId}
-//     - provider   "payme" | "fps" | "alipayhk" | "wechat" | "other"
-//     - label      e.g. "PayMe - Jenny"
-//     - qrUrl      Firebase Storage download URL for the QR image
-//     - qrPath     Storage path (so we can delete the file on remove)
-//     - suggested  optional number, e.g. 800
-//     - note       optional text, e.g. "新人名字: 阿明"
-//     - sortOrder  numeric, used to render in stable order
-//     - createdAt  server timestamp
+// Storage layout (event-scoped as of 2026-07-27):
+//   Firestore: /artifacts/{appId}/users/{ownerUid}/events/{eventId}/redPackets/{qrId}
+//   Storage:   red-packets/{ownerUid}/{eventId}/{qrId}/{filename}
 //
-// Image constraints:
-//   - Max 2 MB
-//   - PNG / JPG / WEBP only
-//   - Stored at storage path "red-packets/{ownerUid}/{qrId}/{filename}"
+// Both partners of a couple share one QR list (coOwners in the event's
+// coOwners[] array), which is why the path is event-scoped, not
+// owner-scoped. See firestore.rules §events/redPackets and storage.rules
+// §red-packets/{ownerUid}/{eventId}/... for the security gate.
+//
+// Doc shape:
+//   - provider   "payme" | "fps" | "alipayhk" | "wechat" | "other"
+//   - label      e.g. "PayMe - Jenny"
+//   - qrUrl      Firebase Storage download URL for the QR image
+//   - qrPath     Storage path (so we can delete the file on remove)
+//   - suggested  optional number, e.g. 800
+//   - note       optional text, e.g. "新人名字: 阿明"
+//   - sortOrder  numeric, used to render in stable order
+//   - createdAt  server timestamp
+//   - eventId    immutable; must equal the parent eventId (rules enforce)
 
 const PROVIDERS = {
   payme: { label: 'PayMe', color: 'emerald', emoji: '💳' },
@@ -70,21 +74,23 @@ const PROVIDERS = {
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2 MB
 const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
-export function RedPacketManager({ ownerUid, onClose, showToast }) {
+export function RedPacketManager({ ownerUid, eventId, onClose, showToast }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState(null);
   const [error, setError] = useState(null);
 
-  // Live-subscribe to this couple's red-packet QRs
+  // 2026-07-27 — Live-subscribe to the EVENT-scoped red-packet QRs.
+  // Path is /users/{ownerUid}/events/{eventId}/redPackets, NOT
+  // /users/{ownerUid}/redPackets (the old owner-scoped layout that
+  // broke coOwner reads on 2026-07-27 — see memory entry).
   useEffect(() => {
-    if (!ownerUid) return;
-    // 2026-07-25 — debug: log the owner-side subscription
-    // path so we can verify what's being read.
+    if (!ownerUid || !eventId) return;
     console.log('[redPackets/owner] subscribing to:', {
       appId,
       ownerUid,
-      path: `artifacts/${appId}/users/${ownerUid}/redPackets`,
+      eventId,
+      path: `artifacts/${appId}/users/${ownerUid}/events/${eventId}/redPackets`,
     });
     const colRef = collection(
       db,
@@ -92,6 +98,8 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
       appId,
       'users',
       ownerUid,
+      'events',
+      eventId,
       'redPackets',
     );
     const q = query(colRef);
@@ -100,7 +108,6 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         list.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
-        // 2026-07-25 — debug
         console.log('[redPackets/owner] received', list.length, 'docs:', list.map(r => ({
           id: r.id,
           provider: r.provider,
@@ -111,24 +118,22 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
         setLoading(false);
       },
       (err) => {
-        // 2026-07-25 — surface the actual error code/message
-        // so we can tell whether the read was rejected by
-        // rules, or the path is wrong, or something else.
         console.error('[redPackets/owner] subscription FAILED:', {
           code: err?.code,
           message: err?.message,
           ownerUid,
+          eventId,
         });
         setError('無法載入電子人情設定。請重新整理頁面再試。');
         setLoading(false);
       },
     );
     return () => unsub();
-  }, [ownerUid]);
+  }, [ownerUid, eventId]);
 
   async function handleAdd(file, provider, label, suggested, note) {
-    if (!ownerUid) {
-      setError('未登入，無法儲存');
+    if (!ownerUid || !eventId) {
+      setError('未登入或未選活動，無法儲存');
       return;
     }
     if (!file) {
@@ -147,23 +152,26 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
     setError(null);
     const newId = `rp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100);
-    const path = `red-packets/${ownerUid}/${newId}/${safeName}`;
+    const path = `red-packets/${ownerUid}/${eventId}/${newId}/${safeName}`;
 
     try {
-      // 2026-07-25 — debug: trace the upload
-      console.log('[redPackets] uploading:', { ownerUid, newId, path, fileType: file.type, fileSize: file.size });
+      console.log('[redPackets] uploading:', { ownerUid, eventId, newId, path, fileType: file.type, fileSize: file.size });
       // Upload image first; only write Firestore doc if upload succeeds.
       const sRef = storageRef(storage, path);
       await uploadBytes(sRef, file, { contentType: file.type });
       const url = await getDownloadURL(sRef);
       console.log('[redPackets] storage upload OK, url:', url);
 
+      // 2026-07-27 — event-scoped doc path. eventId is required by
+      // the firestore rule and must equal the parent eventId.
       const docRef = doc(
         db,
         'artifacts',
         appId,
         'users',
         ownerUid,
+        'events',
+        eventId,
         'redPackets',
         newId,
       );
@@ -176,18 +184,17 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
         note: note?.trim() || '',
         sortOrder: (items?.length || 0) + 1,
         createdAt: serverTimestamp(),
+        eventId,
       });
       console.log('[redPackets] Firestore doc created:', newId);
 
       showToast?.('✅ 電子人情 QR Code 已上載');
     } catch (e) {
-      // 2026-07-25 — surface the actual error code so we
-      // can tell whether it's a storage-rules rejection
-      // (403) vs a Firestore-rules rejection vs network.
       console.error('[redPackets] upload FAILED:', {
         code: e?.code,
         message: e?.message,
         ownerUid,
+        eventId,
         newId,
       });
       setError('上載失敗：' + (e.message || '請稍後再試'));
@@ -195,7 +202,7 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
   }
 
   async function handleEdit(id, patch) {
-    if (!ownerUid || !id) return;
+    if (!ownerUid || !eventId || !id) return;
     setError(null);
     try {
       const docRef = doc(
@@ -204,6 +211,8 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
         appId,
         'users',
         ownerUid,
+        'events',
+        eventId,
         'redPackets',
         id,
       );
@@ -230,9 +239,22 @@ export function RedPacketManager({ ownerUid, onClose, showToast }) {
           console.warn('qrPath delete failed (continuing):', e);
         }
       }
-      await deleteDoc(
-        doc(db, 'artifacts', appId, 'users', ownerUid, 'redPackets', item.id),
+      // 2026-07-27 — event-scoped delete path. Falls back to the
+      // owner-scoped path for legacy docs created before this refactor
+      // (cs.kupid's test doc from 2026-07-24). The legacy fallback
+      // fails silently if the doc is gone — both paths are best-effort.
+      const eventDocRef = doc(
+        db,
+        'artifacts',
+        appId,
+        'users',
+        ownerUid,
+        'events',
+        eventId,
+        'redPackets',
+        item.id,
       );
+      await deleteDoc(eventDocRef);
       showToast?.('🗑 已刪除');
     } catch (e) {
       console.error('red-packet delete failed:', e);
