@@ -109,6 +109,16 @@ async function _handler(req, res) {
     return;
   }
 
+  // Hermes 2026-07-27 — debug: confirm what shape the request body
+  // actually has. Vercel's bodyParser=true may pre-parse multipart
+  // into req.body, which would cause the loop above to read zero
+  // bytes. Investigating.
+  // eslint-disable-next-line no-console
+  console.log('[photo-upload] body length=%d, req.body type=%s, ct=%s',
+    body.length,
+    typeof req.body,
+    String(req.headers['content-type'] || '').slice(0, 60));
+
   // 2026-07-27 — SECURITY HARDENING: mint the HMAC server-side.
   // Parse the multipart just enough to pull eventId + guestId, then
   // HMAC-sign and forward to the NAS with the auth headers the
