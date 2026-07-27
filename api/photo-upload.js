@@ -109,20 +109,13 @@ async function _handler(req, res) {
     return;
   }
 
-  // Hermes 2026-07-27 — debug: confirm what shape the request body
-  // actually has. Vercel's bodyParser=true may pre-parse multipart
-  // into req.body, which would cause the loop above to read zero
-  // bytes. Investigating.
-  // eslint-disable-next-line no-console
-  console.log('[photo-upload] body length=%d, req.body type=%s, ct=%s',
-    body.length,
-    typeof req.body,
-    String(req.headers['content-type'] || '').slice(0, 60));
-
   // 2026-07-27 — SECURITY HARDENING: mint the HMAC server-side.
-  // Parse the multipart just enough to pull eventId + guestId, then
-  // HMAC-sign and forward to the NAS with the auth headers the
-  // receiver now requires. The client never sees the secret.
+  // We need eventId + guestId from the multipart to compute the
+  // token, but we DO NOT strip them from the upstream body — the
+  // NAS receiver reads them out of `fields` (see
+  // photo_upload_server.py:232-235) and rejects with 400 if
+  // missing. So: extract for the HMAC, but forward the original
+  // multipart unchanged.
   //
   // (1) Fail closed if the server-side secret is missing.
   if (!NAS_HMAC_SECRET) {
@@ -134,19 +127,15 @@ async function _handler(req, res) {
     });
     return;
   }
-  // Pull the multipart Content-Type from the request so we can
-  // extract the boundary for parsing. The receiver needs the
-  // original boundary for its own multipart parser.
+  // (2) Pull eventId + guestId from the multipart just for HMAC
+  // signing. The body itself is forwarded unchanged.
   const contentType = String(req.headers['content-type'] || '');
-  // (2) Pull eventId + guestId from the multipart body, then strip
-  // them so the upstream forward doesn't carry them twice (once
-  // as a multipart field, once as the bound headers).
   const parsed = parseMultipartForIds(body, contentType);
   if (!parsed.ok) {
     res.status(400).json({ error: parsed.error });
     return;
   }
-  const { eventId, guestId, bodyWithoutIds } = parsed;
+  const { eventId, guestId } = parsed;
   // (3) Validate id shape so we don't sign for arbitrary strings.
   if (!SAFE_ID.test(eventId) || !SAFE_ID.test(guestId)) {
     res.status(400).json({ error: 'bad eventId/guestId' });
@@ -156,12 +145,10 @@ async function _handler(req, res) {
   // (4) Mint the token using the same algorithm the receiver verifies.
   // hex(HMAC-SHA256(secret, `${eventId}|${guestId}|${expiresMs}`)).
   const token = await mintHmacToken(NAS_HMAC_SECRET, eventId, guestId, expiresMs);
-  // (5) Recompute the boundary because we rewrote the multipart.
-  const upstreamContentType = rebuildMultipartContentType(contentType, bodyWithoutIds);
 
   // eslint-disable-next-line no-console
   console.log('[photo-upload] forwarding', {
-    bytes: bodyWithoutIds.length,
+    bytes: body.length,
     tokenLen: token.length,
     expiresMs,
     eventId: eventId.slice(0, 8),
@@ -174,11 +161,11 @@ async function _handler(req, res) {
     upstream = await fetch(NAS_UPLOAD_URL, {
       method: 'POST',
       headers: {
-        'Content-Type': upstreamContentType,
+        'Content-Type': contentType,
         'X-Upload-Token': token,
         'X-Upload-Expires': String(expiresMs),
       },
-      body: bodyWithoutIds,
+      body,  // forward the original multipart unchanged
     });
   } catch (err) {
     // eslint-disable-next-line no-console
