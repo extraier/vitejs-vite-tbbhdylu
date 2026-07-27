@@ -933,6 +933,18 @@ match /{path=**}/events/{eventId} {
       // and the vendor's slug. Vendors read their own inbound
       // inquiries; admin reads everything for moderation.
       //
+      // 2026-07-27 — auditing root-level /vendorInquiries rule
+      // block. Confirmed dead code: every client write goes through
+      // /artifacts/{appId}/vendorInquiries/{id} which matches the
+      // more-specific block at line 751. No Cloud Function writes
+      // to /vendorInquiries. Either Firestore's rule resolution
+      // picks line 751 for our actual writes, OR nothing writes
+      // to this path. Either way, this block has been inert since
+      // the inquiry flow was migrated to /artifacts on 2026-07-20
+      // (see line 744-750). Keeping it verbatim is harmless but
+      // misleading (prior audit flagged a "fromContact spoofing"
+      // bug here that doesn't exist in any live write path).
+      //
       // Writes are restricted to signed-in users, and fromUid must
       // match the caller's auth.uid to prevent spoofing. The
       // submitted vendorSlug must equal the caller's target
