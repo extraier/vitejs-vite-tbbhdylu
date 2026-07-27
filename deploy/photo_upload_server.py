@@ -50,15 +50,43 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 # /home/openclaw/.config/photo-upload/server_secret on the NAS itself
 # (NOT in the public client bundle). The Vercel /api/photo-upload
 # proxy mints X-Upload-Token headers on the user's behalf; this
-# server validates them. PHOTO_HMAC_SECRET (or fall back to the
-# legacy PHOTO_UPLOAD_SECRET / NAS_UPLOAD_SECRET env names) holds the
-# same value. Empty/None means the server refuses all uploads.
-PHOTO_HMAC_SECRET = (
-    os.environ.get("PHOTO_HMAC_SECRET")
-    or os.environ.get("PHOTO_UPLOAD_SECRET")
-    or os.environ.get("NAS_UPLOAD_SECRET")
-    or ""
-)
+# server validates them.
+#
+# Secret source priority (first non-empty wins):
+#   1. PHOTO_HMAC_SECRET (legacy systemd EnvironmentFile=)
+#   2. PHOTO_UPLOAD_SECRET / NAS_UPLOAD_SECRET (legacy aliases)
+#   3. /home/openclaw/.config/photo-upload/server_secret — read
+#      directly from disk so the watchdog's nohup invocation
+#      doesn't need EnvironmentFile plumbing. This is the path
+#      we hit in prod since the watchdog only exports PATH
+#      and a handful of unrelated vars.
+#   4. Empty string → fail closed (every upload returns 401
+#      with reason "auth not configured").
+def _load_hmac_secret():
+    env = (
+        os.environ.get("PHOTO_HMAC_SECRET")
+        or os.environ.get("PHOTO_UPLOAD_SECRET")
+        or os.environ.get("NAS_UPLOAD_SECRET")
+    )
+    if env:
+        return env
+    # File-path override — read once at startup. The file is
+    # readable only by openclaw (mode 600), so this matches the
+    # process's actual permission scope.
+    secret_path = Path(
+        os.environ.get(
+            "PHOTO_HMAC_SECRET_FILE",
+            "/home/openclaw/.config/photo-upload/server_secret",
+        )
+    )
+    if secret_path.exists() and secret_path.is_file():
+        try:
+            return secret_path.read_text().strip()
+        except (PermissionError, OSError) as exc:
+            log(f"could not read {secret_path}: {exc}")
+    return ""
+
+PHOTO_HMAC_SECRET = _load_hmac_secret()
 TOKEN_TTL_MS = int(os.environ.get("PHOTO_TOKEN_TTL_MS", str(5 * 60 * 1000)))  # 5 min default
 
 # Allow unit-testing the parser on a dev machine where /volume1 may not exist.
