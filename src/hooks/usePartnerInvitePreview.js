@@ -114,6 +114,14 @@ export function usePartnerInvitePreview() {
     // with the sessionStorage/localStorage split (this hook wrote
     // localStorage; App.jsx read sessionStorage), the redeem silently
     // never fired. Bug seen 2026-07-26 on savetheday-2377a.
+    //
+    // The sessionStorage value is the RAW token (not a JSON envelope):
+    // App.jsx reads it and passes the value directly to redeem({ token }),
+    // so a JSON envelope would be sent as the token and fail signature
+    // verification server-side. localStorage keeps the JSON envelope
+    // (readStashedToken() unwraps it) because that store is only used by
+    // the hook itself on the same tab. The two stores hold different
+    // shapes by design; do not converge them.
     stashToken(token);
     try {
       sessionStorage.setItem('pendingPartnerToken', token);
