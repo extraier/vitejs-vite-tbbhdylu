@@ -934,67 +934,12 @@ match /{path=**}/events/{eventId} {
         allow create, update, delete: if false;
       }
 
-      // 2026-07-20 — vendor portfolio image view analytics.
-      // Couples open the vendor lightbox to see full-resolution
-      // portfolio images; we log one row per lightbox open so the
-      // vendor + admin can see which images get the most attention.
-      //
-      // Read access:
-      //   - Admin sees all rows (for moderation + cross-vendor insights)
-      //   - Vendor reads only their own rows (where vendorSlug matches
-      //     their own vendorUid doc ID). This lets vendors see "which
-      //     of my portfolio images is performing best" without seeing
-      //     other vendors' analytics.
-      //
-      // Writes from any signed-in user (couples, vendors previewing,
-      // admins). Updates/deletes are denied — analytics are
-      // append-only.
-      match /vendorImageViews/{viewId} {
-        // 2026-07-20 — visibility widened from admin/own-vendor to
-        // all signed-in users. Couples need to read this
-        // collection for the 商戶指南 popularity sort (count
-        // views by vendorSlug). Each row only exposes
-        // vendorSlug + count — no PII (image URL is fine, but
-        // viewerUid is sensitive so we still gate write-side
-        // checks). If we ever need to gate by relationship, do it
-        // client-side; for now any signed-in user can see the
-        // aggregate.
-        //
-        // 2026-07-27 — Bug #10 from the prior audit. The prior
-        // rule read:
-        //   allow read: if isAdmin()
-        //     || (isSignedIn() && resource.data.vendorSlug == request.auth.uid)
-        //     || isSignedIn();   // <-- BAD: leaks viewerUid PII
-        //                              to every signed-in user.
-        // The trailing `|| isSignedIn()` is the offending clause:
-        // it lets anyone read any analytics row, including the
-        // viewerUid field (which is technically a non-admin way
-        // to enumerate the platform's user base).
-        //
-        // DiscoverDirectory.jsx:171-173 confirms client-side usage
-        // does NOT depend on a broad read — it pulls popularity
-        // counts from /aggregatedViews (server-derived,
-        // aggregator-populated), not from /vendorImageViews. The
-        // /vendorImageViews reads happen only in:
-        //   - /vendor/{uid}/* (VendorPortfolioAnalytics.jsx, line
-        //     70+ queries with where('vendorSlug', '==', uid))
-        //   - Admin tools (VendorDashboard.jsx, line 269+;
-        //     DiscoverDirectory never queries it client-side)
-        // Both query paths read via the `vendorSlug` filter, so
-        // the per-row rule below is sufficient.
-        allow read: if isAdmin()
-          || (isSignedIn() && resource.data.vendorSlug == request.auth.uid);
-        allow create: if isSignedIn()
-          && request.resource.data.keys().hasAll(['vendorSlug', 'imageIndex', 'imageUrl', 'viewerUid', 'createdAt'])
-          && request.resource.data.vendorSlug is string
-          && request.resource.data.imageIndex is int
-          && request.resource.data.imageUrl is string
-          && request.resource.data.viewerUid is string
-          && request.resource.data.createdAt is timestamp
-          && request.resource.data.viewerUid == request.auth.uid;
-        allow update, delete: if false;
-      }
-
+      // 2026-07-28 — DELETED. The /vendors/{vendorUid}/vendorImageViews/{viewId}
+      // rule block was unreachable in production: the client writes to
+      // TOP-LEVEL /vendorImageViews/{viewId} via collection(db, "vendorImageViews")
+      // (PortfolioLightbox.jsx:84, VendorModal.jsx:341), so this nested rule
+      // matched nothing. The live top-level rule (after the /proposals
+      // mirror) is the only one that applies. The dead block was 60 lines.
       // 2026-07-20 — vendor direct inquiries. Couples hit the
       // "聯絡商戶" CTA inside VendorModal when the vendor is
       // onboarded (signupStatus === 'claimed'). One inquiry doc
