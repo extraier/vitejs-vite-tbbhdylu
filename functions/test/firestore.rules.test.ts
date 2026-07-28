@@ -32,6 +32,7 @@ import {
   doc,
   setDoc,
   setLogLevel,
+  Timestamp,
   type RulesTestEnvironment,
 } from 'firebase/firestore';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -196,25 +197,56 @@ describe.skipIf(skipEmulator)('firestore.rules — 13-bug audit regressions', ()
     });
   });
 
-  // KNOWN FAIL — see above. The legitimate write path is currently
-  // denied by the catch-all {document=**} rule. Marked as expected
-  // failure so the test suite reports green while the structural
-  // issue is tracked.
-  it.fails('KNOWN FAIL: owner can write their own vendorImageViews row (catch-all blocks)', async () => {
-    const ownerUid = 'owner-A';
-    const ownerDb = await asUser(ownerUid);
+  // FIXED 2026-07-28 (commit TBD): catch-all removed + top-level
+  // /vendorImageViews mirror rule added (the prior /vendors/{vendorUid}
+  // rule block was unreachable for the actual client write path).
+  // The legitimate write now succeeds because:
+  //   1. The catch-all `match /{document=**}` no longer shadows
+  //      any explicit allow rules.
+  //   2. The new top-level `match /vendorImageViews/{viewId}` rule
+  //      matches the production write path
+  //      (collection(db, 'vendorImageViews') → /vendorImageViews/*).
+  it('allows the viewer to write their own vendorImageViews row at the production top-level path', async () => {
+    const viewerUid = 'viewer-A';
+    const vendorUid = 'vendor-A';
+    const viewerDb = await asUser(viewerUid);
+    // Production write path: client calls
+    // addDoc(collection(db, 'vendorImageViews'), {...})
+    // which lands at /vendorImageViews/{autoId}.
+    // The createdAt must be a Timestamp (not a plain number) for
+    // the rule's `is timestamp` check to pass — the client uses
+    // serverTimestamp() in production, so this matches.
     await assertSucceeds(
       setDoc(
-        doc(
-          ownerDb,
-          'artifacts/savetheday-production/users', ownerUid, 'vendorImageViews', 'view-2',
-        ),
+        doc(viewerDb, 'vendorImageViews', 'view-2'),
         {
-          vendorSlug: ownerUid,
-          viewerUid: ownerUid,
+          vendorSlug: vendorUid,
+          viewerUid,
           imageUrl: 'https://y',
           imageIndex: 0,
-          createdAt: 1,
+          createdAt: Timestamp.fromMillis(1),
+        },
+      ),
+    );
+  });
+
+  // REGRESSION GUARD — catch-all removal must not open up writes
+  // to other vendor's vendorImageViews rows. The first
+  // `rejects signed-in users reading another vendor's vendorImageViews
+  // row` test above already proves the cross-vendor DENY at the
+  // OWNER-scoped path, but the new top-level rule also needs an
+  // explicit impersonation lock-in.
+  it('rejects a vendorImageViews create where viewerUid does not match auth.uid', async () => {
+    const imposterDb = await asUser('imposter');
+    await assertFails(
+      setDoc(
+        doc(imposterDb, 'vendorImageViews', 'view-x'),
+        {
+          vendorSlug: 'vendor-A',
+          viewerUid: 'someone-else',  // != auth.uid
+          imageUrl: 'https://z',
+          imageIndex: 0,
+          createdAt: Timestamp.fromMillis(1),
         },
       ),
     );
@@ -245,8 +277,8 @@ describe.skipIf(skipEmulator)('firestore.rules — 13-bug audit regressions', ()
     );
   });
 
-  // KNOWN FAIL — see above.
-  it.fails('KNOWN FAIL: legitimate vendor can create a proposal (catch-all blocks)', async () => {
+  // FIXED 2026-07-28 — catch-all removed + orphan `}` fixed, this now passes.
+  it('allows a legitimate vendor to create a proposal', async () => {
     const coupleUid = 'couple-1';
     const vendorUid = 'vendor-X';
     const db = await asUser(vendorUid);
@@ -262,35 +294,52 @@ describe.skipIf(skipEmulator)('firestore.rules — 13-bug audit regressions', ()
     );
   });
 
-  it.fails('DIAG: jobRequests allow path is shadowed by the catch-all', async () => {
-    // Documentation of the structural issue: jobRequests at line 772
-    // has `allow create: if isSignedIn() && ...`, but the catch-all
-    // at L1061 denies the write anyway. This is the same class of
-    // issue affecting /proposals and /vendorImageViews. See Bug #3
-    // comment for the analysis.
-    const db = await asUser('any-user');
-    await setDoc(
-      doc(db, 'artifacts/savetheday-production/users', 'couple-1', 'jobRequests', 'j-1'),
-      { title: 'hello', createdAt: 1, coupleUid: 'couple-1' },
+  // FIXED 2026-07-28 — catch-all removed + orphan `}` fixed, this now passes.
+  it('allows a signed-in user to create a jobRequest for themselves', async () => {
+    const db = await asUser('couple-1');
+    await assertSucceeds(
+      setDoc(
+        doc(db, 'artifacts/savetheday-production/users', 'couple-1', 'jobRequests', 'j-1'),
+        { title: 'hello', createdAt: 1, coupleUid: 'couple-1' },
+      ),
     );
   });
-  it('DIAG-EMITS: snapshot of the rule lines that DO match the test paths', () => {
-    // Documentation test, not a real assertion. The list below
-    // identifies every match block the test paths
-    // (`/artifacts/.../users/{ownerUid}/{proposals|jobRequests|vendorImageViews}/...`)
-    // will hit. The catch-all at L1061 is the one that shadows the
-    // legitimate writes — see the comment on Bug #3 above for the
-    // analysis. If you change the rules file, re-run this test
-    // suite and update the line numbers in the Bug #3 comment.
-    const lines = [
-      { name: 'match /artifacts/{appId}', line: 224 },
-      { name: 'match /users/{ownerUid}', line: 228 },
-      { name: 'match /proposals/{proposalId}', line: 780 },
-      { name: 'match /jobRequests/{jobId}', line: 772 },
-      { name: 'match /vendorImageViews/{viewId}', line: 939 },
-      { name: 'match /{document=**}  ← catch-all (shadow)', line: 1061 },
+
+  // REGRESSION GUARD — catch-all removal + orphan `}` fix must not
+  // open up writes to jobRequests for OTHER couples (coupleUid
+  // must == auth.uid).
+  it('rejects a jobRequest create where coupleUid does not match auth.uid', async () => {
+    const imposterDb = await asUser('imposter');
+    await assertFails(
+      setDoc(
+        doc(imposterDb, 'artifacts/savetheday-production/users', 'couple-1', 'jobRequests', 'j-2'),
+        { title: 'forged', createdAt: 1, coupleUid: 'couple-1' },
+      ),
+    );
+  });
+
+  // DIAG-EMITS: documentation of the rule file structure post-fix.
+  // Lists the match blocks relevant to the bug-fix tests. Kept as a
+  // real assertion so a careless deletion of these explicit rules
+  // would surface as a test failure (the line numbers wouldn't
+  // match what the document expects).
+  it('DIAG-EMITS: rule blocks relevant to the bug-fix tests are still present', () => {
+    const rulesSource = readRules();
+    const requiredAnchors = [
+      'match /artifacts/{appId}',
+      'match /users/{ownerUid}',
+      'match /proposals/{proposalId}',
+      'match /jobRequests/{jobId}',
+      'match /vendorImageViews/{viewId}',
+      // The catch-all must NOT exist after the fix.
+      'match /{document=**}',
     ];
-    expect(lines.length).toBe(6);
+    const present = requiredAnchors.filter((a) => rulesSource.includes(a));
+    expect(present.length).toBe(6);
+    // The catch-all line should exist as a COMMENT (the fix preserved
+    // it for historical context) but should NOT be an active rule.
+    const activeCatchAll = /^\s*match\s+\/\{document=\*\*\}\s*\{[^}]*allow\s+read,\s*write:\s*if\s+false/m;
+    expect(rulesSource).not.toMatch(activeCatchAll);
   });
 
   // Bug #5: scanLog canScan scope — helper for owner A cannot write

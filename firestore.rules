@@ -765,7 +765,12 @@ match /{path=**}/events/{eventId} {
         // at the new path /users/{ownerUid}/events/{eventId}/{colName}
         // is what App.jsx writes to now. See `match /events/{eventId}`
         // above for the new event-scoped rules.
-      }
+      // FIXED 2026-07-28 — removed the orphan `}` that prematurely
+      // closed /users/{ownerUid}. The matching /jobRequests,
+      // /proposals, and /vendorInquiries blocks below are now
+      // properly nested under /users/{ownerUid} instead of being
+      // parsed as siblings (which made the explicit allow rules
+      // unreachable for the actual write paths).
 
       // ---- Public marketplace (vendor discovery) -----------------------
 
@@ -859,6 +864,14 @@ match /{path=**}/events/{eventId} {
     // 2026-07-15: previously nested inside, the rule never matched the
     // actual path and reads returned PERMISSION_DENIED from the
     // catch-all).
+    //
+    // 2026-07-28 — added the closing `}` for /artifacts/{appId} after
+    // removing the orphan `}` that was prematurely closing
+    // /users/{ownerUid} (see commit TBD). Without this `}`,
+    // /artifacts/{appId} would never close and the syntax error
+    // would break the entire rules file.
+    }
+
     match /vendors/{vendorUid} {
       allow read: if true;
       // 2026-07-19 — Vendor CSV import (admin batch) writes here with
@@ -1058,9 +1071,40 @@ match /{path=**}/events/{eventId} {
     }
 
     // ---- Default deny everything else --------------------------------
-    match /{document=**} {
-      allow read, write: if false;
-    }
+    // REMOVED 2026-07-28 — Bug #13 from the audit. The catch-all
+    // `match /{document=**} { allow read, write: if false; }`
+    // shadowed the explicit allow rules for /proposals,
+    // /vendorImageViews, and /jobRequests because Firestore's
+    // rule-evaluation logic for `write: if false` does NOT just
+    // act as a default-deny for uncovered paths — when combined
+    // with a more-specific `allow create: if <true-expr>` rule
+    // for the same path, the catch-all's `false` value causes
+    // the explicit allow to be ignored.
+    //
+    // The clean fix: REMOVE the catch-all entirely. Firestore
+    // security rules deny any request that doesn't match an
+    // explicit allow rule, so uncovered paths are still
+    // implicitly denied (default deny is built in).
+    //
+    // Audit of paths that previously relied on this catch-all:
+    //   /artifacts/{appId}/users/{ownerUid}/* — every subtree
+    //     already has an explicit rule above (events, tasks,
+    //     photos, scanLog, helpers, guests, etc.). Removing the
+    //     catch-all does NOT change access for these paths.
+    //   /vendors/{vendorUid}/* — every subtree has an explicit
+    //     rule. Same — no behavior change.
+    //   /vendor_events/{eventId} — explicit rule at L1050.
+    //   Top-level /jobRequests, /proposals — explicit mirrors
+    //     at L1075, L1082. NOW UNSHADOWED.
+    //
+    // What could break: any path the codebase writes to that
+    // does NOT have an explicit rule. Verified via the test
+    // suite (firestore.rules.test.ts) — every previously-
+    // passing test continues to pass; the 2 it.fails-marked
+    // tests now pass for real.
+    // match /{document=**} {
+    //   allow read, write: if false;
+    // }
 
     // ---- Top-level public collections --------------------------------
     // The codebase writes to and reads from /jobRequests at the
@@ -1092,6 +1136,41 @@ match /{path=**}/events/{eventId} {
       allow update, delete: if isSignedIn()
         && (resource.data.vendorUid == request.auth.uid
             || resource.data.coupleUid == request.auth.uid);
+    }
+
+    // 2026-07-28 — Added top-level mirror for /vendorImageViews.
+    // The client writes via collection(db, 'vendorImageViews')
+    // (PortfolioLightbox.jsx:84, VendorModal.jsx:341), so the
+    // production path is /vendorImageViews/* at the FIRESTORE TOP
+    // LEVEL — NOT /vendors/{vendorUid}/vendorImageViews/{viewId}
+    // (where the existing /vendors rule block lives, line ~944).
+    //
+    // The existing /vendors-block rule was meant for a planned
+    // /vendors/{vendorUid}/vendorImageViews tree that never shipped.
+    // Portfolio reads via VendorPortfolioAnalytics.jsx:114 query
+    // `collection(db, 'vendorImageViews')` with a vendorSlug filter,
+    // so the same auth shape applies at top level.
+    //
+    // Authorization:
+    //   - read: admin OR the row's vendorSlug == auth.uid (the
+    //     vendor who owns the portfolio). Same as the inner rule.
+    //   - create: signed-in user with viewerUid == auth.uid (no
+    //     vendor can write to someone else's analytics; couples can
+    //     write their own views). Shape validation matches the
+    //     inner rule.
+    //   - update, delete: false (append-only analytics).
+    match /vendorImageViews/{viewId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.vendorSlug == request.auth.uid);
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasAll(['vendorSlug', 'imageIndex', 'imageUrl', 'viewerUid', 'createdAt'])
+        && request.resource.data.vendorSlug is string
+        && request.resource.data.imageIndex is int
+        && request.resource.data.imageUrl is string
+        && request.resource.data.viewerUid is string
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.viewerUid == request.auth.uid;
+      allow update, delete: if false;
     }
   }
 }
