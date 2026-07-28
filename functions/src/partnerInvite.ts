@@ -172,6 +172,29 @@ interface SendPartnerInviteResult {
   error?: string;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Test surface — narrow re-exports of pure helpers. NOT consumed by
+// the deployed function bundle (Cloud Functions tree-shakes unused
+// exports); only the test suite imports these. Keeps the test
+// surface minimal — never re-export the onCall handlers, those need
+// a live Firebase Auth/Firestore emulator to instantiate.
+//
+// 2026-07-27 — Added so functions/test/partnerInvite.test.ts can
+// unit-test the HMAC sign/verify round-trip without dragging in
+// `firebase-functions-test` (which would require a Java JRE +
+// emulator-spawn in CI). The pure functions here are deterministic
+// over `process.env.HMAC_KEY` so the tests can stub it via vitest's
+// `vi.stubEnv()`.
+// ────────────────────────────────────────────────────────────────────────────
+/** @internal — exported for tests only */
+export const __test_signToken = signToken;
+/** @internal — exported for tests only */
+export const __test_verifyToken = verifyToken;
+/** @internal — exported for tests only */
+export const __test_getHmacKey = getHmacKey;
+/** @internal — exported for tests only */
+export const __test_INVITE_TTL_MS = INVITE_TTL_MS;
+
 export const sendPartnerInviteV2 = onCall(
   {
     cors: true,

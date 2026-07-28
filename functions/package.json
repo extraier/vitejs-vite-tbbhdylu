@@ -8,7 +8,9 @@
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "test": "vitest run --no-coverage",
+    "test:rules": "FIRESTORE_RULES_TEST=1 vitest run --no-coverage test/firestore.rules.test.ts"
   },
   "engines": {
     "node": "20"
@@ -21,9 +23,11 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
     "@types/node": "^20.11.0",
     "@types/qrcode": "^1.5.6",
-    "typescript": "~5.4.5"
+    "typescript": "~5.4.5",
+    "vitest": "^2.1.9"
   },
   "private": true
 }

@@ -16,6 +16,16 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
+    // The functions/ sub-project has its own vitest suite
+    // (run via `cd functions && npm test`). Exclude it from the
+    // top-level run so its test file imports (which use
+    // `import.meta.url` and `@firebase/rules-unit-testing` requiring
+    // a JRE) don't break the front-end build's test command.
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      'functions/test/**',
+    ],
   },
   define: {
     // Replace import.meta.env.* literals at build/transform time. Vitest treats
