@@ -23,7 +23,7 @@
  * 1. Owner clicks "邀請另一半" (Invite partner) → opens modal
  * 2. Owner enters partner's email → calls sendPartnerInviteV2
  * 3. sendPartnerInviteV2 creates a doc at:
- *      /users/{ownerUid}/pendingPartnerInvites/{inviteId}
+ *      /artifacts/{APP_ID}/users/{ownerUid}/pendingPartnerInvites/{inviteId}
  *    with { email, token, expiresAt, ownerName, eventId, eventName }
  * 4. sendPartnerInviteV2 sends an email with a magic link:
  *      ${APP_BASE_URL}/?t=${token}
@@ -31,8 +31,8 @@
  * 6. Front-end detects ?t= in URL → calls redeemPartnerInviteV2
  * 7. redeemPartnerInviteV2 verifies the token, adds the partner's
  *    uid to the event's coOwners array, AND creates
- *    /users/{ownerUid}/coOwners/{partnerUid} so the partner
- *    can access the non-eventId subcollections (helpers,
+ *    /artifacts/{APP_ID}/users/{ownerUid}/coOwners/{partnerUid} so
+ *    the partner can access the non-eventId subcollections (helpers,
  *    guestLinks, redPackets).
  *
  * The partner is NOT removed from their own events. After

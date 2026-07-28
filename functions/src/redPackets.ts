@@ -41,10 +41,10 @@ const ACCEPTED_PROVIDERS = new Set([
 /**
  * Returns true iff the given user is the event owner OR an active
  * coOwner of that owner. Reads two firestore paths:
- *   /users/{ownerUid}/events/{eventId}         — to confirm the event exists
- *                                               and the user is in coOwners[]
- *   /users/{ownerUid}/coOwners/{userUid}       — backup signal for the
- *                                               /coOwners/ collection
+ *   /artifacts/{appId}/users/{ownerUid}/events/{eventId}         — to confirm the event exists
+ *                                                                and the user is in coOwners[]
+ *   /artifacts/{appId}/users/{ownerUid}/coOwners/{userUid}       — backup signal for the
+ *                                                                /coOwners/ collection
  * Both checks are best-effort: either passing is sufficient.
  */
 async function isEventOwnerOrCoOwner(

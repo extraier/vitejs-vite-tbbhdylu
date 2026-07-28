@@ -84,7 +84,7 @@ const MAX_REVIEW_LEN = 500;
 // Returns true if the auth'd user is a couple (not a vendor, not admin,
 // not anonymous). We use the user collection's type field — couples
 // don't have a custom claim, but they have role === 'couple' on their
-// /users/{uid} doc.
+// /artifacts/{appId}/users/{uid} doc.
 async function isCouple(uid: string): Promise<boolean> {
   // The user doc is at /artifacts/{appId}/users/{uid} — the appId is
   // fixed for prod: savetheday-production. See firestore.rules.

@@ -13,7 +13,7 @@
  *
  * This module is the single source of truth for granting unlocks.
  * Both paths call grantUnlock() with appropriate `source` field.
- * Frontend reads /users/{uid}/unlocks/{unlockId} to gate UI.
+ * Frontend reads /artifacts/{appId}/users/{uid}/unlocks/{unlockId} to gate UI.
  *
  * 2026-07-21 — initial release.
  */
@@ -59,7 +59,8 @@ function unlockRef(uid: string, unlockId: string) {
 }
 
 /**
- * grantUnlock — the only function that writes to /users/{uid}/unlocks/.
+ * grantUnlock — the only function that writes to
+ * /artifacts/{appId}/users/{uid}/unlocks/.
  * Both social-proof path and payment path route through here.
  * Source field tracks which path granted the unlock.
  */

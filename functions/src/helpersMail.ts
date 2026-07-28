@@ -68,7 +68,7 @@ interface SendHelperInviteEmailInput {
   ownerUid: string;
   helperEmail: string;
   helperDisplayName: string;
-  ownerName?: string;      // optional override; otherwise fetched from /users/{ownerUid}
+  ownerName?: string;      // optional override; otherwise fetched from /artifacts/{appId}/users/{ownerUid}
   eventName?: string;      // optional — the wedding title
   role?: string;           // defaults to 'wedding helper'
 }
