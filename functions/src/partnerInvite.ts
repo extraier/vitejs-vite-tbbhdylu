@@ -58,6 +58,12 @@ import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import * as crypto from 'crypto';
 import { sendViaSendgrid } from './sendgridMailer';
+import {
+  getHmacKey as getHmacKeyFromString,
+  signToken as signTokenPure,
+  verifyToken as verifyTokenPure,
+  INVITE_TTL_MS,
+} from './hmac';
 
 const db = getFirestore();
 const auth = getAuth();
@@ -88,7 +94,8 @@ const _hmacKey = HMAC_KEY;
 // Magic-link token TTL: 7 days. Plenty for a partner to find
 // the email and click; short enough that abandoned invites
 // don't linger forever.
-const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Imported from hmac.ts so the unit tests can pin the invariant
+// without dragging in this module's firebase-admin imports.
 
 // ────────────────────────────────────────────────────────────────────────────
 // Token signing (server-side, so the client can't forge invites)
@@ -108,54 +115,18 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // is always fresh — no per-module caching (the prior `cachedKey`
 // memo would have prevented legitimate secret rotation).
 function getHmacKey(): string {
-  const secret = HMAC_KEY.value();
-  if (!secret) {
-    // We cannot throw at module load because in v2 the secret
-    // is resolved per-invocation. Throwing here surfaces as an
-    // HttpsError to the caller, with enough detail to debug.
-    throw new HttpsError(
-      'failed-precondition',
-      'HMAC_KEY secret is missing or empty; configure via ' +
-        '`firebase functions:secrets:set HMAC_KEY` ' +
-        'and add to onCall secrets[] array.',
-    );
-  }
-  return secret;
+  // Reads HMAC_KEY via the secrets runtime (populated by the
+  // `secrets: [HMAC_KEY]` array on each onCall). The pure version
+  // (getHmacKeyFromString in ./hmac) is the testable unit — this
+  // wrapper is the production binding. See ./hmac for the fail-
+  // closed semantics.
+  return getHmacKeyFromString(HMAC_KEY.value());
 }
 
-function signToken(payload: object): string {
-  const json = JSON.stringify(payload);
-  const b64 = Buffer.from(json, 'utf8').toString('base64url');
-  const sig = crypto
-    .createHmac('sha256', getHmacKey())
-    .update(b64)
-    .digest('base64url');
-  return `${b64}.${sig}`;
-}
-
-function verifyToken<T = any>(token: string): T {
-  const [b64, sig] = token.split('.');
-  if (!b64 || !sig) throw new HttpsError('invalid-argument', 'Malformed token.');
-  const expected = crypto
-    .createHmac('sha256', getHmacKey())
-    .update(b64)
-    .digest('base64url');
-  if (sig.length !== expected.length) {
-    throw new HttpsError('permission-denied', 'Bad signature.');
-  }
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
-    throw new HttpsError('permission-denied', 'Bad signature.');
-  }
-  try {
-    return JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
-  } catch {
-    throw new HttpsError('invalid-argument', 'Bad payload.');
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// sendPartnerInviteV2 — owner-only
-// ────────────────────────────────────────────────────────────────────────────
+// signToken / verifyToken are imported from ./hmac and called with
+// the loaded HMAC key as the second argument. Their signatures in
+// partnerInvite.ts take one arg (the payload or token); the key is
+// resolved via the wrapper above.
 
 export interface SendPartnerInviteInput {
   ownerUid: string;
@@ -173,27 +144,28 @@ interface SendPartnerInviteResult {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Test surface — narrow re-exports of pure helpers. NOT consumed by
-// the deployed function bundle (Cloud Functions tree-shakes unused
-// exports); only the test suite imports these. Keeps the test
-// surface minimal — never re-export the onCall handlers, those need
-// a live Firebase Auth/Firestore emulator to instantiate.
-//
-// 2026-07-27 — Added so functions/test/partnerInvite.test.ts can
-// unit-test the HMAC sign/verify round-trip without dragging in
-// `firebase-functions-test` (which would require a Java JRE +
-// emulator-spawn in CI). The pure functions here are deterministic
-// over `process.env.HMAC_KEY` so the tests can stub it via vitest's
-// `vi.stubEnv()`.
+// sendPartnerInviteV2 — owner-only
 // ────────────────────────────────────────────────────────────────────────────
-/** @internal — exported for tests only */
-export const __test_signToken = signToken;
-/** @internal — exported for tests only */
-export const __test_verifyToken = verifyToken;
-/** @internal — exported for tests only */
-export const __test_getHmacKey = getHmacKey;
-/** @internal — exported for tests only */
-export const __test_INVITE_TTL_MS = INVITE_TTL_MS;
+//
+// Local single-arg wrappers around signTokenPure / verifyTokenPure.
+// These bind the production HMAC key (resolved via getHmacKey on
+// each invocation — no module-level cache so secret rotation works)
+// so the call sites below can stay one-arg. The pure two-arg
+// versions in ./hmac are what the unit tests drive directly — see
+// functions/test/partnerInvite.test.ts.
+function signToken(payload: object): string {
+  return signTokenPure(payload, getHmacKey());
+}
+
+function verifyToken<T = any>(token: string): T {
+  return verifyTokenPure<T>(token, getHmacKey());
+}
+
+export interface SendPartnerInviteInput {
+  ownerUid: string;
+  partnerEmail: string;
+  eventId: string;
+}
 
 export const sendPartnerInviteV2 = onCall(
   {

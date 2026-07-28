@@ -5,7 +5,7 @@
  * + drop preview eventId leak" fixes:
  *
  *   1. `getHmacKey` throws HttpsError('failed-precondition') when
- *      `HMAC_KEY` is empty (no dev fallback — the prior
+ *      the HMAC key is empty (no dev fallback — the prior
  *      'dev-only-do-not-ship-savetheday-2377a' default was the
  *      critical security hole).
  *   2. `signToken` + `verifyToken` round-trip recovers the original
@@ -22,49 +22,30 @@
  *      the TTL check in redeemPartnerInviteV2 / previewPartnerInvite.
  *
  * The onCall wrappers (sendPartnerInviteV2, redeemPartnerInviteV2,
- * previewPartnerInvite, removePartnerV2, listPartnerInvites) are
- * NOT exercised here — they require a live Firebase Auth/Firestore
- * emulator. End-to-end coverage of those is the deployed Cloud
- * Function (verified via gcloud functions describe + live source-zip
- * grep; see skills `firebase-cf-v2-deploy-verify` and `karpathy-guidelines`
- * for the 4-probe verification recipe).
+ * previewPartnerInvite, removePartnerInviteV2, listPartnerInvites)
+ * are NOT exercised here — they require a live Firebase
+ * Auth/Firestore emulator. End-to-end coverage of those is the
+ * deployed Cloud Function (verified via gcloud functions describe
+ * + live source-zip grep; see skills `firebase-cf-v2-deploy-verify`
+ * for the verification recipe).
+ *
+ * 2026-07-28 — Refactored: imports come from `../src/hmac` (the
+ * pure module) instead of `../src/partnerInvite` (which pulls in
+ * firebase-admin/{app,firestore,auth}). The previous revision
+ * required `vi.mock()` for three firebase-admin modules just to
+ * instantiate the module. After splitting hmac.ts out, the test
+ * needs ZERO mocks — `getHmacKey(key)` is a pure function of its
+ * argument, `signToken(payload, key)` likewise, and `verifyToken`
+ * only needs `crypto` + `HttpsError` (the latter is just a class).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpsError } from 'firebase-functions/v2/https';
-
-// Mock firebase-admin/app so the module-level `initializeApp()` call
-// in partnerInvite.ts doesn't require real GCP credentials. The
-// partnerInvite HMAC helpers are pure functions of process.env
-// and the mocked app — neither path needs real Firebase.
-vi.mock('firebase-admin/app', () => ({
-  initializeApp: vi.fn(() => ({})),
-  getApps: vi.fn(() => [{ name: 'mock' }]),
-  getApp: vi.fn(() => ({})),
-}));
-
-// Mock firebase-admin/firestore + firebase-admin/auth — the import
-// path references `db = getFirestore()` and `auth = getAuth()` at
-// module load. Both return harmless placeholders because the
-// HMAC helpers don't touch them.
-vi.mock('firebase-admin/firestore', () => ({
-  getFirestore: vi.fn(() => ({
-    collection: vi.fn(),
-    doc: vi.fn(),
-  })),
-  FieldValue: { serverTimestamp: vi.fn() },
-  Timestamp: { fromMillis: (m: number) => ({ toMillis: () => m }) },
-}));
-
-vi.mock('firebase-admin/auth', () => ({
-  getAuth: vi.fn(() => ({})),
-}));
-
 import {
-  __test_getHmacKey,
-  __test_INVITE_TTL_MS,
-  __test_signToken,
-  __test_verifyToken,
-} from '../src/partnerInvite';
+  getHmacKey,
+  signToken,
+  verifyToken,
+  INVITE_TTL_MS,
+} from '../src/hmac';
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 const TEST_HMAC = 'unit-test-only-key-do-not-ship';
@@ -75,17 +56,14 @@ afterEach(() => {
 
 describe('partnerInvite HMAC primitives', () => {
   it('INVITE_TTL_MS is 7 days', () => {
-    expect(__test_INVITE_TTL_MS).toBe(SEVEN_DAYS_MS);
+    expect(INVITE_TTL_MS).toBe(SEVEN_DAYS_MS);
   });
 
   describe('getHmacKey fail-closed', () => {
-    it('throws failed-precondition when HMAC_KEY is empty', () => {
-      vi.stubEnv('HMAC_KEY', '');
-      // The function is an internal closure exported via __test_.
-      // We invoke it through the export.
-      expect(() => __test_getHmacKey()).toThrow(HttpsError);
+    it('throws failed-precondition when HMAC key is empty', () => {
+      expect(() => getHmacKey('')).toThrow(HttpsError);
       try {
-        __test_getHmacKey();
+        getHmacKey('');
       } catch (e) {
         const err = e as HttpsError;
         expect(err.code).toBe('failed-precondition');
@@ -93,14 +71,19 @@ describe('partnerInvite HMAC primitives', () => {
       }
     });
 
-    it('throws failed-precondition when HMAC_KEY is undefined', () => {
-      vi.stubEnv('HMAC_KEY', undefined as unknown as string);
-      expect(() => __test_getHmacKey()).toThrow(HttpsError);
+    it('throws failed-precondition when HMAC key is undefined', () => {
+      expect(() => getHmacKey(undefined)).toThrow(HttpsError);
     });
 
-    it('returns the secret when HMAC_KEY is set', () => {
-      vi.stubEnv('HMAC_KEY', TEST_HMAC);
-      expect(__test_getHmacKey()).toBe(TEST_HMAC);
+    it('returns the trimmed key when set to a non-empty value', () => {
+      expect(getHmacKey(TEST_HMAC)).toBe(TEST_HMAC);
+    });
+
+    it('trims a leading/trailing newline (Secret Manager trailing-\\n mitigation)', () => {
+      // Secret Manager values arrive with a trailing newline; see
+      // firebase-cf-v2-deploy-verify/references/secret-manager-trailing-newline-2026-07-27.md
+      expect(getHmacKey(TEST_HMAC + '\n')).toBe(TEST_HMAC);
+      expect(getHmacKey('\n' + TEST_HMAC)).toBe(TEST_HMAC);
     });
   });
 
@@ -116,13 +99,13 @@ describe('partnerInvite HMAC primitives', () => {
         partnerEmail: 'partner@example.com',
         iat: 1234567890,
       };
-      const token = __test_signToken(payload);
-      const recovered = __test_verifyToken<typeof payload>(token);
+      const token = signToken(payload, TEST_HMAC);
+      const recovered = verifyToken<typeof payload>(token, TEST_HMAC);
       expect(recovered).toEqual(payload);
     });
 
     it('emits a token with the b64.sig shape', () => {
-      const token = __test_signToken({ iat: 1 });
+      const token = signToken({ iat: 1 }, TEST_HMAC);
       expect(token).toContain('.');
       const [b64, sig] = token.split('.');
       expect(b64).toMatch(/^[A-Za-z0-9_-]+$/); // base64url
@@ -138,12 +121,12 @@ describe('partnerInvite HMAC primitives', () => {
     });
 
     it('rejects a token whose payload b64 was tampered with', () => {
-      const token = __test_signToken({
+      const token = signToken({
         ownerUid: 'owner-A',
         eventId: 'E1',
         partnerEmail: 'partner@example.com',
         iat: 100,
-      });
+      }, TEST_HMAC);
       const [b64, sig] = token.split('.');
       // Decode the b64, swap the email, re-encode WITHOUT re-signing.
       const decoded = JSON.parse(
@@ -156,7 +139,7 @@ describe('partnerInvite HMAC primitives', () => {
       ).toString('base64url');
       const tamperedToken = `${tamperedB64}.${sig}`;
       try {
-        __test_verifyToken(tamperedToken);
+        verifyToken(tamperedToken, TEST_HMAC);
         throw new Error('expected verifyToken to throw');
       } catch (e) {
         expect(e).toBeInstanceOf(HttpsError);
@@ -166,13 +149,13 @@ describe('partnerInvite HMAC primitives', () => {
     });
 
     it('rejects a token whose signature was tampered with', () => {
-      const token = __test_signToken({ iat: 100 });
+      const token = signToken({ iat: 100 }, TEST_HMAC);
       const [b64, sig] = token.split('.');
       // Flip the last char of the sig to make it invalid base64url.
       const tamperedSig = sig.slice(0, -1) + (sig.endsWith('A') ? 'B' : 'A');
       const tamperedToken = `${b64}.${tamperedSig}`;
       try {
-        __test_verifyToken(tamperedToken);
+        verifyToken(tamperedToken, TEST_HMAC);
         throw new Error('expected verifyToken to throw');
       } catch (e) {
         expect((e as HttpsError).code).toBe('permission-denied');
@@ -181,12 +164,11 @@ describe('partnerInvite HMAC primitives', () => {
     });
 
     it('rejects a token signed with a different key', () => {
-      const token = __test_signToken({ iat: 100 });
+      const token = signToken({ iat: 100 }, TEST_HMAC);
       // Rotate the key — the same payload should no longer verify.
-      vi.stubEnv('HMAC_KEY', 'a-different-key');
-      expect(() => __test_verifyToken(token)).toThrow(HttpsError);
+      expect(() => verifyToken(token, 'a-different-key')).toThrow(HttpsError);
       try {
-        __test_verifyToken(token);
+        verifyToken(token, 'a-different-key');
       } catch (e) {
         expect((e as HttpsError).code).toBe('permission-denied');
       }
@@ -200,7 +182,7 @@ describe('partnerInvite HMAC primitives', () => {
 
     it('rejects a token with no dot separator', () => {
       try {
-        __test_verifyToken('not-a-token');
+        verifyToken('not-a-token', TEST_HMAC);
         throw new Error('expected throw');
       } catch (e) {
         expect((e as HttpsError).code).toBe('invalid-argument');
@@ -210,7 +192,7 @@ describe('partnerInvite HMAC primitives', () => {
 
     it('rejects an empty string', () => {
       try {
-        __test_verifyToken('');
+        verifyToken('', TEST_HMAC);
         throw new Error('expected throw');
       } catch (e) {
         expect((e as HttpsError).code).toBe('invalid-argument');
@@ -220,23 +202,16 @@ describe('partnerInvite HMAC primitives', () => {
     it('rejects a token whose b64 decodes to invalid JSON', () => {
       // The only path to "Bad payload" is: signature shape matches but
       // the b64 is structurally valid base64url that decodes to text
-      // which is NOT valid JSON. The way to hit it: sign a known
-      // payload, swap in a non-JSON b64 of the SAME length (so the
-      // length-check at line 143 passes), and re-derive the signature
-      // against the new b64.
-      //
-      // Simpler approach: forge a token where the b64 is base64url of
-      // a non-JSON string and the signature matches. We can't get
-      // verifyToken to sign for us without recursive call, so use
-      // crypto directly. (The unit-under-test is "verifyToken's
-      // length-mismatch + JSON.parse paths"; the signing path is
-      // covered by the round-trip test above.)
+      // which is NOT valid JSON. The way to hit it: forge a token
+      // where the b64 is base64url of a non-JSON string and the
+      // signature matches. We use crypto directly here since the
+      // signing path is covered by the round-trip test above.
       const { createHmac } = require('node:crypto') as typeof import('node:crypto');
       const nonJsonB64 = Buffer.from('definitely not json', 'utf8').toString('base64url');
       const sig = createHmac('sha256', TEST_HMAC).update(nonJsonB64).digest('base64url');
       const forgedToken = `${nonJsonB64}.${sig}`;
       try {
-        __test_verifyToken(forgedToken);
+        verifyToken(forgedToken, TEST_HMAC);
         throw new Error('expected throw');
       } catch (e) {
         expect((e as HttpsError).code).toBe('invalid-argument');
