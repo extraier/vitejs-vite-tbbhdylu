@@ -31,6 +31,7 @@ import { fileURLToPath } from 'node:url';
 import {
   doc,
   setDoc,
+  getDoc,
   setLogLevel,
   Timestamp,
   type RulesTestEnvironment,
@@ -418,6 +419,83 @@ describe.skipIf(skipEmulator)('firestore.rules — 13-bug audit regressions', ()
         { title: 'plant a tree', createdAt: 1 },
       ),
     );
+  });
+});
+
+describe('firestore.rules — vendorInquiries (chat.js path)', () => {
+  // lib/chat.js writes to:
+  //   artifacts/{appId}/vendorInquiries/{inquiryId}
+  //   artifacts/{appId}/vendorInquiries/{inquiryId}/messages/{messageId}
+  // This block pins the auth shape: only the two named parties can
+  // read/write; messages additionally require the sender to be one of
+  // the parties (cannot spoof a message from a non-member).
+  const inquiry = {
+    vendorUid: 'vendor-V', coupleUid: 'couple-C',
+    vendorName: 'V', coupleName: 'C', eventId: 'e1',
+    createdAt: Timestamp.fromMillis(1),
+    lastMessageAt: Timestamp.fromMillis(1),
+    lastMessagePreview: '',
+    coupleUnread: 0, vendorUnread: 0,
+  };
+  const inquiryPath = 'artifacts/savetheday-production/vendorInquiries';
+
+  it('vendor can open their own inquiry (auth.uid == vendorUid)', async () => {
+    const db = await asUser('vendor-V');
+    await assertSucceeds(
+      setDoc(doc(db, inquiryPath, 'v__c'), inquiry),
+    );
+  });
+
+  it('couple can open their own inquiry (auth.uid == coupleUid)', async () => {
+    const db = await asUser('couple-C');
+    await assertSucceeds(
+      setDoc(doc(db, inquiryPath, 'v__c'), inquiry),
+    );
+  });
+
+  it('imposter is rejected opening inquiry', async () => {
+    const db = await asUser('imposter-I');
+    await assertFails(
+      setDoc(doc(db, inquiryPath, 'v__c'), inquiry),
+    );
+  });
+
+  it('party can write a message in their own inquiry', async () => {
+    const seedDb = await asUser('vendor-V');
+    await setDoc(doc(seedDb, inquiryPath, 'v__c'), inquiry);
+    const db = await asUser('vendor-V');
+    await assertSucceeds(
+      setDoc(doc(db, `${inquiryPath}/v__c/messages`, 'm1'), {
+        senderUid: 'vendor-V', senderRole: 'vendor',
+        text: 'hi', createdAt: Timestamp.fromMillis(2),
+      }),
+    );
+  });
+
+  it('non-party is rejected writing a message (cannot spoof sender)', async () => {
+    const seedDb = await asUser('vendor-V');
+    await setDoc(doc(seedDb, inquiryPath, 'v__c'), inquiry);
+    const db = await asUser('imposter-I');
+    await assertFails(
+      setDoc(doc(db, `${inquiryPath}/v__c/messages`, 'm1'), {
+        senderUid: 'imposter-I', senderRole: 'vendor',
+        text: 'hi', createdAt: Timestamp.fromMillis(2),
+      }),
+    );
+  });
+
+  it('party can read the inquiry', async () => {
+    const seedDb = await asUser('vendor-V');
+    await setDoc(doc(seedDb, inquiryPath, 'v__c'), inquiry);
+    const db = await asUser('couple-C');
+    await assertSucceeds(getDoc(doc(db, inquiryPath, 'v__c')));
+  });
+
+  it('non-party is rejected reading the inquiry', async () => {
+    const seedDb = await asUser('vendor-V');
+    await setDoc(doc(seedDb, inquiryPath, 'v__c'), inquiry);
+    const db = await asUser('imposter-I');
+    await assertFails(getDoc(doc(db, inquiryPath, 'v__c')));
   });
 });
 

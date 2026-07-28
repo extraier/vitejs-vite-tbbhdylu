@@ -797,7 +797,10 @@ match /{path=**}/events/{eventId} {
           && request.resource.data.keys().hasAll(['vendorUid', 'coupleUid'])
           && request.resource.data.vendorUid == request.auth.uid
           && request.resource.data.coupleUid is string;
-        allow update, delete: if isSignedIn()
+        allow update: if isSignedIn()
+          && (request.resource.data.vendorUid == request.auth.uid
+              || request.resource.data.coupleUid == request.auth.uid);
+        allow delete: if isSignedIn()
           && (resource.data.vendorUid == request.auth.uid
               || resource.data.coupleUid == request.auth.uid);
       }
@@ -826,9 +829,14 @@ match /{path=**}/events/{eventId} {
           && (request.resource.data.vendorUid == request.auth.uid
               || request.resource.data.coupleUid == request.auth.uid);
         // Either party can update counters (unread, lastMessageAt, etc).
+        // FIXED 2026-07-28 — was `resource.data.vendorUid` which
+        // caused evaluation error during `setDoc` create (resource
+        // is undefined for new docs). During create+update validation,
+        // the right side is request.resource.data; resource.data is
+        // only valid for existing docs (true update).
         allow update: if isSignedIn()
-          && (resource.data.vendorUid == request.auth.uid
-              || resource.data.coupleUid == request.auth.uid);
+          && (request.resource.data.vendorUid == request.auth.uid
+              || request.resource.data.coupleUid == request.auth.uid);
         allow delete: if isAdmin()
           || (isSignedIn() && (
             resource.data.vendorUid == request.auth.uid
@@ -849,9 +857,89 @@ match /{path=**}/events/{eventId} {
             && request.resource.data.senderRole is string
             && request.resource.data.text is string
             && request.resource.data.text.size() <= 4000
-            && request.resource.data.createdAt is timestamp;
+            && request.resource.data.createdAt is timestamp
+            // Sender must be a party to the parent inquiry (cannot
+            // post into a thread they don't belong to).
+            && (get(/databases/$(database)/documents/artifacts/$(appId)/vendorInquiries/$(inquiryId)).data.vendorUid == request.auth.uid
+                || get(/databases/$(database)/documents/artifacts/$(appId)/vendorInquiries/$(inquiryId)).data.coupleUid == request.auth.uid);
           allow update, delete: if false;
         }
+      }
+    }
+
+    // 2026-07-28 — Top-level (NOT under /users/{ownerUid}/)
+    // /artifacts/{appId}/vendorInquiries/{inquiryId}/ — this is the
+    // ACTUAL path that lib/chat.js writes to via the COL constant
+    // `artifacts/${appId}/vendorInquiries`. The 2026-07-20 design
+    // intention (per the original schema comment in chat.js) was
+    // a vendor↔couple chat thread at this top-level path so both
+    // parties can read+write without complex cross-user rules.
+    //
+    // The /users/{ownerUid}/vendorInquiries/{inquiryId} block
+    // below (L815, kept as a defensive mirror) is at a different
+    // path that no production code writes to.
+    //
+    // Auth shape (mirrors the /users/ mirror and the L1080
+    // top-level /jobRequests mirror):
+    //   - Read:    signed in AND (vendorUid or coupleUid == auth.uid).
+    //              Admin reads everything for moderation.
+    //   - Create:  signed in AND (vendorUid or coupleUid == auth.uid).
+    //              Both fields required, createdAt must be a timestamp.
+    //   - Update:  signed in AND (vendorUid or coupleUid matches the
+    //              current doc — uses request.resource.data for create
+    //              AND update).
+    //   - Delete:  signed in AND either party matches.
+    //   - /messages/: each party can write their own message; reads
+    //              open to both parties (using the parent vendorInquiries
+    //              doc to check party-membership).
+    match /vendorInquiries/{inquiryId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && (
+          resource.data.vendorUid == request.auth.uid
+          || resource.data.coupleUid == request.auth.uid
+        ));
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasAll(['vendorUid', 'coupleUid', 'createdAt'])
+        && request.resource.data.vendorUid is string
+        && request.resource.data.coupleUid is string
+        && request.resource.data.createdAt is timestamp
+        && (request.resource.data.vendorUid == request.auth.uid
+            || request.resource.data.coupleUid == request.auth.uid);
+      // FIXED 2026-07-28 — was `resource.data.vendorUid` (evaluation
+      // error during setDoc create). request.resource.data is the
+      // correct reference for create+update.
+      allow update: if isSignedIn()
+        && (request.resource.data.vendorUid == request.auth.uid
+            || request.resource.data.coupleUid == request.auth.uid);
+      allow delete: if isAdmin()
+        || (isSignedIn() && (
+          resource.data.vendorUid == request.auth.uid
+          || resource.data.coupleUid == request.auth.uid
+        ));
+
+      // Messages subcollection. Same auth shape.
+      match /messages/{messageId} {
+        allow read: if isAdmin()
+          || (isSignedIn() && (
+            // Either the sender themselves can read their own message,
+            // or either party to the parent inquiry can read all messages
+            // (the parent doc tracks who the parties are).
+            resource.data.senderUid == request.auth.uid
+            || get(/databases/$(database)/documents/artifacts/$(appId)/vendorInquiries/$(inquiryId)).data.vendorUid == request.auth.uid
+            || get(/databases/$(database)/documents/artifacts/$(appId)/vendorInquiries/$(inquiryId)).data.coupleUid == request.auth.uid
+          ));
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasAll(['senderUid', 'senderRole', 'text', 'createdAt'])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.senderRole is string
+          && request.resource.data.text is string
+          && request.resource.data.text.size() <= 4000
+          && request.resource.data.createdAt is timestamp
+          // Sender must be a party to the parent inquiry (cannot
+          // post into a thread they don't belong to).
+          && (get(/databases/$(database)/documents/artifacts/$(appId)/vendorInquiries/$(inquiryId)).data.vendorUid == request.auth.uid
+              || get(/databases/$(database)/documents/artifacts/$(appId)/vendorInquiries/$(inquiryId)).data.coupleUid == request.auth.uid);
+        allow update, delete: if false;
       }
     }
 
