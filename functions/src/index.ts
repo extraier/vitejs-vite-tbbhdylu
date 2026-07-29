@@ -956,3 +956,8 @@ export {
   getMyReferralInfo,
   requestReferralClaim,
 } from './referralCodes';
+
+// 2026-07-29 — listSocialProofs for SocialProofModal history tab.
+// Pure read of /users/{uid}/socialProofs for the owner; no unlock
+// side effects so it stays co-located with the social-proof callables.
+export { listSocialProofs } from './unlocks';

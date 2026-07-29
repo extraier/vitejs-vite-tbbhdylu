@@ -4,7 +4,9 @@
 //
 // What's covered here (regression guards):
 //   1. Non-admin doesn't see any admin pills
-//   2. Admin sees all three pills with correct labels
+//   2. Admin sees all admin pills with correct labels (4 pills as
+//      of 2026-07-29: vendor-analytics, admin-users, admin-vendors,
+//      admin-queue — see the Phase 4 admin queue addition)
 //   3. The 🛍️ 商戶控制台 pill is highlighted when currentView === 'admin-vendors'
 //   4. Clicking the 🛍️ 商戶控制台 pill fires onSwitch('admin-vendors')
 
@@ -26,13 +28,15 @@ describe('RoleSimulator — admin pills', () => {
     // The three role pills are still there.
     expect(screen.getByText(/主理新人/)).toBeTruthy();
     expect(screen.getByText(/商戶 \(Vendor\)/)).toBeTruthy();
-    // But the three admin pills are absent.
+    // But the four admin pills are absent.
     expect(screen.queryByText(/商戶數據/)).toBeNull();
     expect(screen.queryByText(/管理員控制台/)).toBeNull();
     expect(screen.queryByText(/商戶控制台/)).toBeNull();
+    // 2026-07-29 — admin-queue pill also gated on isAdmin
+    expect(screen.queryByText(/審批管理/)).toBeNull();
   });
 
-  it('admin sees all three admin pills', () => {
+  it('admin sees all admin pills', () => {
     render(
       <RoleSimulator
         userRole="owner"
@@ -44,6 +48,8 @@ describe('RoleSimulator — admin pills', () => {
     expect(screen.getByText(/商戶數據/)).toBeTruthy();
     expect(screen.getByText(/管理員控制台/)).toBeTruthy();
     expect(screen.getByText(/商戶控制台/)).toBeTruthy();
+    // 2026-07-29 — Phase 4 admin queue pill
+    expect(screen.getByText(/審批管理/)).toBeTruthy();
   });
 
   it('🛍️ 商戶控制台 pill is active when currentView=admin-vendors', () => {

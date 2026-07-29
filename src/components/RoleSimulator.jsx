@@ -1,4 +1,4 @@
-import { Users, Shield, BarChart3, Store } from 'lucide-react';
+import { Users, Shield, BarChart3, Store, Inbox } from 'lucide-react';
 
 /**
  * RoleSimulator — dark "developer-mode" pill bar at the top of the screen.
@@ -138,6 +138,21 @@ export function RoleSimulator({
           >
             <Store className="w-3.5 h-3.5" />
             🛍️ 商戶控制台
+          </button>
+          {/* 2026-07-29 — Phase 4 admin queue pill. Triage pending
+              social proof, referral claims, and payment receipts
+              in one place. */}
+          <button
+            onClick={() => onSwitch('admin-queue')}
+            title="待審批項目 (平台管理員)"
+            className={`px-3 py-1 rounded-full flex items-center gap-1 ${
+              currentView === 'admin-queue'
+                ? 'bg-amber-500 font-bold'
+                : 'bg-slate-800 hover:bg-slate-700'
+            }`}
+          >
+            <Inbox className="w-3.5 h-3.5" />
+            📋 審批管理
           </button>
         </>
       )}

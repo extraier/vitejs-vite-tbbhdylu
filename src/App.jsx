@@ -82,6 +82,7 @@ import { PhotoDrop } from './screens/PhotoDrop';
 import { DiscoverDirectory } from './screens/DiscoverDirectory';
 import { VendorAnalytics } from './screens/VendorAnalytics';
 import { AdminUsers } from './screens/AdminUsers';
+import { AdminQueue } from './screens/AdminQueue';
 import { AdminVendors } from './screens/AdminVendors';
 import { AdminImportVendors } from './screens/AdminImportVendors';
 import { VendorOnboarding } from './screens/VendorOnboarding';
@@ -2452,7 +2453,8 @@ export default function App() {
           if (
             target === 'vendor-analytics' ||
             target === 'admin-users' ||
-            target === 'admin-vendors'
+            target === 'admin-vendors' ||
+            target === 'admin-queue'
           ) {
             // Stay in owner role; just swap the view. Clear any guest-portal
             // overlay so the admin screen has the full header / tab area.
@@ -2859,6 +2861,17 @@ export default function App() {
             {/* Admin-only: master user list with admin/disable toggles */}
             {isAdmin && currentView === 'admin-users' && (
               <AdminUsers user={user} isAdmin={isAdmin} />
+            )}
+
+            {/* 2026-07-29 — Admin Queue (Phase 4). Triage pending
+                submissions across the 3 unlock paths (social proof,
+                referral, payment receipt) in one screen. */}
+            {isAdmin && currentView === 'admin-queue' && (
+              <AdminQueue
+                user={user}
+                isAdmin={isAdmin}
+                onBack={() => setCurrentView('events-dashboard')}
+              />
             )}
 
             {/* Admin-only: vendor CRUD (list / edit / delete) */}

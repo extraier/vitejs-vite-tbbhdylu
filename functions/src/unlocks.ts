@@ -99,6 +99,15 @@ export async function grantUnlock(
     expiresAt: extras.expiresAt ?? null,
   });
 
+  // 2026-07-29 — auto-promote to premium tier on any unlock. This is
+  // user-scoped (across all their events), while events/{eventId}.tier
+  // remains a per-event override that admins can still set
+  // independently. Idempotent: setting the same field is a no-op.
+  await userRef(uid).set(
+    { tier: 'premium', promotedAt: now },
+    { merge: true },
+  );
+
   return { unlockId, alreadyGranted: false };
 }
 
@@ -218,6 +227,51 @@ export const adminVerifySocialProof = onCall(
     }
 
     return { ok: true };
+  },
+);
+
+/**
+ * listSocialProofs — owner fetches their own submitted proofs with
+ * current status. Powers the "進度" tab of SocialProofModal.
+ *
+ * Returns rows with timestamps converted from Firestore Timestamp
+ * objects to epoch ms so the front-end doesn't need firebase-admin
+ * knowledge. Limited to 50 most-recent docs to avoid unbounded scans.
+ */
+export const listSocialProofs = onCall(
+  { cors: true, region: 'us-central1' },
+  async (req) => {
+    if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+    const uid = req.auth.uid;
+
+    const snap = await userRef(uid)
+      .collection('socialProofs')
+      .orderBy('createdAt', 'desc')
+      .limit(50)
+      .get();
+
+    const rows = snap.docs.map((d) => {
+      const data = d.data();
+      // Firestore Timestamps → epoch ms; null when unset.
+      const tsToMs = (v: any): number | null => {
+        if (!v) return null;
+        if (typeof v === 'number') return v > 1e12 ? v : v * 1000;
+        if (typeof v.toMillis === 'function') return v.toMillis();
+        if (typeof v._seconds === 'number') return v._seconds * 1000;
+        return null;
+      };
+      return {
+        id: d.id,
+        unlockType: data.unlockType,
+        postUrl: data.postUrl,
+        status: data.status,
+        createdAt: tsToMs(data.createdAt),
+        verifiedAt: tsToMs(data.verifiedAt),
+        rejectionReason: data.rejectionReason || null,
+      };
+    });
+
+    return { ok: true, rows };
   },
 );
 
