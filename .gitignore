@@ -31,3 +31,6 @@ functions/.env.local
 .vercel
 vercel.json.bak
 .vercel/output
+
+# Hermes agent local planning / cache
+.hermes/
