@@ -88,6 +88,7 @@ import { AdminImportVendors } from './screens/AdminImportVendors';
 import { VendorOnboarding } from './screens/VendorOnboarding';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
+import { MyProfile } from './screens/MyProfile';
 import { ReceptionScanner } from './screens/ReceptionScanner';
 import { HelperDashboard } from './screens/HelperDashboard';
 import { WeddingDay } from './screens/WeddingDay';
@@ -2663,6 +2664,19 @@ export default function App() {
                         <span className="hidden sm:inline">返回總大堂</span>
                       </button>
                     )}
+                    {/* 2026-07-30 — Profile entry point. Sits right before
+                        the existing logout button. Phase A (minimal):
+                        standalone button. Phase B will fold this into
+                        a user-avatar dropdown with logout inside. */}
+                    <button
+                      onClick={() => setCurrentView('profile')}
+                      className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-200 transition-colors flex-shrink-0"
+                      title="我的資料"
+                      aria-label="我的資料"
+                    >
+                      <User className="w-4 h-4" />
+                      <span className="hidden sm:inline">我的資料</span>
+                    </button>
                     <button
                       onClick={handleLogout}
                       className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-200 transition-colors flex-shrink-0"
@@ -2734,6 +2748,18 @@ export default function App() {
                   onJoin={() => setCurrentView('vendor-onboarding')}
                 />
               </div>
+            )}
+
+            {/* 2026-07-30 — MyProfile screen. Available to any signed-in
+                user (couple, owner, vendor, helper). Routes back to
+                events-dashboard. The upgrade CTA inside opens
+                PurchaseModal via the existing purchaseModalOpen state. */}
+            {user && currentView === 'profile' && (
+              <MyProfile
+                currentUser={user}
+                onBack={() => setCurrentView('events-dashboard')}
+                onUpgrade={() => setPurchaseModalOpen(true)}
+              />
             )}
 
             {userRole === 'owner' && currentEvent && currentView === 'couple-checklist' && (

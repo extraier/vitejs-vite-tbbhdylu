@@ -1,13 +1,11 @@
-import { Heart, Calendar, ArrowRight, Plus, Crown, TrendingUp } from 'lucide-react';
+import { Heart, Calendar, ArrowRight, Plus, Crown } from 'lucide-react';
 import { TrendingVendors } from '../components/TrendingVendors';
 import { RewardsBanner } from '../components/RewardsBanner';
 import { PurchaseModal } from '../components/PurchaseModal';
 import { ReferralModal } from '../components/modals/ReferralModal';
 import { SocialProofModal } from '../components/modals/SocialProofModal';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { useState, useEffect } from 'react';
-import { collection } from 'firebase/firestore';
-import { db, appId } from '../lib/firebase';
+import { useUserProfile } from '../hooks/useUserProfile';
+import { useState } from 'react';
 
 // 2026-07-21 — Three premium features unlockable via social proof
 // or payment:
@@ -44,43 +42,18 @@ export function EventsDashboard({
   currentEvent,
   onOpenChat,
 }: EventsDashboardProps) {
-  // 2026-07-21 — Subscribe to user's unlocks subcollection so the
-  // RewardsBanner can show which features are still locked.
-  const [unlocks, setUnlocks] = useState<UnlockType[]>([]);
-  // 2026-07-29 — user-tier promotion (Phase 4). Real-time subscription
-  // to the user doc so the lobby badge appears the moment a CF grants
-  // an unlock (Phase 2/3 paths both call grantUnlock → set tier).
-  const [userTier, setUserTier] = useState<string | null>(null);
+  // 2026-07-30 — useUserProfile hook replaces the inline
+  // unlocks + tier subscriptions added in Phases 2-4. The hook
+  // handles real-time updates and cleanup. EventsDashboard only
+  // needs tier + unlocks here; createdAt/promotedAt are used by
+  // MyProfile for the membership card.
+  const { tier: userTier, unlocks } = useUserProfile(user);
   const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
   // 2026-07-29 — ReferralModal visibility (Phase 2 of premium build).
   const [referralModalOpen, setReferralModalOpen] = useState(false);
   // 2026-07-29 — SocialProofModal visibility (Phase 3 of premium build).
   // Replaces the alert() TODO that lived in RewardsBanner's onUploadClick.
   const [socialProofModalOpen, setSocialProofModalOpen] = useState(false);
-
-  useEffect(() => {
-    if (!user?.uid) return;
-    const unlocksRef = collection(db, 'artifacts', appId, 'users', user.uid, 'unlocks');
-    const unsub = onSnapshot(unlocksRef, (snap) => {
-      const types = snap.docs
-        .map((d) => d.data().type)
-        .filter((t): t is UnlockType => ALL_UNLOCK_TYPES.includes(t as UnlockType));
-      setUnlocks(types);
-    });
-    return () => unsub();
-  }, [user?.uid]);
-
-  // 2026-07-29 — Subscribe to user doc tier field. Same doc path as
-  // the CF writes to via userRef(). Lightweight single-field read;
-  // no need to subscribe to the whole user doc.
-  useEffect(() => {
-    if (!user?.uid) return;
-    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid);
-    const unsub = onSnapshot(userDocRef, (snap) => {
-      setUserTier(snap.exists() ? (snap.get('tier') as string | null) : null);
-    });
-    return () => unsub();
-  }, [user?.uid]);
 
   const lockedTypes: UnlockType[] = ALL_UNLOCK_TYPES.filter((t) => !unlocks.includes(t));
 

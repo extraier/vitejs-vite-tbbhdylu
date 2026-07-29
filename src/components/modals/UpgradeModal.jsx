@@ -18,7 +18,7 @@ export function UpgradeModal({ isOpen, onClose, onConfirm }) {
           onClick={onConfirm}
           className="w-full bg-slate-900 text-white font-bold py-3.5 rounded-xl hover:bg-slate-800 shadow-lg"
         >
-          立即付款 $499 解鎖
+          立即付款 HK$99 解鎖
         </button>
       </div>
     </div>
