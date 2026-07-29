@@ -16,23 +16,31 @@
 # (which is what the Firebase Console does under the hood).
 #
 # Requires:
-#   - A service account JSON key at $SA_PATH (defaults to the one in
-#     ~/Downloads)
+#   - A service account JSON key at $SA_PATH (or $GOOGLE_APPLICATION_CREDENTIALS)
 #   - gcloud auth set to use that service account, OR
 #   - GOOGLE_APPLICATION_CREDENTIALS pointing at it
 #
 # Run from the project root:
-#   ./scripts/create-vendor-contacts-index.sh
+#   GOOGLE_APPLICATION_CREDENTIALS=./secrets/sa.json ./scripts/create-vendor-contacts-index.sh
+#   # or
+#   SA_PATH=./secrets/sa.json ./scripts/create-vendor-contacts-index.sh
 set -euo pipefail
 
-SA_PATH="${SA_PATH:-/Users/roger/Downloads/savetheday-2377a-firebase-adminsdk-fbsvc-fa7e0b76db.json}"
+# Prefer explicit $SA_PATH, fall back to $GOOGLE_APPLICATION_CREDENTIALS,
+# otherwise bail with a clear error (no hardcoded developer-machine paths).
+SA_PATH="${SA_PATH:-${GOOGLE_APPLICATION_CREDENTIALS:-}}"
 PROJECT_ID="savetheday-2377a"
 COLLECTION_GROUP="vendorContacts"
 FIELD_PATH="vendorEmail"
 
+if [ -z "$SA_PATH" ]; then
+  echo "❌ No service account configured."
+  echo "   Set SA_PATH=/path/to/sa.json OR GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json"
+  exit 1
+fi
+
 if [ ! -f "$SA_PATH" ]; then
   echo "❌ Service account not found at $SA_PATH"
-  echo "   Set SA_PATH=/path/to/sa.json before running."
   exit 1
 fi
 

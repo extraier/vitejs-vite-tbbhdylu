@@ -3,7 +3,8 @@
 // when the city has changed.
 //
 // Run:
-//   node scripts/enrich-vendor-cities.js
+//   GOOGLE_APPLICATION_CREDENTIALS=./secrets/sa.json \
+//     node scripts/enrich-vendor-cities.cjs
 //
 // Reads:  /vendors/{id}
 // Writes: /vendors/{id}.serviceAreaCity    — one of "香港島","九龍","新界","其他"
@@ -13,10 +14,20 @@
 // We deliberately don't overwrite if the field already exists and
 // matches, to keep manual edits untouched.
 
-const admin = require('/Users/roger/projects/vitejs-vite-tbbhdylu/functions/node_modules/firebase-admin/lib');
+const admin = require('../functions/node_modules/firebase-admin/lib');
 const fs = require('fs');
 
-const sa = JSON.parse(fs.readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, 'utf8'));
+const saPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+if (!saPath) {
+  console.error('Set GOOGLE_APPLICATION_CREDENTIALS to the service account JSON.');
+  process.exit(1);
+}
+if (!fs.existsSync(saPath)) {
+  console.error(`Service account not found at ${saPath}`);
+  process.exit(1);
+}
+
+const sa = JSON.parse(fs.readFileSync(saPath, 'utf8'));
 sa.project_id = sa.project_id || 'savetheday-2377a';
 admin.initializeApp({ credential: admin.credential.cert(sa), projectId: 'savetheday-2377a' });
 const db = admin.firestore();
