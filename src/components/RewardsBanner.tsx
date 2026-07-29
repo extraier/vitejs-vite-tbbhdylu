@@ -19,7 +19,7 @@
  * 2026-07-21 — initial release.
  */
 
-import { Sparkles, Instagram, Users, Video, CreditCard, ExternalLink } from 'lucide-react';
+import { Sparkles, Instagram, Users, Video, CreditCard, ExternalLink, Crown } from 'lucide-react';
 import type { UnlockType } from '../screens/EventsDashboard';
 
 const ALL_UNLOCKS: UnlockType[] = ['custom-template', 'storage-500mb', 'permanent-archive'];
@@ -147,7 +147,7 @@ export function RewardsBanner({ unlocks, onUploadClick, onPayClick, onReferralCl
             className="flex items-center justify-center gap-1 px-2 py-2.5 bg-white border-2 border-rose-600 text-rose-600 font-bold rounded-xl hover:bg-rose-50 text-xs"
           >
             <CreditCard className="w-3.5 h-3.5" />
-            付款
+            升級 Premium
           </button>
         </div>
       ) : (
@@ -166,8 +166,8 @@ export function RewardsBanner({ unlocks, onUploadClick, onPayClick, onReferralCl
             onClick={onPayClick}
             className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-white border-2 border-rose-600 text-rose-600 font-bold rounded-xl hover:bg-rose-50 text-sm"
           >
-            <CreditCard className="w-4 h-4" />
-            直接付款
+            <Crown className="w-4 h-4" />
+            升級 Premium
           </button>
         </div>
       )}

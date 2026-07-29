@@ -31,7 +31,10 @@ const UNLOCK_PRICING: Record<UnlockType, number> = {
 const BUNDLE_PRICE = 99;
 
 type PaymentMethod = 'stripe' | 'payme' | 'fps' | null;
-type UnlockChoice = UnlockType | 'bundle';
+// 2026-07-30 — 'premium' is the recommended bundle choice. Replaces
+// the old 'bundle' label so the UI frames it as a membership
+// purchase, not a "buy everything at a discount" upsell.
+type UnlockChoice = UnlockType | 'premium';
 
 interface PurchaseModalProps {
   isOpen: boolean;
@@ -54,7 +57,7 @@ async function uploadPaymentReceiptHelper(
 
 export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedTypes }: PurchaseModalProps) {
   const [choice, setChoice] = useState<UnlockChoice>(
-    lockedTypes.length === 3 ? 'bundle' : (lockedTypes[0] ?? 'bundle'),
+    lockedTypes.length === 3 ? 'premium' : (lockedTypes[0] ?? 'premium'),
   );
   const [method, setMethod] = useState<PaymentMethod>(null);
   const [screenshot, setScreenshot] = useState<File | null>(null);
@@ -65,7 +68,7 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
 
   if (!isOpen) return null;
 
-  const price = choice === 'bundle' ? BUNDLE_PRICE : UNLOCK_PRICING[choice];
+  const price = choice === 'premium' ? BUNDLE_PRICE : UNLOCK_PRICING[choice];
 
   const handleStripeCheckout = () => {
     alert('Stripe 付款準備中... 請用 PayMe 或 FPS 暫時付款。');
@@ -131,7 +134,7 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
         <div className="sticky top-0 bg-gradient-to-r from-amber-50 to-rose-50 border-b border-rose-100 px-5 py-3 flex items-center justify-between rounded-t-2xl">
           <div className="flex items-center gap-2">
             <CreditCard className="w-5 h-5 text-rose-600" />
-            <h2 className="text-lg font-black text-slate-800">解鎖功能</h2>
+            <h2 className="text-lg font-black text-slate-800">升級 Premium</h2>
           </div>
           <button
             onClick={onClose}
@@ -161,33 +164,43 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
                   想解鎖邊個？
                 </label>
                 <div className="space-y-2">
-                  {lockedTypes.map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setChoice(t)}
-                      className={`w-full text-left px-3 py-2.5 rounded-lg border-2 transition-colors flex items-center justify-between ${
-                        choice === t ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300'
-                      }`}
-                    >
-                      <span className="text-sm font-bold text-slate-800">{UNLOCK_LABELS[t]}</span>
-                      <span className="text-base font-black text-rose-600">${UNLOCK_PRICING[t]}</span>
-                    </button>
-                  ))}
-                  {lockedTypes.length === 3 && (
-                    <button
-                      type="button"
-                      onClick={() => setChoice('bundle')}
-                      className={`w-full text-left px-3 py-2.5 rounded-lg border-2 transition-colors flex items-center justify-between ${
-                        choice === 'bundle' ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300'
-                      }`}
-                    >
-                      <div>
-                        <span className="text-sm font-bold text-slate-800">🎁 三個全套</span>
-                        <span className="block text-xs text-emerald-600 font-bold">慳 $18</span>
-                      </div>
-                      <span className="text-base font-black text-rose-600">${BUNDLE_PRICE}</span>
-                    </button>
+                  {/*
+                    2026-07-30 — Premium is the primary CTA and is
+                    shown first regardless of which unlocks are
+                    locked. This is the "升級 Premium" entry point.
+                    Per-unlock options are secondary, shown below as
+                    "要單獨解鎖?" alternatives.
+                  */}
+                  <button
+                    type="button"
+                    onClick={() => setChoice('premium')}
+                    className={`w-full text-left px-3 py-2.5 rounded-lg border-2 transition-colors flex items-center justify-between ${
+                      choice === 'premium' ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    <div>
+                      <span className="text-sm font-bold text-slate-800">👑 Premium 會員</span>
+                      <span className="block text-xs text-emerald-600 font-bold">3 個功能 + 永久 Premium 徽章</span>
+                    </div>
+                    <span className="text-base font-black text-rose-600">${BUNDLE_PRICE}</span>
+                  </button>
+                  {lockedTypes.length > 0 && (
+                    <>
+                      <p className="text-[10px] text-slate-400 text-center mt-2 mb-1">— 或者單獨解鎖 —</p>
+                      {lockedTypes.map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setChoice(t)}
+                          className={`w-full text-left px-3 py-2.5 rounded-lg border-2 transition-colors flex items-center justify-between ${
+                            choice === t ? 'border-rose-500 bg-rose-50' : 'border-slate-200 hover:border-slate-300'
+                          }`}
+                        >
+                          <span className="text-sm font-bold text-slate-800">{UNLOCK_LABELS[t]}</span>
+                          <span className="text-base font-black text-rose-600">${UNLOCK_PRICING[t]}</span>
+                        </button>
+                      ))}
+                    </>
                   )}
                 </div>
               </div>

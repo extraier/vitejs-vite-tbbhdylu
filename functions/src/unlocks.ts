@@ -422,14 +422,17 @@ export const submitPaymentReceipt = onCall(
       screenshotUrl,
       reference,
     } = req.data as {
-      unlockType: UnlockType | 'bundle';
+      // 2026-07-30 — 'premium' replaces 'bundle' as the premium
+      // membership label. Both accepted for backward compat with
+      // pre-2026-07-30 in-flight receipts.
+      unlockType: UnlockType | 'bundle' | 'premium';
       amount: number;
       paymentMethod: 'payme' | 'fps';
       screenshotUrl: string;
       reference?: string;
     };
 
-    if (!['custom-template', 'storage-500mb', 'permanent-archive', 'bundle'].includes(unlockType)) {
+    if (!['custom-template', 'storage-500mb', 'permanent-archive', 'bundle', 'premium'].includes(unlockType)) {
       throw new HttpsError('invalid-argument', 'invalid unlockType.');
     }
     if (!['payme', 'fps'].includes(paymentMethod)) {
@@ -494,9 +497,14 @@ export const adminVerifyPayment = onCall(
     }
 
     if (decision === 'approve') {
-      const unlockTypes: UnlockType[] = receipt.unlockType === 'bundle'
-        ? ['custom-template', 'storage-500mb', 'permanent-archive']
-        : [receipt.unlockType as UnlockType];
+      // 2026-07-30 — 'premium' is the new label for the bundle.
+      // 'bundle' is kept for backward compat with receipts submitted
+      // before the 2026-07-30 rename. Both run the same "grant all 3"
+      // path so the user gets the full premium experience.
+      const unlockTypes: UnlockType[] =
+        receipt.unlockType === 'bundle' || receipt.unlockType === 'premium'
+          ? ['custom-template', 'storage-500mb', 'permanent-archive']
+          : [receipt.unlockType as UnlockType];
 
       for (const t of unlockTypes) {
         await grantUnlock(uid, t, `paid-${receipt.paymentMethod}` as any, {

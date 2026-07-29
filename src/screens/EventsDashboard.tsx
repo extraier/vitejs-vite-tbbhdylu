@@ -95,11 +95,25 @@ export function EventsDashboard({
             user-level tier (granted by any unlock from Phase 2/3).
             Falls back to per-event tier for already-paid individual
             weddings when user-tier is unset. */}
-        {userTier === 'premium' && (
+        {userTier === 'premium' ? (
           <div className="mt-4 inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-400 to-amber-500 text-white text-sm font-bold px-4 py-1.5 rounded-full shadow-md">
             <Crown className="w-4 h-4" />
             👑 Premium User · 解鎖咗所有功能
           </div>
+        ) : (
+          // 2026-07-30 — "升級 Premium" CTA in the lobby. Always
+          // visible (not just when something is locked) so the user
+          // has a direct path to "I want premium, I'll pay" without
+          // having to find the RewardsBanner below. Clicking opens
+          // PurchaseModal with the premium option pre-selected.
+          <button
+            type="button"
+            onClick={() => setPurchaseModalOpen(true)}
+            className="mt-4 inline-flex items-center gap-2 bg-gradient-to-r from-amber-500 to-rose-500 text-white text-sm font-bold px-5 py-2.5 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all"
+          >
+            <Crown className="w-4 h-4" />
+            升級 Premium · HK$99
+          </button>
         )}
       </div>
 
