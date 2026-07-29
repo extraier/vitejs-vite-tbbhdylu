@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Heart, LogOut, Users, MessageCircle, ChevronLeft } from 'lucide-react';
+import { Heart, Users, MessageCircle, ChevronLeft } from 'lucide-react';
 import {
      addDoc,
      collection,
@@ -103,6 +103,7 @@ import { GuestBanner } from './components/GuestBanner';
 import { TabNav } from './components/TabNav';
 import { JoinAsVendorCTA } from './components/JoinAsVendorCTA';
 import { UpgradeModal } from './components/modals/UpgradeModal';
+import { UserMenu } from './components/UserMenu';
 import { PaymentModal } from './components/modals/PaymentModal';
 import { QrCodeModal } from './components/modals/QrCodeModal';
 import { EditGuestModal } from './components/modals/EditGuestModal';
@@ -2664,28 +2665,17 @@ export default function App() {
                         <span className="hidden sm:inline">返回總大堂</span>
                       </button>
                     )}
-                    {/* 2026-07-30 — Profile entry point. Sits right before
-                        the existing logout button. Phase A (minimal):
-                        standalone button. Phase B will fold this into
-                        a user-avatar dropdown with logout inside. */}
-                    <button
-                      onClick={() => setCurrentView('profile')}
-                      className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-200 transition-colors flex-shrink-0"
-                      title="我的資料"
-                      aria-label="我的資料"
-                    >
-                      <User className="w-4 h-4" />
-                      <span className="hidden sm:inline">我的資料</span>
-                    </button>
-                    <button
-                      onClick={handleLogout}
-                      className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 px-2 sm:px-3 py-1.5 rounded-lg border border-slate-200 transition-colors flex-shrink-0"
-                      title="登出"
-                      aria-label="登出"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      <span className="hidden sm:inline">登出</span>
-                    </button>
+                    {/* 2026-07-30 — UserMenu. Avatar + dropdown header
+                        widget. Replaces the two standalone buttons
+                        (Phase A: 我的資料 + 登出) with a single avatar
+                        that opens a compact dropdown. The dropdown
+                        contains: email + tier strip, 我的資料, 登出.
+                        Click-outside and Escape close it. */}
+                    <UserMenu
+                      user={user}
+                      onOpenProfile={() => setCurrentView('profile')}
+                      onUpgrade={() => setPurchaseModalOpen(true)}
+                    />
                   </div>
                 </div>
                 <TabNav
