@@ -942,3 +942,14 @@ export {
   uploadRedPacketV2,
   deleteRedPacketV2,
 } from './redPackets';
+
+// 2026-07-29 — Referral code plumbing. onUserCreate auto-mints a
+// referralCode on every new Firebase Auth user. applyReferralAttribution
+// is called from the front-end during signup when the user landed on
+// `?ref=STD-XXXXX`. getMyReferralInfo powers the share UI in
+// ReferralModal.tsx (Phase 2).
+export {
+  onUserCreate,
+  applyReferralAttribution,
+  getMyReferralInfo,
+} from './referralCodes';

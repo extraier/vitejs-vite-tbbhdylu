@@ -32,7 +32,98 @@ import {
   signInWithCustomToken,
   signOut,
 } from 'firebase/auth';
-import { auth } from '../lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { auth, functions } from '../lib/firebase';
+
+// 2026-07-29 — referral attribution. When a new user lands on
+// savetheday.io via `?ref=STD-XXXXX`, we stash the code in
+// sessionStorage so it survives the sign-up round-trip, then call
+// applyReferralAttribution once they're authenticated. Stripped from
+// the URL on first sight so refreshes don't loop.
+const REFERRAL_URL_PARAM = 'ref';
+const REFERRAL_SESSION_KEY = '__pendingReferralCode';
+// STD-XXXXX (5 chars, alphabet excludes I/O/0/1)
+const REFERRAL_CODE_RE = /^STD-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{5}$/;
+
+function readReferralFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get(REFERRAL_URL_PARAM);
+    if (!raw || !REFERRAL_CODE_RE.test(raw)) return null;
+    params.delete(REFERRAL_URL_PARAM);
+    const next =
+      window.location.pathname +
+      (params.toString() ? '?' + params.toString() : '') +
+      window.location.hash;
+    window.history.replaceState({}, '', next);
+    return raw;
+  } catch (_) {
+    return null;
+  }
+}
+
+function stashReferral(code) {
+  try {
+    window.sessionStorage.setItem(REFERRAL_SESSION_KEY, code);
+  } catch (_) {
+    /* sessionStorage blocked — will fail silently server-side */
+  }
+}
+
+function readStashedReferral() {
+  try {
+    return window.sessionStorage.getItem(REFERRAL_SESSION_KEY) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearStashedReferral() {
+  try {
+    window.sessionStorage.removeItem(REFERRAL_SESSION_KEY);
+  } catch (_) {
+    /* noop */
+  }
+}
+
+/**
+ * Apply any stashed referral code to the just-signed-in user. No-op if
+ * none is stashed. Errors are logged but never thrown — failing to
+ * attribute a referral must not break sign-in. On success we clear the
+ * stash so re-logins don't double-attribute (the CF is idempotent on
+ * its side too).
+ */
+async function applyStashedReferral(user) {
+  const code = readStashedReferral();
+  if (!code) return;
+  if (!user || user.isAnonymous) return;
+  try {
+    const fn = httpsCallable(functions, 'applyReferralAttribution');
+    const result = await fn({ code });
+    // eslint-disable-next-line no-console
+    console.info(
+      '[useAuth] referral attribution applied:',
+      result.data,
+    );
+    clearStashedReferral();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[useAuth] applyReferralAttribution failed:',
+      err?.code,
+      err?.message,
+    );
+    // Clear stale codes (malformed / not-found). For other errors leave
+    // the stash so the next login retry can try again.
+    if (
+      err?.code === 'functions/invalid-argument' ||
+      err?.code === 'functions/not-found' ||
+      err?.code === 'functions/failed-precondition'
+    ) {
+      clearStashedReferral();
+    }
+  }
+}
 
 export function useAuth() {
   const [user, setUser] = useState(null);
@@ -43,6 +134,15 @@ export function useAuth() {
   // as the active user. Defaults false so restored anonymous sessions
   // from prior visits don't bypass the login screen.
   const [allowAnonymous, setAllowAnonymous] = useState(false);
+
+  // 2026-07-29 — Referral attribution URL pickup. If the user landed
+  // via ?ref=STD-XXXXX, stash the code in sessionStorage. The actual
+  // attribution call happens inside onAuthStateChanged below, AFTER
+  // the user has a real (non-anonymous) auth.uid.
+  useEffect(() => {
+    const code = readReferralFromUrl();
+    if (code) stashReferral(code);
+  }, []);
 
   // Hermes 2026-07-03 — dev-only auth bypass for headless debugging.
   // Visit ?__herotoken=<firebase_custom_token> to sign in as that UID
@@ -179,6 +279,11 @@ export function useAuth() {
             // eslint-disable-next-line no-console
             console.warn('[useAuth] token refresh failed:', err?.message || err);
           }
+          // 2026-07-29 — apply any pending referral attribution for
+          // freshly-signed-in users. Fire-and-forget — must not block
+          // the auth state from settling (UI wants the user logged in
+          // even if the CF fails).
+          applyStashedReferral(currentUser);
         }
       }
       setAuthChecked(true);
