@@ -947,9 +947,12 @@ export {
 // referralCode on every new Firebase Auth user. applyReferralAttribution
 // is called from the front-end during signup when the user landed on
 // `?ref=STD-XXXXX`. getMyReferralInfo powers the share UI in
-// ReferralModal.tsx (Phase 2).
+// ReferralModal.tsx (Phase 2). requestReferralClaim is the
+// auto-grant path — the referrer provides a friend's email and we
+// grant the storage-500mb unlock without admin involvement.
 export {
   onUserCreate,
   applyReferralAttribution,
   getMyReferralInfo,
+  requestReferralClaim,
 } from './referralCodes';

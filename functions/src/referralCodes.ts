@@ -35,6 +35,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import * as crypto from 'crypto';
+import { grantUnlock } from './unlocks';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -295,6 +296,84 @@ export const getMyReferralInfo = onCall(
       shareUrl,
       referredCount: referredSnap.size,
       claimedCount,
+    };
+  },
+);
+
+// ---- 4. requestReferralClaim (callable) ------------------------------
+//
+// 2026-07-29 — auto-grant path. Replaces the old admin-mediated
+// `claimReferral` flow in unlocks.ts. The caller (the referrer)
+// provides their friend's email; we resolve it, verify the friend
+// signed up via the caller's referralCode, and verify the friend has
+// at least one event. If all checks pass we auto-grant the
+// `storage-500mb` unlock with `source: 'referral'` — no admin step.
+// This is the moment the user "becomes premium" via referral.
+
+export const requestReferralClaim = onCall(
+  { cors: true, region: 'us-central1' },
+  async (req) => {
+    if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+    const callerUid = req.auth.uid;
+    const { friendEmail } = req.data as { friendEmail?: string };
+
+    if (!friendEmail || typeof friendEmail !== 'string') {
+      throw new HttpsError('invalid-argument', 'friendEmail required.');
+    }
+    const normalizedEmail = friendEmail.trim().toLowerCase();
+
+    // ---- 1. Resolve caller → must have a referralCode ----
+    const callerDoc = await userRef(callerUid).get();
+    const callerData = callerDoc.data() || {};
+    const myCode: string | undefined = callerData.referralCode;
+    if (!myCode) {
+      throw new HttpsError('failed-precondition', '你未有推薦碼，請聯絡管理員。');
+    }
+
+    // ---- 2. Resolve email → uid ----
+    const friendUid = await resolveEmailToUid(normalizedEmail);
+    if (!friendUid) {
+      throw new HttpsError('not-found', '搵唔到用呢個 email 註冊嘅帳戶。請確認你朋友用咗呢個 email。');
+    }
+    if (friendUid === callerUid) {
+      throw new HttpsError('failed-precondition', '你不能推薦自己。');
+    }
+
+    // ---- 3. Verify attribution chain ----
+    const friendDoc = await userRef(friendUid).get();
+    if (!friendDoc.exists) {
+      throw new HttpsError('not-found', '搵唔到呢位朋友嘅帳戶。');
+    }
+    const friendData = friendDoc.data() || {};
+    if (friendData.referredByCode !== myCode) {
+      throw new HttpsError(
+        'failed-precondition',
+        '呢位朋友唔係用你嘅推薦碼註冊嘅，請確認佢哋用咗你分享嘅連結。',
+      );
+    }
+
+    // ---- 4. Verify the friend has at least one event ----
+    const eventsSnap = await userRef(friendUid)
+      .collection('events')
+      .limit(1)
+      .get();
+    if (eventsSnap.empty) {
+      throw new HttpsError(
+        'failed-precondition',
+        '你嘅朋友仲未建立任何婚禮，請等佢哋建立之後再嚟 claim。',
+      );
+    }
+
+    // ---- 5. Auto-grant the unlock (idempotent) ----
+    const result = await grantUnlock(callerUid, 'storage-500mb', 'referral', {
+      referredUid: friendUid,
+    });
+
+    return {
+      ok: true,
+      unlockId: result.unlockId,
+      alreadyGranted: result.alreadyGranted,
+      friendName: friendData.displayName || friendData.name || '',
     };
   },
 );

@@ -143,10 +143,15 @@ describe('InvitePartnerModal — invite history', () => {
 
     render(<InvitePartnerModal {...baseProps} />);
     await waitFor(() => {
-      // The heading format is "邀請紀錄（2）" — match the count parens.
-      expect(screen.getByText(/邀請紀錄/)).toBeTruthy();
+      // The heading format is "邀請紀錄（2）". The count lives in a
+      // nested <span>, so we can't use a single getByText regex
+      // across element boundaries (flaky in some RTL versions —
+      // CI runner fails where local passes). Match the two pieces
+      // independently via container + textContent instead.
+      const heading = screen.getByText(/邀請紀錄/);
+      expect(heading).toBeTruthy();
+      expect(heading.textContent).toContain('（2）');
     });
-    expect(screen.getByText(/（2）/)).toBeTruthy();
   });
 
   it('still shows the send form (regression guard)', async () => {

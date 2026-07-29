@@ -2,6 +2,7 @@ import { Heart, Calendar, ArrowRight, Plus, Crown, TrendingUp } from 'lucide-rea
 import { TrendingVendors } from '../components/TrendingVendors';
 import { RewardsBanner } from '../components/RewardsBanner';
 import { PurchaseModal } from '../components/PurchaseModal';
+import { ReferralModal } from '../components/modals/ReferralModal';
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db, appId } from '../lib/firebase';
@@ -45,6 +46,8 @@ export function EventsDashboard({
   // RewardsBanner can show which features are still locked.
   const [unlocks, setUnlocks] = useState<UnlockType[]>([]);
   const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
+  // 2026-07-29 — ReferralModal visibility (Phase 2 of premium build).
+  const [referralModalOpen, setReferralModalOpen] = useState(false);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -106,6 +109,10 @@ export function EventsDashboard({
           alert('請用 IG/FB Story 標記 @savetheday.hk 或推介朋友以解鎖功能！\n\n完整版稍後推出。');
         }}
         onPayClick={() => setPurchaseModalOpen(true)}
+        // 2026-07-29 — referral path. Opens ReferralModal which lets
+        // the user share their code, claim a friend's referral, and
+        // auto-grant the storage-500mb unlock (no admin step).
+        onReferralClick={() => setReferralModalOpen(true)}
       />
 
       {/* 2026-07-20 — "熱門商戶" preview on the events dashboard. */}
@@ -159,6 +166,14 @@ export function EventsDashboard({
         onSuccess={() => {
           // Modal closes itself on success.
         }}
+      />
+
+      {/* 2026-07-29 — Referral modal. Opened from RewardsBanner's
+          "推薦朋友" button. The modal handles share / claim / track
+          tabs and calls requestReferralClaim for auto-grant. */}
+      <ReferralModal
+        isOpen={referralModalOpen}
+        onClose={() => setReferralModalOpen(false)}
       />
     </div>
   );

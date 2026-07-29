@@ -62,10 +62,19 @@ interface RewardsBannerProps {
   unlocks: UnlockType[];
   onUploadClick: () => void;
   onPayClick: () => void;
+  // 2026-07-29 — referral path. Only relevant when storage-500mb
+  // is among the locked unlocks; opening the modal in other cases
+  // would be confusing. We still accept the prop unconditionally so
+  // the parent can wire it once.
+  onReferralClick: () => void;
 }
 
-export function RewardsBanner({ unlocks, onUploadClick, onPayClick }: RewardsBannerProps) {
+export function RewardsBanner({ unlocks, onUploadClick, onPayClick, onReferralClick }: RewardsBannerProps) {
   const locked = ALL_UNLOCKS.filter((t) => !unlocks.includes(t));
+  // 2026-07-29 — referral is only valid for storage-500mb. Hide the
+  // referral button if that's already unlocked (the user has 0 incentive
+  // to claim more referrals for a feature they already have).
+  const showReferral = locked.includes('storage-500mb');
 
   // Hide if user has everything (don't nag)
   if (locked.length === 0) return null;
@@ -113,30 +122,59 @@ export function RewardsBanner({ unlocks, onUploadClick, onPayClick }: RewardsBan
         })}
       </div>
 
-      {/* Two CTAs */}
-      <div className="grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={onUploadClick}
-          className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 shadow-sm text-sm"
-        >
-          <Instagram className="w-4 h-4" />
-          分享解鎖
-          <ExternalLink className="w-3 h-3 opacity-70" />
-        </button>
-        <button
-          type="button"
-          onClick={onPayClick}
-          className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-white border-2 border-rose-600 text-rose-600 font-bold rounded-xl hover:bg-rose-50 text-sm"
-        >
-          <CreditCard className="w-4 h-4" />
-          直接付款
-        </button>
-      </div>
+      {/* 2026-07-29 — three CTAs when referral is relevant, two otherwise */}
+      {showReferral ? (
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={onUploadClick}
+            className="flex items-center justify-center gap-1 px-2 py-2.5 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 shadow-sm text-xs"
+          >
+            <Instagram className="w-3.5 h-3.5" />
+            分享
+          </button>
+          <button
+            type="button"
+            onClick={onReferralClick}
+            className="flex items-center justify-center gap-1 px-2 py-2.5 bg-amber-500 text-white font-bold rounded-xl hover:bg-amber-600 shadow-sm text-xs"
+          >
+            <Users className="w-3.5 h-3.5" />
+            推薦朋友
+          </button>
+          <button
+            type="button"
+            onClick={onPayClick}
+            className="flex items-center justify-center gap-1 px-2 py-2.5 bg-white border-2 border-rose-600 text-rose-600 font-bold rounded-xl hover:bg-rose-50 text-xs"
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            付款
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onUploadClick}
+            className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-rose-600 text-white font-bold rounded-xl hover:bg-rose-700 shadow-sm text-sm"
+          >
+            <Instagram className="w-4 h-4" />
+            分享解鎖
+            <ExternalLink className="w-3 h-3 opacity-70" />
+          </button>
+          <button
+            type="button"
+            onClick={onPayClick}
+            className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-white border-2 border-rose-600 text-rose-600 font-bold rounded-xl hover:bg-rose-50 text-sm"
+          >
+            <CreditCard className="w-4 h-4" />
+            直接付款
+          </button>
+        </div>
+      )}
 
       {/* Fine print */}
       <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
-        📌 社交分享後管理員會喺 24 小時內人手核實；核實後自動解鎖
+        📌 社交分享後管理員會喺 24 小時內人手核實；核實後自動解鎖 · 推薦朋友即刻解鎖
       </p>
     </div>
   );
