@@ -103,6 +103,7 @@ import { GuestBanner } from './components/GuestBanner';
 import { TabNav } from './components/TabNav';
 import { JoinAsVendorCTA } from './components/JoinAsVendorCTA';
 import { UpgradeModal } from './components/modals/UpgradeModal';
+import { PurchaseModal } from './components/PurchaseModal';
 import { UserMenu } from './components/UserMenu';
 import { PaymentModal } from './components/modals/PaymentModal';
 import { QrCodeModal } from './components/modals/QrCodeModal';
@@ -622,6 +623,13 @@ export default function App() {
 
   // Modals
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  // 2026-07-30 — Phase 5's purchase modal lifted here so the
+  // header UserMenu (and MyProfile) can open it from outside
+  // EventsDashboard. State was previously local to EventsDashboard,
+  // which meant the lobby's CTA worked but no other screen could
+  // open it. The dashboard still works — it now reads this state
+  // as a prop instead of owning it.
+  const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
   const [showInvitationEditor, setShowInvitationEditor] = useState(false);
   const [editingGuest, setEditingGuest] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -2706,6 +2714,8 @@ export default function App() {
                     setCurrentView('couple-checklist');
                   }
                 }}
+                // 2026-07-30 — App.jsx owns the shared purchase modal.
+                onPurchaseModalOpen={() => setPurchaseModalOpen(true)}
                 // 2026-07-20 — wire trending strip on events
                 // dashboard. Couples see what's hot in the
                 // catalog even before they pick/create an event.
@@ -3163,6 +3173,14 @@ export default function App() {
         isOpen={showUpgradeModal}
         onClose={() => setShowUpgradeModal(false)}
         onConfirm={upgradeToPremium}
+      />
+      <PurchaseModal
+        isOpen={purchaseModalOpen}
+        onClose={() => setPurchaseModalOpen(false)}
+        ownerUid={user?.uid || ''}
+        onSuccess={() => {
+          // Modal closes itself on success.
+        }}
       />
       <PaymentModal
         isOpen={showPaymentModal}

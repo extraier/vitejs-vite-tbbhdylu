@@ -30,14 +30,10 @@
 // Firestore requirements
 // ----------------------
 //   - vendorContacts read across all owners  → collectionGroup
-//     needs an index on (vendorEmail asc, linkedVendorUid asc).
-//     (Firestore prompts the index URL on first run; click it.)
-//   - Tasks read+write in /tasks/ subcollection → owner-only
-//     read+write rules apply. The vendor's browser doesn't have
-//     those perms. So: we run this client-side ONLY when the
-//     couple's browser is logged in (the couple carries owner
-//     perms for their own /tasks/). For the auto-link to find
-//     the contacts across MULTIPLE couples, we'd need a backend.
+//     needs the vendorEmail field override in firestore.indexes.json.
+//   - Tasks are event-scoped under /events/{eventId}/tasks. The backend
+//     uses a collectionGroup('tasks') query and filters the returned
+//     document paths to the matching owner.
 //
 // Two paths
 // ---------
@@ -67,7 +63,6 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { db, appId } from './firebase';
-
 // Try to auto-link this user's email with any unlinked contact.
 // `currentUserUid` is the freshly-signed-in user's uid. Their
 // email is read from the auth profile.

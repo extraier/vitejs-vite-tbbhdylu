@@ -25,6 +25,8 @@ import {
   initializeTestEnvironment,
   assertFails,
   assertSucceeds,
+  type RulesTestEnvironment,
+  type RulesTestContext,
 } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +36,6 @@ import {
   getDoc,
   setLogLevel,
   Timestamp,
-  type RulesTestEnvironment,
 } from 'firebase/firestore';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -115,6 +116,36 @@ async function asUser(uid: string | null) {
 
 // --- the four critical fixes -------------------------------------------
 
+describe.skipIf(skipEmulator)('firestore.rules — user profile parent document', () => {
+  it('allows the signed-in user to read their own user profile', async () => {
+    await env.withSecurityRulesDisabled(async (ctx: RulesTestContext) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', 'user-A'),
+        { tier: 'premium', promotedAt: Timestamp.fromMillis(1) },
+      );
+    });
+
+    const db = await asUser('user-A');
+    await assertSucceeds(
+      getDoc(doc(db, 'artifacts/savetheday-production/users/user-A')),
+    );
+  });
+
+  it('rejects a signed-in user reading another user profile', async () => {
+    await env.withSecurityRulesDisabled(async (ctx: RulesTestContext) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', 'user-A'),
+        { tier: 'premium' },
+      );
+    });
+
+    const db = await asUser('user-B');
+    await assertFails(
+      getDoc(doc(db, 'artifacts/savetheday-production/users/user-A')),
+    );
+  });
+});
+
 describe.skipIf(skipEmulator)('firestore.rules — 13-bug audit regressions', () => {
   // Bug #3: vendorImageViews PII read leak.
   //
@@ -139,7 +170,7 @@ describe.skipIf(skipEmulator)('firestore.rules — 13-bug audit regressions', ()
     // The SDK's `firestore()` client adds the `/databases/(default)/`
     // prefix automatically — `doc()` takes the path *below* that
     // root, not the full path. The 6-segment form below is correct.
-    await env.withSecurityRulesDisabled(async (ctx) => {
+    await env.withSecurityRulesDisabled(async (ctx: RulesTestContext) => {
       await setDoc(
         doc(
           ctx.firestore(),
@@ -422,7 +453,7 @@ describe.skipIf(skipEmulator)('firestore.rules — 13-bug audit regressions', ()
   });
 });
 
-describe('firestore.rules — vendorInquiries (chat.js path)', () => {
+describe.skipIf(skipEmulator)('firestore.rules — vendorInquiries (chat.js path)', () => {
   // lib/chat.js writes to:
   //   artifacts/{appId}/vendorInquiries/{inquiryId}
   //   artifacts/{appId}/vendorInquiries/{inquiryId}/messages/{messageId}

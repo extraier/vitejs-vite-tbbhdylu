@@ -227,6 +227,13 @@ match /{path=**}/events/{eventId} {
 
       match /users/{ownerUid} {
 
+        // 2026-07-30 — User profile screens subscribe to the parent
+        // /users/{uid} document for tier, promotedAt, and createdAt.
+        // Nested subcollection rules do not grant access to the parent
+        // document itself; keep this read owner-only because the client
+        // only reads the signed-in user's own profile.
+        allow read: if isOwner(ownerUid);
+
         // Events: owner CRUD. Guests + helpers (with at least one view perm) read-only.
         // 2026-07-26 — co-owners (couples/partners) get full access
         // too. We use isEventCoOwner(eventId, ownerUid) here because

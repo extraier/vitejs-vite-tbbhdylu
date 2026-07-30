@@ -1,7 +1,7 @@
 import { Heart, Calendar, ArrowRight, Plus, Crown } from 'lucide-react';
 import { TrendingVendors } from '../components/TrendingVendors';
 import { RewardsBanner } from '../components/RewardsBanner';
-import { PurchaseModal } from '../components/PurchaseModal';
+
 import { ReferralModal } from '../components/modals/ReferralModal';
 import { SocialProofModal } from '../components/modals/SocialProofModal';
 import { useUserProfile } from '../hooks/useUserProfile';
@@ -13,7 +13,6 @@ import { useState } from 'react';
 //   storage-500mb     — 1 friend referral who creates an event
 //   permanent-archive — 1 Instagram Reels featuring Save The Day
 export type UnlockType = 'custom-template' | 'storage-500mb' | 'permanent-archive';
-const ALL_UNLOCK_TYPES: UnlockType[] = ['custom-template', 'storage-500mb', 'permanent-archive'];
 
 interface EventsDashboardProps {
   events: any[];
@@ -27,6 +26,9 @@ interface EventsDashboardProps {
   user?: { uid: string } | null;
   currentEvent?: any;
   onOpenChat?: (v: any) => void;
+  // 2026-07-30 — purchaseModalOpen state lifted to App.jsx. The
+  // dashboard triggers the shared modal through this callback.
+  onPurchaseModalOpen?: () => void;
 }
 
 export function EventsDashboard({
@@ -41,6 +43,7 @@ export function EventsDashboard({
   user,
   currentEvent,
   onOpenChat,
+  onPurchaseModalOpen,
 }: EventsDashboardProps) {
   // 2026-07-30 — useUserProfile hook replaces the inline
   // unlocks + tier subscriptions added in Phases 2-4. The hook
@@ -48,14 +51,15 @@ export function EventsDashboard({
   // needs tier + unlocks here; createdAt/promotedAt are used by
   // MyProfile for the membership card.
   const { tier: userTier, unlocks } = useUserProfile(user);
-  const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
-  // 2026-07-29 — ReferralModal visibility (Phase 2 of premium build).
+  // 2026-07-30 — purchaseModalOpen state lives in App.jsx now
+  // (lifted so UserMenu and MyProfile can open it). The dashboard
+  // receives it as props and writes through callbacks.
   const [referralModalOpen, setReferralModalOpen] = useState(false);
   // 2026-07-29 — SocialProofModal visibility (Phase 3 of premium build).
   // Replaces the alert() TODO that lived in RewardsBanner's onUploadClick.
   const [socialProofModalOpen, setSocialProofModalOpen] = useState(false);
 
-  const lockedTypes: UnlockType[] = ALL_UNLOCK_TYPES.filter((t) => !unlocks.includes(t));
+
 
   return (
     <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
@@ -81,7 +85,7 @@ export function EventsDashboard({
           // PurchaseModal with the premium option pre-selected.
           <button
             type="button"
-            onClick={() => setPurchaseModalOpen(true)}
+            onClick={() => onPurchaseModalOpen?.()}
             className="mt-4 inline-flex items-center gap-2 bg-gradient-to-r from-amber-500 to-rose-500 text-white text-sm font-bold px-5 py-2.5 rounded-full shadow-lg hover:shadow-xl hover:scale-105 transition-all"
           >
             <Crown className="w-4 h-4" />
@@ -124,7 +128,7 @@ export function EventsDashboard({
       <RewardsBanner
         unlocks={unlocks}
         onUploadClick={() => setSocialProofModalOpen(true)}
-        onPayClick={() => setPurchaseModalOpen(true)}
+        onPayClick={() => onPurchaseModalOpen?.()}
         // 2026-07-29 — referral path. Opens ReferralModal which lets
         // the user share their code, claim a friend's referral, and
         // auto-grant the storage-500mb unlock (no admin step).
@@ -174,15 +178,7 @@ export function EventsDashboard({
 
       {/* 2026-07-21 — purchase modal. Opened when user clicks
           "或直接付款解鎖" link inside RewardsBanner. */}
-      <PurchaseModal
-        isOpen={purchaseModalOpen}
-        onClose={() => setPurchaseModalOpen(false)}
-        ownerUid={user?.uid || ''}
-        lockedTypes={lockedTypes}
-        onSuccess={() => {
-          // Modal closes itself on success.
-        }}
-      />
+
 
       {/* 2026-07-29 — Referral modal. Opened from RewardsBanner's
           "推薦朋友" button. The modal handles share / claim / track
