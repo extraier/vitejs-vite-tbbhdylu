@@ -2759,6 +2759,12 @@ export default function App() {
                 currentUser={user}
                 onBack={() => setCurrentView('events-dashboard')}
                 onUpgrade={() => setPurchaseModalOpen(true)}
+                // 2026-07-30 — change-password opener. MyProfile decides
+                // 'change' vs 'set' based on user.providerData.
+                onChangePassword={(mode) => {
+                  setChangePasswordMode(mode);
+                  setChangePasswordModalOpen(true);
+                }}
               />
             )}
 

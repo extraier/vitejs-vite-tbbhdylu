@@ -37,6 +37,7 @@ export function useUserProfile(user) {
   const [tier, setTier] = useState(null);
   const [promotedAt, setPromotedAt] = useState(null);
   const [createdAt, setCreatedAt] = useState(null);
+  const [referralCode, setReferralCode] = useState(null);  // 2026-07-30 — STD-XXXXX
   const [unlocks, setUnlocks] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -47,6 +48,7 @@ export function useUserProfile(user) {
       setTier(null);
       setPromotedAt(null);
       setCreatedAt(null);
+      setReferralCode(null);
       setUnlocks([]);
       setLoading(false);
       return undefined;
@@ -61,6 +63,11 @@ export function useUserProfile(user) {
       setTier(data.tier || null);
       setPromotedAt(data.promotedAt || null);
       setCreatedAt(data.createdAt || null);
+      // 2026-07-30 — referralCode is set by referralCodes.onUserCreate
+      // (Auth trigger Cloud Function). It's available immediately on
+      // fresh signup and never changes after. Read it from the user
+      // doc so MyProfile can show the real code instead of the UID.
+      setReferralCode(data.referralCode || null);
     });
 
     // Unlocks subcollection — list of unlockType strings.
@@ -79,5 +86,5 @@ export function useUserProfile(user) {
     };
   }, [uid]);
 
-  return { tier, unlocks, createdAt, promotedAt, loading };
+  return { tier, unlocks, createdAt, promotedAt, referralCode, loading };
 }

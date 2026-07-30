@@ -8,36 +8,42 @@
 //   5. Shows Free card + upgrade CTA when tier!=premium
 //   6. Logout button calls useAuth().logout after confirm=true;
 //      does NOT call it when confirm=false
+//   7. (2026-07-30) Security section: shows "更換密碼" tile for users
+//      with a password provider, click invokes onChangePassword('change')
+//   8. (2026-07-30) 推薦碼 row shows the real referralCode (STD-XXXXX),
+//      not the UID, and the copy button reads "複製邀請碼"
 //
 // What we DON'T test here (covered elsewhere):
 //   - useUserProfile hook behaviour is smoke-tested at the parent
 //     component level (EventsDashboard already uses it)
 //   - PurchaseModal opening is smoke-tested in the modal's own tests
+//   - ChangePasswordModal is tested in its own file
 //   - Clipboard copy fallback (jsdom has no clipboard API; we don't
 //     stub it because the fallback uses document.execCommand which
 //     also fails in jsdom — the test just verifies the click handler
 //     doesn't throw)
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 
-// 2026-07-30 — vi.mock is hoisted to the top of the file by vitest.
-// We declare the mock state in vi.hoisted() so the factory can
-// reference it.
 const mocks = vi.hoisted(() => {
   return {
     logout: vi.fn(async () => {}),
-    subscribeUnlocks: vi.fn(),
-    subscribeUser: vi.fn(),
+    hasPasswordProvider: vi.fn(() => true),
+    onChangePassword: vi.fn(),
   };
 });
 
 vi.mock('../hooks/useAuth', () => ({
-  useAuth: () => ({ logout: mocks.logout }),
+  useAuth: () => ({
+    logout: mocks.logout,
+    hasPasswordProvider: mocks.hasPasswordProvider,
+  }),
 }));
 
-// Mock useUserProfile so we control tier/unlocks/createdAt/promotedAt
-// per test. The real hook is smoke-tested at the parent level.
+// Mock useUserProfile so we control tier/unlocks/createdAt/promotedAt/
+// referralCode per test. The real hook is smoke-tested at the parent
+// level.
 vi.mock('../hooks/useUserProfile', () => ({
   useUserProfile: vi.fn(),
 }));
@@ -59,12 +65,17 @@ import { useUserProfile } from '../hooks/useUserProfile';
 beforeEach(() => {
   cleanup();
   mocks.logout.mockClear();
-  // Default to a loaded, free-tier user. Individual tests override.
+  mocks.hasPasswordProvider.mockClear();
+  mocks.onChangePassword.mockClear();
+  mocks.hasPasswordProvider.mockReturnValue(true);
+  // Default to a loaded, free-tier user with a referral code set.
+  // Individual tests override.
   useUserProfile.mockReturnValue({
     tier: null,
     unlocks: [],
     createdAt: { toDate: () => new Date('2026-07-22') },
     promotedAt: null,
+    referralCode: 'STD-A4X7K',
     loading: false,
   });
 });
@@ -115,16 +126,15 @@ describe('MyProfile', () => {
       unlocks: ['custom-template', 'storage-500mb', 'permanent-archive'],
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: { toDate: () => new Date('2026-07-29') },
+      referralCode: 'STD-A4X7K',
       loading: false,
     });
     render(
       <MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />,
     );
     expect(screen.getByText('👑 Premium 會員')).toBeTruthy();
-    // All 3 unlocks should be checked
     const items = screen.getAllByRole('listitem');
     expect(items.length).toBe(3);
-    // All three should have the ✓ check (not the ○ empty)
     const checks = items.map((li) => li.textContent.includes('✓'));
     expect(checks.every(Boolean)).toBe(true);
   });
@@ -135,6 +145,7 @@ describe('MyProfile', () => {
       unlocks: [],
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
+      referralCode: 'STD-A4X7K',
       loading: false,
     });
     const onUpgrade = vi.fn();
@@ -166,5 +177,76 @@ describe('MyProfile', () => {
     const logoutBtn = screen.getByText(/^登出$/);
     fireEvent.click(logoutBtn);
     expect(mocks.logout).not.toHaveBeenCalled();
+  });
+
+  // 2026-07-30 — Security section: change-password tile.
+
+  it('shows "更換密碼" tile when user has password provider, calls onChangePassword("change") on click', () => {
+    // Default mock has hasPasswordProvider -> true.
+    render(
+      <MyProfile
+        currentUser={baseUser}
+        onBack={() => {}}
+        onUpgrade={() => {}}
+        onChangePassword={mocks.onChangePassword}
+      />,
+    );
+    const tile = screen.getByText(/^更換密碼$/);
+    expect(tile).toBeTruthy();
+    fireEvent.click(tile.closest('button'));
+    expect(mocks.onChangePassword).toHaveBeenCalledWith('change');
+  });
+
+  it('shows "設定登入密碼" tile for Google-only user, calls onChangePassword("set") on click', () => {
+    mocks.hasPasswordProvider.mockReturnValue(false);
+    render(
+      <MyProfile
+        currentUser={baseUser}
+        onBack={() => {}}
+        onUpgrade={() => {}}
+        onChangePassword={mocks.onChangePassword}
+      />,
+    );
+    const tile = screen.getByText(/^設定登入密碼$/);
+    expect(tile).toBeTruthy();
+    fireEvent.click(tile.closest('button'));
+    expect(mocks.onChangePassword).toHaveBeenCalledWith('set');
+  });
+
+  // 2026-07-30 — 推薦碼 row shows real referralCode, not UID.
+
+  it('shows the real referralCode (STD-XXXXX), not the UID', () => {
+    useUserProfile.mockReturnValue({
+      tier: null,
+      unlocks: [],
+      createdAt: { toDate: () => new Date('2026-07-22') },
+      promotedAt: null,
+      referralCode: 'STD-A4X7K',
+      loading: false,
+    });
+    render(
+      <MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />,
+    );
+    expect(screen.getByText('STD-A4X7K')).toBeTruthy();
+    expect(screen.getByText('複製邀請碼')).toBeTruthy();
+    expect(screen.queryByText('複製 UID')).toBeNull();
+  });
+
+  it('falls back to "(載入中)" when referralCode is null', () => {
+    useUserProfile.mockReturnValue({
+      tier: null,
+      unlocks: [],
+      createdAt: { toDate: () => new Date('2026-07-22') },
+      promotedAt: null,
+      referralCode: null,
+      loading: false,
+    });
+    render(
+      <MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />,
+    );
+    expect(screen.getByText('（載入中）')).toBeTruthy();
+    // No copy button when there's no code to copy.
+    expect(screen.queryByText('複製邀請碼')).toBeNull();
+    expect(screen.queryByText('複製 UID')).toBeNull();
   });
 });

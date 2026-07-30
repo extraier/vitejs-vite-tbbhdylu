@@ -15,6 +15,19 @@
 //                                   permanent email/password account, KEEPING
 //                                   their existing UID + Firestore data
 //                                   (the hybrid "guest try + then save" flow)
+//   changePassword                — for users with an email/password provider:
+//                                   re-auth by current password, then update
+//                                   to the new password. Throws FirebaseAuthError
+//                                   codes on failure (wrong-password, weak-password,
+//                                   requires-recent-login).
+//   linkPassword                  — for users signed in via Google only (no email/
+//                                   password provider): link a new password to the
+//                                   existing account so they can sign in directly
+//                                   next time. Idempotent — throws if already linked.
+//   hasPasswordProvider           — helper: true if currentUser.providerData includes
+//                                   a 'password' provider. Used by MyProfile to
+//                                   decide whether to show "Change password" or
+//                                   "Set password / Set login password".
 //   logout                        — sign out
 
 import { useEffect, useState } from 'react';
@@ -25,12 +38,14 @@ import {
   isSignInWithEmailLink,
   linkWithCredential,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   signInAnonymously,
   signInWithEmailAndPassword,
   signInWithEmailLink,
   signInWithPopup,
   signInWithCustomToken,
   signOut,
+  updatePassword,
 } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '../lib/firebase';
@@ -343,6 +358,62 @@ export function useAuth() {
     return result.user;
   };
 
+  // 2026-07-30 — changePassword for users with an existing password provider.
+  // Re-authenticates with the current password (Firebase requires recent
+  // login for sensitive ops like updatePassword), then updates to the new
+  // password. The re-auth step is what makes this safe — without it, a
+  // stolen session token from a public terminal could change the password.
+  //
+  // Throws Firebase AuthError codes the caller can map to user-friendly
+  // Chinese:
+  //   auth/wrong-password              — current password is wrong
+  //   auth/weak-password               — new password too weak (we pre-validate)
+  //   auth/requires-recent-login       — session too old, ask user to re-login
+  //   auth/network-request-failed      — offline
+  const changePassword = async (currentPassword, newPassword) => {
+    const u = auth.currentUser;
+    if (!u) throw new Error('Not signed in.');
+    if (!u.email) throw new Error('No email on this account.');
+    if (!hasPasswordProvider(u)) {
+      throw new Error('This account has no password — use linkPassword instead.');
+    }
+    // Re-auth (requires recent login)
+    const credential = EmailAuthProvider.credential(u.email, currentPassword);
+    await reauthenticateWithCredential(u, credential);
+    // Update password
+    await updatePassword(u, newPassword);
+    return u; // password may be stale; caller should refetch if needed
+  };
+
+  // 2026-07-30 — linkPassword for Google-only users. Adds a password
+  // provider to the existing account so they can sign in directly next
+  // time (without going through Google). Uses the same linkWithCredential
+  // path as linkAnonymousWithEmail but works for any non-anonymous user
+  // who doesn't already have a password provider.
+  //
+  // Throws if the user already has a password provider, or if the email
+  // is already taken by a different account.
+  const linkPassword = async (newPassword) => {
+    const u = auth.currentUser;
+    if (!u) throw new Error('Not signed in.');
+    if (!u.email) throw new Error('No email on this account.');
+    if (hasPasswordProvider(u)) {
+      throw new Error('This account already has a password — use changePassword instead.');
+    }
+    const credential = EmailAuthProvider.credential(u.email, newPassword);
+    const result = await linkWithCredential(u, credential);
+    return result.user;
+  };
+
+  // 2026-07-30 — hasPasswordProvider is a pure helper, not a state
+  // reader. Works on any user object (currentUser or a snapshot from
+  // somewhere else). Exported so MyProfile can decide whether to show
+  // "Change password" (has provider) or "Set login password" (Google-only).
+  const hasPasswordProvider = (u) => {
+    if (!u || !u.providerData) return false;
+    return u.providerData.some((p) => p.providerId === 'password');
+  };
+
   const logout = async () => {
     setAllowAnonymous(false);
     await signOut(auth);
@@ -359,6 +430,9 @@ export function useAuth() {
     registerWithEmail,
     continueAsGuest,
     linkAnonymousWithEmail,
+    changePassword,
+    linkPassword,
+    hasPasswordProvider,
     logout,
   };
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
 import {
   Heart,
   Mail,
@@ -24,7 +25,7 @@ const STRINGS = {
     googleCta: '使用 Google 帳號登入',
     emailPlaceholder: '電郵地址',
     passwordPlaceholder: '密碼',
-    passwordSignupPlaceholder: '設定密碼 (至少 8 字元)',
+    passwordSignupPlaceholder: '設定密碼 (至少 8 字元，至少 3 種字元)',
     emailCta: '📧 電郵登入',
     emailSignupCta: '✨ 建立帳號',
     switchToSignup: '還未有帳號？',
@@ -46,7 +47,7 @@ const STRINGS = {
     audienceVendor: '商戶',
     busyLabel: '處理中...',
     errEmpty: '請填寫電郵及密碼',
-    errPasswordShort: '密碼至少需要 8 個字元',
+    errPasswordRules: '密碼強度不足：請檢查下方規則',
     errWrongCreds: '電郵或密碼錯誤',
     errEmailInUse: '此電郵已被註冊，請改用登入模式',
     errWeakPassword: '密碼強度不足, 請用 8 個字元以上',
@@ -61,7 +62,7 @@ const STRINGS = {
     googleCta: 'Sign in with Google',
     emailPlaceholder: 'Email address',
     passwordPlaceholder: 'Password',
-    passwordSignupPlaceholder: 'Choose a password (min 8 chars)',
+    passwordSignupPlaceholder: 'Min 8 chars, 3 of 4 categories',
     emailCta: '📧 Email sign-in',
     emailSignupCta: '✨ Create account',
     switchToSignup: "Don't have an account?",
@@ -83,7 +84,7 @@ const STRINGS = {
     audienceVendor: 'Vendors',
     busyLabel: 'Working...',
     errEmpty: 'Please enter email and password',
-    errPasswordShort: 'Password must be at least 8 characters',
+    errPasswordRules: 'Password does not meet the rules below',
     errWrongCreds: 'Wrong email or password',
     errEmailInUse: 'This email is already registered. Try signing in instead.',
     errWeakPassword: 'Password too weak — use 8+ characters',
@@ -120,6 +121,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
   const [mode, setMode] = useState(defaultMode || 'signin'); // 'signin' | 'signup'
   const [email, setEmail] = useState(defaultEmail || '');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -140,9 +142,16 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
       setError(t.errEmpty);
       return;
     }
-    if (mode === 'signup' && password.length < 8) {
-      setError(t.errPasswordShort);
-      return;
+    if (mode === 'signup') {
+      const evalPwd = evaluatePassword(password, email);
+      if (!evalPwd.isValid) {
+        setError(t.errPasswordRules);
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError(lang === 'zh' ? '兩次輸入嘅密碼唔一致' : 'Passwords do not match');
+        return;
+      }
     }
     setBusy(true);
     try {
@@ -184,6 +193,8 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
   const switchMode = (newMode) => {
     setMode(newMode);
     setError(null);
+    setPassword('');
+    setConfirmPassword('');
   };
 
   // 2026-07-14 — 'I'm a Vendor' CTA. Now delegates to App.jsx which
@@ -321,10 +332,64 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={busy}
-                minLength={mode === 'signup' ? 8 : undefined}
                 className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-rose-400 focus:border-rose-400 disabled:opacity-50"
               />
             </div>
+
+            {/* 2026-07-30 — Signup-only: confirm password + live complexity
+                checklist. Industry-standard "type twice" pattern prevents
+                typos at signup; the inline rule checklist replaces the
+                old minLength=8 hint that 'password' slipped past. */}
+            {mode === 'signup' && (
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="password"
+                  required
+                  autoComplete="new-password"
+                  placeholder={lang === 'zh' ? '再次輸入密碼' : 'Confirm password'}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  disabled={busy}
+                  className={`w-full pl-11 pr-4 py-3 bg-slate-50 border rounded-xl text-sm outline-none focus:ring-2 disabled:opacity-50 ${
+                    confirmPassword && confirmPassword === password
+                      ? 'border-emerald-300 focus:ring-emerald-400 focus:border-emerald-400'
+                      : confirmPassword && confirmPassword !== password
+                      ? 'border-rose-300 focus:ring-rose-400 focus:border-rose-400'
+                      : 'border-slate-200 focus:ring-rose-400 focus:border-rose-400'
+                  }`}
+                />
+                {confirmPassword && (
+                  <span className={`absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold ${
+                    confirmPassword === password ? 'text-emerald-600' : 'text-rose-500'
+                  }`}>
+                    {confirmPassword === password
+                      ? (lang === 'zh' ? '✓ 一致' : '✓ Match')
+                      : (lang === 'zh' ? '✗ 唔一致' : '✗ No match')}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {mode === 'signup' && password && (
+              <ul className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-left space-y-1">
+                {PASSWORD_RULES.map((rule) => {
+                  const evalPwd = evaluatePassword(password, email);
+                  const ok = evalPwd.checks[rule.key];
+                  return (
+                    <li
+                      key={rule.key}
+                      className={`text-[11px] flex items-start gap-1.5 ${
+                        ok ? 'text-emerald-700' : 'text-slate-500'
+                      }`}
+                    >
+                      <span className="flex-shrink-0 font-bold">{ok ? '✓' : '○'}</span>
+                      <span>{lang === 'zh' ? rule.label_zh : rule.label_en}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
 
             {error && (
               <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold px-3 py-2 rounded-lg text-left">
