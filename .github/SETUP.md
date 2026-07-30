@@ -103,6 +103,3 @@ If `firebase emulators:exec` fails with `Process java -version has
 exited with code 1`, the JDK is missing or not on `PATH`. CI runs
 the same check on Linux where Java is preinstalled, so this is a
 local-only gotcha.
-## FIREBASE_TOKEN deploy gate (2026-07-30)
-
-The CI workflow now hard-fails when this secret is missing — see `ci.yml` for details. To deliberately skip one run, set the secret value to the literal `SKIP`.
