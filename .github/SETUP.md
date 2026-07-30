@@ -103,3 +103,23 @@ If `firebase emulators:exec` fails with `Process java -version has
 exited with code 1`, the JDK is missing or not on `PATH`. CI runs
 the same check on Linux where Java is preinstalled, so this is a
 local-only gotcha.
+## FIREBASE_TOKEN deploy gate (2026-07-30)
+
+The CI `deploy-functions` step now **hard-fails** when this secret is missing —
+previously it silently `exit 0` with a warning, which hid a real production
+bug where PR fixes landed but the Cloud Function binary never deployed.
+
+To deliberately skip the deploy for one run (e.g. after a manual CLI deploy
+already happened, or for a docs-only PR), set the secret value to the
+literal string `SKIP` and the step will exit `0` with a `::notice::`.
+
+The matching workflow change lives on `fix/ci-loud-fail-deploy` (local only
+at time of writing — needs a workflow-scope PAT to push). Once it lands,
+a merge to main without `FIREBASE_TOKEN` configured will turn CI red and
+fail the merge.
+
+### Manual deploy fallback
+
+If `FIREBASE_TOKEN` is unset but you need the Cloud Functions to ship,
+`scripts/deploy-functions.sh` does the equivalent deploy from your laptop
+using the `firebase-adminsdk-fbsvc@…` SA + a gcloud-minted token.
