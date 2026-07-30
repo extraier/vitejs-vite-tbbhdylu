@@ -123,8 +123,22 @@ export function PickExistingVendor({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-3xl max-w-4xl w-full shadow-2xl animate-in slide-in-from-bottom-4 duration-200 max-h-[90vh] flex flex-col"
+        className="bg-white rounded-t-3xl sm:rounded-3xl max-w-4xl w-full shadow-2xl animate-in slide-in-from-bottom-4 duration-200 max-h-[90dvh] sm:max-h-[90vh] flex flex-col mt-auto sm:my-auto sm:mt-0"
       >
+        {/* 2026-07-30 — mobile-height fix on this modal:
+              1. max-h-[90vh] -> max-h-[90dvh] so the modal uses the
+                 dynamic viewport height (iOS Safari URL bar
+                 collapses, dvh recomputes).
+              2. Mobile shape: rounded-top only + mt-auto so the
+                 bottom edge sits at the bottom of the viewport;
+                 the inner grid scrolls inside.
+              3. pb-[env(safe-area-inset-bottom)] on the grid
+                 (below) adds a safe-area gutter so the last vendor
+                 cards aren't hidden behind the iPhone home
+                 indicator.
+              4. [-webkit-overflow-scrolling:touch] on the grid
+                 enables iOS Safari momentum scrolling inside the
+                 flex-1 container. */}
         {/* Header */}
         <div className="p-5 border-b border-slate-200 flex justify-between items-center flex-shrink-0">
           <h3 className="font-black text-slate-800 flex items-center gap-2 text-lg">
@@ -139,15 +153,16 @@ export function PickExistingVendor({
         </div>
 
         {/* 2026-07-22 — TrendingVendors strip at the top of the modal.
-            Acts as a "people also viewed" affordance — couples
-            browsing the catalog by category can see what's currently
-            hot without having to leave the picker. We only render
-            this when the parent passes catalog + handlers (i.e.
-            we're being used from the MyVendorsPanel flow inside a
-            wedding project). On the dropdown-only browse mode, we
-            skip it to keep the modal compact. */}
+            Acts as a "people also viewed" affordance.
+
+            2026-07-30 — hidden on mobile (sm:hidden on the strip).
+            Trending strip + 2 dropdowns + 24-vendor grid + footer
+            overflow the iOS Safari bottom toolbar even with
+            max-h-[90dvh]. Couples can still browse the full
+            catalog via the dropdowns, and the trending strip is
+            already visible on the dashboard below the join CTA. */}
         {catalog.length > 0 && onSelectVendor && (
-          <div className="border-b border-slate-100 bg-gradient-to-b from-rose-50/40 to-transparent flex-shrink-0">
+          <div className="hidden sm:block border-b border-slate-100 bg-gradient-to-b from-rose-50/40 to-transparent flex-shrink-0">
             <TrendingVendors
               vendors={catalog}
               onSelect={onSelectVendor}
@@ -225,7 +240,13 @@ export function PickExistingVendor({
         </div>
 
         {/* Results grid */}
-        <div className="flex-1 overflow-y-auto p-4">
+        {/* 2026-07-30 — added `-webkit-overflow-scrolling:touch` so
+            iOS Safari uses momentum scrolling inside the flex-1
+            container, and `pb-[env(safe-area-inset-bottom)]` so the
+            last row of vendor cards isn't hidden behind the iPhone
+            home indicator. `overscroll-contain` prevents scroll
+            bleed-through to the page underneath. */}
+        <div className="flex-1 overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] [-webkit-overflow-scrolling:touch] overscroll-contain">
           {loading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="w-6 h-6 text-emerald-500 animate-spin" />
