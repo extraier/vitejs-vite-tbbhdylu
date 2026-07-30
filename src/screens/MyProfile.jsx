@@ -26,7 +26,7 @@
 // pills.
 
 import { useState } from 'react';
-import { ChevronLeft, Crown, Copy, Check, LogOut, User as UserIcon, AlertCircle, ShieldCheck } from 'lucide-react';
+import { ChevronLeft, Crown, Copy, Check, LogOut, User as UserIcon, AlertCircle, ShieldCheck, KeyRound, ChevronRight } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useUserProfile } from '../hooks/useUserProfile';
 
@@ -42,9 +42,9 @@ const UNLOCK_LABELS = {
   'permanent-archive': '永久保存婚禮檔案',
 };
 
-export function MyProfile({ currentUser, onBack, onUpgrade }) {
-  const { logout } = useAuth();
-  const { tier, unlocks, createdAt, promotedAt, loading } = useUserProfile(currentUser);
+export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword }) {
+  const { logout, hasPasswordProvider } = useAuth();
+  const { tier, unlocks, createdAt, promotedAt, referralCode, loading } = useUserProfile(currentUser);
   const [copied, setCopied] = useState(null);
 
   const handleCopy = async (value, key) => {
@@ -163,22 +163,53 @@ export function MyProfile({ currentUser, onBack, onUpgrade }) {
           />
           <MetadataRow
             label="推薦碼"
-            value={currentUser.uid ? '點擊複製' : '（載入中）'}
-            // We don't have the referralCode on the Firebase Auth user
-            // object — it lives on the user doc. We could pull it from
-            // useUserProfile, but for v1 we just show the user's UID
-            // here as a stable identifier; the "view your referral
-            // code" link is in the lobby's existing RewardsBanner.
-            //
-            // Why not show the referralCode here? It would require
-            // adding another field to useUserProfile. Phase 2 wired
-            // the referralCode display into RewardsBanner only.
-            // Adding it here is a small future improvement.
-            onCopy={() => handleCopy(currentUser.uid, 'referral')}
+            // 2026-07-30 — show real referralCode (e.g. "STD-A4X7K")
+            // from useUserProfile. The Cloud Function referralCodes.
+            // onUserCreate mints this on every fresh signup. Still
+            // copyable so users can share it; the existing
+            // ReferralModal share UI is the primary share path.
+            value={referralCode || '（載入中）'}
+            onCopy={referralCode ? () => handleCopy(referralCode, 'referral') : undefined}
             copied={copied === 'referral'}
-            copyLabel="複製 UID"
+            copyLabel={referralCode ? '複製邀請碼' : undefined}
             muted
           />
+        </div>
+      </section>
+
+      {/* 2026-07-30 — Security section. Houses password management.
+          Single tile that adapts:
+            - user has password provider → "更換密碼" (mode='change')
+            - user is Google-only          → "設定登入密碼" (mode='set')
+          Email verification badge also lives here (resend button is
+          a follow-up; just shows the verified status for now). */}
+      <section className="mb-4">
+        <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">
+          賬號安全
+        </h2>
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          <button
+            type="button"
+            onClick={() => onChangePassword?.(hasPasswordProvider(currentUser) ? 'change' : 'set')}
+            className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50 transition-colors text-left"
+          >
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="w-9 h-9 rounded-xl bg-rose-50 flex items-center justify-center flex-shrink-0">
+                <KeyRound className="w-4 h-4 text-rose-500" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800">
+                  {hasPasswordProvider(currentUser) ? '更換密碼' : '設定登入密碼'}
+                </p>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {hasPasswordProvider(currentUser)
+                    ? '已啟用電郵 + 密碼登入'
+                    : '現時只可以用 Google 登入'}
+                </p>
+              </div>
+            </div>
+            <ChevronRight className="w-4 h-4 text-slate-400 flex-shrink-0" />
+          </button>
         </div>
       </section>
 
