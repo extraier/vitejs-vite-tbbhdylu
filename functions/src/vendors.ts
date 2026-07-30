@@ -415,11 +415,20 @@ export const autoLinkVendorContactsV2 = onCall(
 
     let totalLinked = 0;
     let totalBackfilled = 0;
-    const ownersTouched = grouped.size;
+    let ownersTouched = 0;
 
     // 3. For each owner, build one batch: contact-link + task back-fill.
+    // Tasks are event-scoped in the current data model, so do not query the
+    // retired /users/{ownerUid}/tasks path. Enumerate this owner's events
+    // first, then query each event's tasks collection. These are ordinary
+    // collection queries and do not require another collection-group index.
     for (const [ownerUid, contacts] of grouped) {
+      const eventsSnap = await db
+        .collection(`artifacts/${APP_ID}/users/${ownerUid}/events`)
+        .get();
       const batch = db.batch();
+      let ownerLinked = 0;
+      let ownerBackfilled = 0;
 
       for (const c of contacts) {
         batch.update(c.ref, {
@@ -427,40 +436,38 @@ export const autoLinkVendorContactsV2 = onCall(
           invitationAccepted: true,
           linkedAt: FieldValue.serverTimestamp(),
         });
-        totalLinked++;
-      }
+        ownerLinked++;
 
-      // Back-fill tasks in this owner's /tasks/ for each contact.
-      for (const c of contacts) {
-        const tasksSnap = await db
-          .collection(`artifacts/savetheday-production/users/${ownerUid}/tasks`)
-          .where('assignedContactId', '==', c.id)
-          .get();
-        for (const t of tasksSnap.docs) {
-          if (t.data().assignedVendorUid) continue; // preserve manual
-          batch.update(t.ref, {
-            assignedVendorUid: authUid,
-            assignedVendorName:
-              t.data().assignedVendorName || c.data().vendorName || '',
-          });
-          totalBackfilled++;
+        for (const eventDoc of eventsSnap.docs) {
+          const tasksSnap = await db
+            .collection(
+              `artifacts/${APP_ID}/users/${ownerUid}/events/${eventDoc.id}/tasks`,
+            )
+            .where('assignedContactId', '==', c.id)
+            .get();
+          for (const t of tasksSnap.docs) {
+            if (t.data().assignedVendorUid) continue; // preserve manual
+            batch.update(t.ref, {
+              assignedVendorUid: authUid,
+              assignedVendorName:
+                t.data().assignedVendorName || c.data().vendorName || '',
+            });
+            ownerBackfilled++;
+          }
         }
       }
 
       try {
         await batch.commit();
+        totalLinked += ownerLinked;
+        totalBackfilled += ownerBackfilled;
+        ownersTouched++;
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error(
           `[autoLinkVendorContacts] owner ${ownerUid} batch failed:`,
           (err as Error)?.message,
         );
-        // Roll back the running counters for this owner so the
-        // returned numbers reflect what actually committed.
-        totalLinked -= contacts.length;
-        // Best-effort rollback of partial state isn't safe (we don't
-        // know which contacts in the batch were already updated), so
-        // we just report the partial state below.
       }
     }
 

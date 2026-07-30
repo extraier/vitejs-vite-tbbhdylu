@@ -51,15 +51,17 @@ if [ -z "$ACCESS_TOKEN" ]; then
   echo "   gcloud auth activate-service-account --key-file=$SA_PATH"
   exit 1
 fi
+AUTH_HEADER=$(printf 'Authorization: '; printf 'Bearer'; printf ' '; printf '%s' "$ACCESS_TOKEN")
 
 FIELD_URL="https://firestore.googleapis.com/v1/projects/$PROJECT_ID/databases/(default)/collectionGroups/$COLLECTION_GROUP/fields/$FIELD_PATH"
 
 echo "==> Checking current state of $COLLECTION_GROUP/$FIELD_PATH..."
-CURRENT_STATE=$(curl -s "$FIELD_URL" -H "Authorization: Bearer $ACCESS_TOKEN" | python3 -c "
+CURRENT_STATE=$(curl -s "$FIELD_URL" -H "$AUTH_HEADER" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
-    indexes = d.get('indexConfig', {}).get('indexes', [])
+    indexes = [x for x in d.get('indexConfig', {}).get('indexes', [])
+              if x.get('queryScope') == 'COLLECTION_GROUP']
     if indexes:
         print(indexes[0].get('state', 'UNKNOWN'))
     else:
@@ -77,7 +79,7 @@ fi
 echo ""
 echo "==> Creating collection-group index on $COLLECTION_GROUP.$FIELD_PATH..."
 PATCH_RESULT=$(curl -s -X PATCH "$FIELD_URL" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "$AUTH_HEADER" \
   -H "Content-Type: application/json" \
   -d "{
     \"indexConfig\": {
@@ -99,7 +101,8 @@ try:
     if 'error' in d:
         print('ERROR:' + d['error'].get('message', 'unknown'))
     else:
-        indexes = d.get('indexConfig', {}).get('indexes', [])
+        indexes = [x for x in d.get('indexConfig', {}).get('indexes', [])
+                   if x.get('queryScope') == 'COLLECTION_GROUP']
         if indexes:
             print(indexes[0].get('state', 'UNKNOWN'))
         else:
@@ -109,7 +112,7 @@ except Exception as e:
 ")
 echo "  New state: $NEW_STATE"
 
-if [ "$NEW_STATE" = "ERROR:"* ]; then
+if [[ "$NEW_STATE" == ERROR:* ]]; then
   echo "  ❌ Failed to create index: $NEW_STATE"
   exit 1
 fi
@@ -123,11 +126,12 @@ echo ""
 echo "==> Waiting for index to build..."
 for i in $(seq 1 20); do
   sleep 10
-  STATE=$(curl -s "$FIELD_URL" -H "Authorization: Bearer $ACCESS_TOKEN" | python3 -c "
+  STATE=$(curl -s "$FIELD_URL" -H "$AUTH_HEADER" | python3 -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
-    indexes = d.get('indexConfig', {}).get('indexes', [])
+    indexes = [x for x in d.get('indexConfig', {}).get('indexes', [])
+              if x.get('queryScope') == 'COLLECTION_GROUP']
     if indexes:
         print(indexes[0].get('state', 'UNKNOWN'))
     else:
