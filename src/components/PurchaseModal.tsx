@@ -41,7 +41,14 @@ interface PurchaseModalProps {
   onClose: () => void;
   ownerUid: string;
   onSuccess: () => void;
-  lockedTypes: UnlockType[];
+  // 2026-07-30 — lockedTypes is optional. The hooks below read
+  // `.length` on first render, so an undefined value crashes the
+  // whole React tree even when `isOpen === false` (the conditional
+  // `return null` happens AFTER the useState lines). Defaulting to
+  // `[]` makes the modal safely no-op when no caller wires it up,
+  // and the default `choice` falls through to 'premium' which is
+  // what every existing call site wants anyway.
+  lockedTypes?: UnlockType[];
 }
 
 async function uploadPaymentReceiptHelper(
@@ -55,7 +62,7 @@ async function uploadPaymentReceiptHelper(
   return await getDownloadURL(storageRef);
 }
 
-export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedTypes }: PurchaseModalProps) {
+export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedTypes = [] }: PurchaseModalProps) {
   const [choice, setChoice] = useState<UnlockChoice>(
     lockedTypes.length === 3 ? 'premium' : (lockedTypes[0] ?? 'premium'),
   );
