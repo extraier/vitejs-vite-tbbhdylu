@@ -21,7 +21,7 @@ import {
 const STRINGS = {
   zh: {
     tagline:
-      '全港創新一站式婚禮管理平台。 Save your big day with endless vendor choices. Save your big day with timeless memories.',
+      '婚禮一站式管理：實時 QR Code 入席、賓客相片收集箱、預算管理。新人、兄弟姊妹、商戶通用平台。',
     googleCta: '使用 Google 帳號登入',
     emailPlaceholder: '電郵地址',
     passwordPlaceholder: '密碼',
@@ -58,7 +58,7 @@ const STRINGS = {
   },
   en: {
     tagline:
-      "Hong Kong's first all-in-one wedding SaaS with live QR check-in, a shared photo drop, and budget tracking.",
+      "Save The Day — the bilingual one-stop wedding platform. Live QR check-in, shared photo drop, and budget tracking for couples, helpers, and vendors.",
     googleCta: 'Sign in with Google',
     emailPlaceholder: 'Email address',
     passwordPlaceholder: 'Password',
@@ -272,8 +272,17 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           <h1 className="text-4xl font-black text-slate-800 tracking-wider mb-2">
             Save The Day
           </h1>
-          <p className="text-sm font-bold text-slate-500 tracking-widest uppercase mb-6">
-            Hong Kong Wedding Platform
+          {/* 2026-07-31 — Brand subtitle ("Save The Day ·
+              婚禮一站式管理"). Hidden on mobile (hidden sm:block)
+              since the login card already packs four pieces of
+              hierarchy (heart + title + tagline + form) and the
+              marketing subtitle crowds it on small screens. The
+              footer copyright at the bottom of the page carries
+              the same brand line on all viewports, so users on
+              mobile still see the brand subtitle — just at the
+              bottom where there's room. */}
+          <p className="hidden sm:block text-sm font-bold text-slate-500 tracking-widest uppercase mb-6">
+            Save The Day · 婚禮一站式管理
           </p>
           <p className="text-slate-500 mb-6 text-sm leading-relaxed">{t.tagline}</p>
 
@@ -570,7 +579,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
         </section>
 
         <p className="text-center text-xs text-slate-400 mt-8">
-          © 2026 Save The Day · Hong Kong Wedding Platform
+          © 2026 Save The Day · 婚禮一站式管理
         </p>
       </div>
     </div>

@@ -2568,6 +2568,18 @@ export default function App() {
                     <span className="hidden sm:inline text-xl font-black text-slate-800 whitespace-nowrap">
                       Save The Day
                     </span>
+                    {/* 2026-07-31 — brand subtitle shown next to the
+                        brand mark on tablet/desktop. Hidden on mobile
+                        to keep the sticky header compact (the icon +
+                        Save The Day brand mark is enough at narrow
+                        widths; the subtitle becomes a second line
+                        below on smaller screens via the flex-col
+                        wrapper, but the `:inline` keeps it on the
+                        same row on sm and up where the header has
+                        space. */}
+                    <span className="hidden md:inline text-xs font-medium text-slate-500 border-l border-slate-200 pl-2 whitespace-nowrap">
+                      婚禮一站式管理
+                    </span>
                     <span className="hidden sm:inline-flex text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded ml-2">
                       主控台
                     </span>
