@@ -961,3 +961,12 @@ export {
 // Pure read of /users/{uid}/socialProofs for the owner; no unlock
 // side effects so it stays co-located with the social-proof callables.
 export { listSocialProofs } from './unlocks';
+
+// 2026-07-31 — Branded Auth verification email. Firebase Auth's
+// default English template is functional but off-brand for our
+// bilingual (HK Cantonese primary) audience. This callable builds the
+// verification link via the Admin SDK, then ships a branded HTML
+// email through SendGrid. Front-end calls this instead of
+// user.sendEmailVerification(). The Firebase-side default template
+// stays as a fallback for anyone using the SDK directly.
+export { sendBrandedVerificationV2 } from './brandedEmail';

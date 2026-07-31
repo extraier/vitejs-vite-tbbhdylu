@@ -80,15 +80,14 @@ export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, sh
   // the "重發驗證信" affordance on the 未驗證電郵 badge.
   // - Disables the button while the request is in flight
   //   (`verifySending`) so accidental double-clicks don't hammer
-  //   Firebase Auth (which has a per-minute rate limit and would
-  //   return auth/too-many-requests on the second click).
+  //   the underlying CF (which rate-limits the SDK link generation).
   // - On success: flips the badge state to "已發送" for ~3 s so the
   //   user has visible confirmation, and shows a toast (handy on
   //   mobile where the badge may be off-screen).
-  // - On `auth/too-many-requests`: shows the Firebase message —
-  //   the SDK's message is already in Chinese-context friendly
-  //   English ("We have blocked all requests from this device due
-  //   to unusual activity. Try again later.") so we surface it as-is.
+  // - On errors: maps CF / SDK error codes to Chinese messages. After
+  //   moving to sendBrandedVerificationV2 the error codes come back
+  //   as `functions/<code>` (the wrapper convention), so we check
+  //   for that prefix as well as the SDK-prefixed codes.
   const handleSendVerification = async () => {
     if (verifySending || verifySent) return;
     setVerifySending(true);
@@ -99,10 +98,22 @@ export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, sh
       showToast?.('已發送驗證信，請檢查收件箱及垃圾郵件夾');
     } catch (e) {
       const code = e?.code || '';
-      if (code === 'auth/too-many-requests') {
+      // CF HttpsError wraps SDK codes in `functions/<code>`. Our CF
+      // explicitly raises `internal` for SendGrid failures, and we
+      // forward the underlying message string in that case.
+      if (
+        code === 'auth/too-many-requests' ||
+        code === 'functions/resource-exhausted'
+      ) {
         showToast?.('嘗試次數太多，請稍後再試');
-      } else if (code === 'auth/email-already-verified') {
+      } else if (
+        code === 'auth/email-already-verified' ||
+        (code === 'functions/failed-precondition' &&
+          /already verified/i.test(e?.message || ''))
+      ) {
         showToast?.('電郵已驗證，重新整理頁面即可');
+      } else if (code === 'functions/failed-precondition') {
+        showToast?.(e?.message || '此帳戶無法發送驗證信');
       } else {
         showToast?.(e?.message || '發送失敗，請稍後再試');
       }

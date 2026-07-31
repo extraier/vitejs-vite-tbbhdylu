@@ -181,21 +181,28 @@ describe('MyProfile', () => {
   });
 
   it('surfaces auth/too-many-requests as a Chinese toast message', async () => {
-    const err = Object.assign(new Error('rate-limit'), { code: 'auth/too-many-requests' });
-    mocks.sendEmailVerification.mockRejectedValueOnce(err);
-    render(
-      <MyProfile
-        currentUser={{ ...baseUser, emailVerified: false }}
-        onBack={() => {}}
-        onUpgrade={() => {}}
-        showToast={mocks.showToast}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: '重新發送驗證電郵' }));
-    expect(
-      await screen.findByText('未驗證電郵 · 重發驗證信'),
-    ).toBeTruthy();
-    expect(mocks.showToast).toHaveBeenCalledWith('嘗試次數太多，請稍後再試');
+    // 2026-07-31 — Cloud Function wrappers prefix errors with
+    // `functions/<code>`. Either prefix should map to the same
+    // user-friendly Chinese message.
+    for (const code of ['auth/too-many-requests', 'functions/resource-exhausted']) {
+      const err = Object.assign(new Error('rate-limit'), { code });
+      mocks.sendEmailVerification.mockRejectedValueOnce(err);
+      render(
+        <MyProfile
+          currentUser={{ ...baseUser, emailVerified: false }}
+          onBack={() => {}}
+          onUpgrade={() => {}}
+          showToast={mocks.showToast}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: '重新發送驗證電郵' }));
+      expect(
+        await screen.findByText('未驗證電郵 · 重發驗證信'),
+      ).toBeTruthy();
+      expect(mocks.showToast).toHaveBeenCalledWith('嘗試次數太多，請稍後再試');
+      cleanup();
+      mocks.showToast.mockClear();
+    }
   });
 
   it('shows 👑 Premium 會員 card when tier=premium', () => {
