@@ -117,6 +117,7 @@ import { HelperWaitingScreen } from './screens/HelperWaitingScreen';
 import { ScanResultModal } from './components/modals/ScanResultModal';
 import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
 import { SignUpPromptModal } from './components/modals/SignUpPromptModal';
+import { ChangePasswordModal } from './components/modals/ChangePasswordModal';
 import { InvitePartnerModal } from './components/modals/InvitePartnerModal';
 
 export default function App() {
@@ -630,6 +631,10 @@ export default function App() {
   // open it. The dashboard still works — it now reads this state
   // as a prop instead of owning it.
   const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
+  // 2026-07-31 — change/set-password modal. MyProfile decides 'change' vs
+  // 'set' based on hasPasswordProvider() and passes the mode in.
+  const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
+  const [changePasswordMode, setChangePasswordMode] = useState('change'); // 'change' | 'set'
   const [showInvitationEditor, setShowInvitationEditor] = useState(false);
   const [editingGuest, setEditingGuest] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -3182,6 +3187,13 @@ export default function App() {
           // Modal closes itself on success.
         }}
       />
+      {changePasswordModalOpen && (
+        <ChangePasswordModal
+          mode={changePasswordMode}
+          onClose={() => setChangePasswordModalOpen(false)}
+          onSuccess={() => setChangePasswordModalOpen(false)}
+        />
+      )}
       <PaymentModal
         isOpen={showPaymentModal}
         onClose={() => setShowPaymentModal(false)}

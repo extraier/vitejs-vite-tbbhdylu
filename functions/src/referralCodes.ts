@@ -105,10 +105,8 @@ export const onUserCreate = beforeUserCreated(
     // create, but TS doesn't know that.
     const userDocRef = userRef(uid);
     const existing = await userDocRef.get();
-    if (existing.exists) {
-      const data = existing.data() || {};
-      if (data.referralCode) return; // already has one
-    }
+    const existingData = existing.exists ? existing.data() || {} : {};
+    if (existingData.referralCode) return; // already has a code; skip the whole flow
 
     // Generate a unique code. With 31^5 = ~28M codes, collisions are
     // negligible for our scale (<100k users), but we still check + retry
@@ -125,10 +123,18 @@ export const onUserCreate = beforeUserCreated(
         .get();
       if (dupes.empty) {
         // Upsert so we handle the "user doc doesn't exist yet" case.
-        await userDocRef.set(
-          { referralCode: code, referralCodeCreatedAt: FieldValue.serverTimestamp() },
-          { merge: true },
-        );
+        // 2026-07-31 — also write createdAt so the profile screen can
+        // display 註冊時間. We only stamp it when the doc has no
+        // existing createdAt; once stamped, never overwrite (signup
+        // date is immutable).
+        const update: Record<string, unknown> = {
+          referralCode: code,
+          referralCodeCreatedAt: FieldValue.serverTimestamp(),
+        };
+        if (!existingData.createdAt) {
+          update.createdAt = FieldValue.serverTimestamp();
+        }
+        await userDocRef.set(update, { merge: true });
         return;
       }
     }
