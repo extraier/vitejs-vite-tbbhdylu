@@ -42,10 +42,12 @@ const UNLOCK_LABELS = {
   'permanent-archive': '永久保存婚禮檔案',
 };
 
-export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword }) {
-  const { logout, hasPasswordProvider } = useAuth();
+export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, showToast }) {
+  const { logout, hasPasswordProvider, sendEmailVerification } = useAuth();
   const { tier, unlocks, createdAt, promotedAt, referralCode, loading } = useUserProfile(currentUser);
   const [copied, setCopied] = useState(null);
+  const [verifySending, setVerifySending] = useState(false);
+  const [verifySent, setVerifySent] = useState(false);
 
   const handleCopy = async (value, key) => {
     try {
@@ -71,6 +73,41 @@ export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword }) 
   const handleLogout = () => {
     if (window.confirm('確定要登出？登出後你仍可再次登入。')) {
       logout();
+    }
+  };
+
+  // 2026-07-31 — resend verification email. Triggered by clicking
+  // the "重發驗證信" affordance on the 未驗證電郵 badge.
+  // - Disables the button while the request is in flight
+  //   (`verifySending`) so accidental double-clicks don't hammer
+  //   Firebase Auth (which has a per-minute rate limit and would
+  //   return auth/too-many-requests on the second click).
+  // - On success: flips the badge state to "已發送" for ~3 s so the
+  //   user has visible confirmation, and shows a toast (handy on
+  //   mobile where the badge may be off-screen).
+  // - On `auth/too-many-requests`: shows the Firebase message —
+  //   the SDK's message is already in Chinese-context friendly
+  //   English ("We have blocked all requests from this device due
+  //   to unusual activity. Try again later.") so we surface it as-is.
+  const handleSendVerification = async () => {
+    if (verifySending || verifySent) return;
+    setVerifySending(true);
+    try {
+      await sendEmailVerification();
+      setVerifySent(true);
+      setTimeout(() => setVerifySent(false), 3000);
+      showToast?.('已發送驗證信，請檢查收件箱及垃圾郵件夾');
+    } catch (e) {
+      const code = e?.code || '';
+      if (code === 'auth/too-many-requests') {
+        showToast?.('嘗試次數太多，請稍後再試');
+      } else if (code === 'auth/email-already-verified') {
+        showToast?.('電郵已驗證，重新整理頁面即可');
+      } else {
+        showToast?.(e?.message || '發送失敗，請稍後再試');
+      }
+    } finally {
+      setVerifySending(false);
     }
   };
 
@@ -112,10 +149,26 @@ export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword }) 
                   已驗證電郵
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                // 2026-07-31 — turn the badge into a call-to-action.
+                // Clicking the resend button triggers Firebase Auth's
+                // sendEmailVerification() through useAuth. We deliberately
+                // use <button type="button"> inside a non-form context
+                // so accidental Enter-presses elsewhere on the screen
+                // don't fire it.
+                <button
+                  type="button"
+                  onClick={handleSendVerification}
+                  disabled={verifySending || verifySent}
+                  className="inline-flex items-center gap-1 text-xs font-bold text-amber-700 bg-amber-50 hover:bg-amber-100 active:bg-amber-200 px-2 py-0.5 rounded-full border border-amber-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                  aria-label="重新發送驗證電郵"
+                >
                   <AlertCircle className="w-3 h-3" />
-                  未驗證電郵
-                </span>
+                  {verifySending
+                    ? '發送中…'
+                    : verifySent
+                    ? '已發送 ✓'
+                    : '未驗證電郵 · 重發驗證信'}
+                </button>
               )}
             </div>
           </div>

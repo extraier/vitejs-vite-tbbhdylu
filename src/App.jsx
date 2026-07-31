@@ -2770,6 +2770,10 @@ export default function App() {
                   setChangePasswordMode(mode);
                   setChangePasswordModalOpen(true);
                 }}
+                // 2026-07-31 — showToast for the "已發送驗證信" /
+                // "嘗試次數太多" / "發送失敗" messages. Same prop
+                // pattern as CoupleChecklist.
+                showToast={showToast}
               />
             )}
 

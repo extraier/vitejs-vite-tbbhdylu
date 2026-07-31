@@ -419,6 +419,43 @@ export function useAuth() {
     await signOut(auth);
   };
 
+  // 2026-07-31 — send a Firebase Auth verification email to the current
+  // user. Uses the client SDK directly (no Cloud Function needed):
+  // Firebase's email-verification flow is server-driven — the SDK asks
+  // Identity Platform to mail a link that lands the user back at our
+  // configured `actionCodeSettings.url` (the SPA root) with the
+  // verification action applied.
+  //
+  // Throws if:
+  //   - user is null (not signed in)
+  //   - the user's email is already verified
+  //     (Firebase Auth rejects the call with auth/email-already-verified)
+  //   - too many requests have been sent recently
+  //     (auth/too-many-requests → user should wait a few minutes)
+  //
+  // Returns: void. The caller is responsible for UI feedback.
+  const sendEmailVerification = async () => {
+    const u = auth.currentUser;
+    if (!u) {
+      throw new Error('Not signed in');
+    }
+    if (u.emailVerified) {
+      throw new Error('Email is already verified');
+    }
+    // actionCodeSettings.url is where the user lands after clicking the
+    // link in the verification email. We send them back to the SPA
+    // root; the URL doesn't render any special UI (Firebase Auth applies
+    // the verification server-side then redirects), so a plain "/"
+    // destination works regardless of route.
+    const actionCodeSettings = {
+      url: typeof window !== 'undefined'
+        ? `${window.location.origin}/`
+        : 'https://savetheday.io/',
+      handleCodeInApp: false,
+    };
+    await u.sendEmailVerification(actionCodeSettings);
+  };
+
   return {
     user,
     authChecked,
@@ -433,6 +470,7 @@ export function useAuth() {
     changePassword,
     linkPassword,
     hasPasswordProvider,
+    sendEmailVerification,
     logout,
   };
 }

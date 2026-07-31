@@ -24,13 +24,15 @@
 //     doesn't throw)
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => {
   return {
     logout: vi.fn(async () => {}),
     hasPasswordProvider: vi.fn(() => true),
     onChangePassword: vi.fn(),
+    sendEmailVerification: vi.fn(async () => {}),
+    showToast: vi.fn(),
   };
 });
 
@@ -38,6 +40,7 @@ vi.mock('../hooks/useAuth', () => ({
   useAuth: () => ({
     logout: mocks.logout,
     hasPasswordProvider: mocks.hasPasswordProvider,
+    sendEmailVerification: mocks.sendEmailVerification,
   }),
 }));
 
@@ -67,6 +70,8 @@ beforeEach(() => {
   mocks.logout.mockClear();
   mocks.hasPasswordProvider.mockClear();
   mocks.onChangePassword.mockClear();
+  mocks.sendEmailVerification.mockClear();
+  mocks.showToast.mockClear();
   mocks.hasPasswordProvider.mockReturnValue(true);
   // Default to a loaded, free-tier user with a referral code set.
   // Individual tests override.
@@ -117,7 +122,80 @@ describe('MyProfile', () => {
         onUpgrade={() => {}}
       />,
     );
-    expect(screen.getByText('未驗證電郵')).toBeTruthy();
+    // 2026-07-31 — badge is now a button. aria-label is the most
+    // stable string to assert against (won't change across i18n).
+    expect(screen.getByRole('button', { name: '重新發送驗證電郵' })).toBeTruthy();
+  });
+
+  it('clicking the 未驗證電郵 badge sends a verification email and shows 已發送 ✓', async () => {
+    mocks.sendEmailVerification.mockResolvedValueOnce(undefined);
+    render(
+      <MyProfile
+        currentUser={{ ...baseUser, emailVerified: false }}
+        onBack={() => {}}
+        onUpgrade={() => {}}
+        showToast={mocks.showToast}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '重新發送驗證電郵' }));
+
+    // 2026-07-31 — waitFor() is the React Testing Library idiom for
+    // asserting on async-settled state. fireEvent.click is sync, but
+    // sendEmailVerification() is async, and the handler's setTimeout
+    // for the 3-second "已發送 ✓" flip requires the React commit
+    // queue to drain.
+    await waitFor(() => {
+      expect(mocks.sendEmailVerification).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.showToast).toHaveBeenCalledWith(
+      '已發送驗證信，請檢查收件箱及垃圾郵件夾',
+    );
+    expect(await screen.findByText('已發送 ✓')).toBeTruthy();
+  });
+
+  it('keeps the button disabled during in-flight request (no double-send)', async () => {
+    // Slow resolve so we can observe the disabled state.
+    let resolveSlowSend;
+    mocks.sendEmailVerification.mockReturnValueOnce(
+      new Promise((resolve) => { resolveSlowSend = resolve; }),
+    );
+    render(
+      <MyProfile
+        currentUser={{ ...baseUser, emailVerified: false }}
+        onBack={() => {}}
+        onUpgrade={() => {}}
+        showToast={mocks.showToast}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '重新發送驗證電郵' }));
+
+    // While in-flight the button text is 發送中…, and it must be
+    // disabled to prevent double-clicks from hammering the API.
+    const inFlight = screen.getByRole('button', { name: /發送/ });
+    expect(inFlight.disabled).toBe(true);
+
+    // Resolve the in-flight call and let React commit.
+    resolveSlowSend(undefined);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  it('surfaces auth/too-many-requests as a Chinese toast message', async () => {
+    const err = Object.assign(new Error('rate-limit'), { code: 'auth/too-many-requests' });
+    mocks.sendEmailVerification.mockRejectedValueOnce(err);
+    render(
+      <MyProfile
+        currentUser={{ ...baseUser, emailVerified: false }}
+        onBack={() => {}}
+        onUpgrade={() => {}}
+        showToast={mocks.showToast}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '重新發送驗證電郵' }));
+    expect(
+      await screen.findByText('未驗證電郵 · 重發驗證信'),
+    ).toBeTruthy();
+    expect(mocks.showToast).toHaveBeenCalledWith('嘗試次數太多，請稍後再試');
   });
 
   it('shows 👑 Premium 會員 card when tier=premium', () => {
