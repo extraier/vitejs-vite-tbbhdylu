@@ -58,7 +58,7 @@ const STRINGS = {
   },
   en: {
     tagline:
-      "Save The Day — the bilingual one-stop wedding platform. Live QR check-in, shared photo drop, and budget tracking for couples, helpers, and vendors.",
+      "One bilingual (中文 + English) wedding platform for Hong Kong and Taiwan. Live QR check-in, photo drop, and budget tracking for couples, helpers, and vendors.",
     googleCta: 'Sign in with Google',
     emailPlaceholder: 'Email address',
     passwordPlaceholder: 'Password',
