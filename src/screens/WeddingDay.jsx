@@ -89,6 +89,60 @@ function SubTabBar({ active, onChange }) {
 // Tab 1 — RUNDOWN  (大日流程 / 司儀稿)
 // =========================================================================
 
+// 2026-07-31 — Time-arithmetic helpers for the rundown editor. Previously
+// the editor stored `startTime` + `durationMin` and rendered
+// `5:30 AM / +30分`. The new editor surfaces both `startTime` and
+// `endTime` as independent `<input type="time">` pickers, so brides see
+// `5:30 AM → 6:00 AM` instead of doing the math themselves. Storage
+// still keeps `durationMin` so existing entries render correctly
+// without data migration.
+//
+// All three helpers are tolerant of malformed inputs:
+//   - `parseHHMMToMinutes` returns null on bad input
+//   - `addMinutesToHHMM` clamps to the 24:00 hour (allows e.g.
+//     23:45 + 30 = 24:15, which we display as the next day)
+//   - `computeEndHHMM` derives end from start + duration, returning
+//     the original start string if either is invalid so the
+//     caller can still render without throwing.
+
+function parseHHMMToMinutes(s) {
+  if (typeof s !== 'string') return null;
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (h < 0 || h > 24 || min < 0 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function addMinutesToHHMM(startHHMM, addMin) {
+  const base = parseHHMMToMinutes(startHHMM);
+  const delta = Number.isFinite(addMin) ? addMin : 0;
+  if (base === null) return startHHMM || '';
+  const total = base + delta;
+  // Wrap past 24h. Most wedding timelines stay under 24 hours so
+  // this is cosmetic, but it avoids NaN if someone adds > 24h.
+  const wrapped = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
+  const hh = Math.floor(wrapped / 60);
+  const mm = wrapped % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function computeEndHHMM(startHHMM, durationMin) {
+  if (!startHHMM) return '';
+  return addMinutesToHHMM(startHHMM, durationMin || 0);
+}
+
+function computeMinutesBetween(startHHMM, endHHMM) {
+  const a = parseHHMMToMinutes(startHHMM);
+  const b = parseHHMMToMinutes(endHHMM);
+  if (a === null || b === null) return 30;
+  // If end is before start (rare — couples crossing midnight), treat
+  // the entry as crossing midnight and add a full day to end.
+  const diff = b >= a ? b - a : b + 24 * 60 - a;
+  return Math.max(5, Math.min(diff, 24 * 60));
+}
+
 const RUNDOWN_GROUP_LABELS = {
   prep: '準備 / 化妝',
   travel: '出門 / 車隊',
@@ -523,6 +577,17 @@ function RundownCard({
     assignedHelpers: entry.assignedHelpers || [],
   });
 
+  // 2026-07-31 — Derive an end-time picker from the existing
+  // `durationMin` so the editor reads "5:30 AM → 6:00 AM" instead
+  // of the legacy "5:30 AM / 30 分鐘" mental-math pattern. Keeps
+  // `durationMin` in storage (no data migration) — the end picker
+  // re-derives it whenever startTime or endTime changes.
+  const draftEndTime = computeEndHHMM(draft.startTime, draft.durationMin);
+  const endBeforeStart =
+    parseHHMMToMinutes(draft.startTime) !== null &&
+    parseHHMMToMinutes(draftEndTime) !== null &&
+    parseHHMMToMinutes(draftEndTime) <= parseHHMMToMinutes(draft.startTime);
+
   if (isEditing) {
     return (
       <div className="rounded-xl border-2 border-rose-300 p-4 bg-rose-50/30 space-y-3">
@@ -533,21 +598,24 @@ function RundownCard({
             onChange={(e) => setDraft({ ...draft, startTime: e.target.value })}
             className="col-span-3 p-2 rounded-lg border border-slate-300 text-sm"
           />
+          <div className="col-span-3 flex items-center justify-center text-slate-300 text-sm">
+            →
+          </div>
           <input
-            type="number"
-            min="5"
-            max="600"
-            placeholder="分鐘"
-            value={draft.durationMin}
-            onChange={(e) =>
-              setDraft({ ...draft, durationMin: Number(e.target.value) || 30 })
-            }
+            type="time"
+            value={draftEndTime}
+            onChange={(e) => {
+              // User picks an end-time directly. Convert that into
+              // a duration so storage stays consistent.
+              const nextDur = computeMinutesBetween(draft.startTime, e.target.value);
+              setDraft({ ...draft, durationMin: nextDur });
+            }}
             className="col-span-3 p-2 rounded-lg border border-slate-300 text-sm"
           />
           <select
             value={draft.group}
             onChange={(e) => setDraft({ ...draft, group: e.target.value })}
-            className="col-span-6 p-2 rounded-lg border border-slate-300 text-sm bg-white"
+            className="col-span-3 p-2 rounded-lg border border-slate-300 text-sm bg-white"
           >
             {Object.entries(RUNDOWN_GROUP_LABELS).map(([g, lbl]) => (
               <option key={g} value={g}>
@@ -592,8 +660,9 @@ function RundownCard({
             取消
           </button>
           <button
-            onClick={() => draft.title && onSave(draft)}
-            className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700"
+            onClick={() => draft.title && !endBeforeStart && onSave(draft)}
+            disabled={!draft.title || endBeforeStart}
+            className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
           >
             儲存
           </button>
@@ -644,7 +713,20 @@ function RundownCard({
         <div className="text-lg font-black text-rose-600 font-mono">
           {entry.startTime}
         </div>
-        <div className="text-[10px] text-slate-400">+{entry.durationMin || 30}分</div>
+        {/* 2026-07-31 — replaced `+30分` with an end-time arrow so
+            the agenda card reads "5:30 → 6:00" at a glance. Falls
+            back to `+N分` when there's no startTime (older data
+            imported without startTime), and wraps past midnight for
+            late receptions. */}
+        {entry.startTime ? (
+          <div className="text-[10px] text-slate-400">
+            → {computeEndHHMM(entry.startTime, entry.durationMin || 30)}
+          </div>
+        ) : (
+          <div className="text-[10px] text-slate-400">
+            +{entry.durationMin || 30}分
+          </div>
+        )}
         {entry.location && (
           <div className="text-[10px] text-slate-500 mt-1 leading-tight">{entry.location}</div>
         )}
@@ -714,6 +796,7 @@ function NewEntryRow({ onSubmit, helpers }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
     startTime: '12:00',
+    endTime: '12:30',
     durationMin: 30,
     title: '',
     location: '',
@@ -733,28 +816,49 @@ function NewEntryRow({ onSubmit, helpers }) {
     );
   }
 
+  // 2026-07-31 — Same `startTime → endTime` picker pattern as the
+  // inline editor. `endTime` lives in `draft` so we know which the
+  // user touched last; `durationMin` is derived on save so it stays
+  // in sync with storage.
+  const endBeforeStart =
+    parseHHMMToMinutes(draft.startTime) !== null &&
+    parseHHMMToMinutes(draft.endTime) !== null &&
+    parseHHMMToMinutes(draft.endTime) <= parseHHMMToMinutes(draft.startTime);
+
   return (
     <div className="rounded-xl border-2 border-rose-300 p-4 bg-rose-50/30 space-y-3">
       <div className="grid grid-cols-12 gap-3">
         <input
           type="time"
           value={draft.startTime}
-          onChange={(e) => setDraft({ ...draft, startTime: e.target.value })}
+          onChange={(e) => {
+            const nextStart = e.target.value;
+            // If the existing endTime is no longer after the new
+            // startTime, push it forward by the previous gap so the
+            // user doesn't lose their work to an invalid state.
+            const gap = parseHHMMToMinutes(draft.endTime) -
+              parseHHMMToMinutes(draft.startTime);
+            setDraft(
+              gap > 0
+                ? { ...draft, startTime: nextStart }
+                : { ...draft, startTime: nextStart, endTime: addMinutesToHHMM(nextStart, 30) },
+            );
+          }}
           className="col-span-3 p-2 rounded-lg border border-slate-300 text-sm"
         />
+        <div className="col-span-3 flex items-center justify-center text-slate-300 text-sm">
+          →
+        </div>
         <input
-          type="number"
-          min="5"
-          max="600"
-          placeholder="分鐘"
-          value={draft.durationMin}
-          onChange={(e) => setDraft({ ...draft, durationMin: Number(e.target.value) || 30 })}
+          type="time"
+          value={draft.endTime}
+          onChange={(e) => setDraft({ ...draft, endTime: e.target.value })}
           className="col-span-3 p-2 rounded-lg border border-slate-300 text-sm"
         />
         <select
           value={draft.group}
           onChange={(e) => setDraft({ ...draft, group: e.target.value })}
-          className="col-span-6 p-2 rounded-lg border border-slate-300 text-sm bg-white"
+          className="col-span-3 p-2 rounded-lg border border-slate-300 text-sm bg-white"
         >
           {Object.entries(RUNDOWN_GROUP_LABELS).map(([g, lbl]) => (
             <option key={g} value={g}>{lbl}</option>
@@ -800,11 +904,22 @@ function NewEntryRow({ onSubmit, helpers }) {
         <button
           onClick={() => {
             if (!draft.title.trim()) return;
-            onSubmit({ ...draft, createdAt: Date.now() });
-            setDraft({ startTime: '12:00', durationMin: 30, title: '', location: '', notes: '', group: 'reception', assignedHelpers: [] });
+            if (endBeforeStart) return;
+            // 2026-07-31 — Derive durationMin from the picked endTime
+            // so storage stays consistent with the legacy readers
+            // (render site uses durationMin to compute the end
+            // arrow).
+            const durationMin = computeMinutesBetween(
+              draft.startTime,
+              draft.endTime,
+            );
+            const { endTime: _ignored, ...draftToSave } = draft;
+            onSubmit({ ...draftToSave, durationMin, createdAt: Date.now() });
+            setDraft({ startTime: '12:00', endTime: '12:30', durationMin: 30, title: '', location: '', notes: '', group: 'reception', assignedHelpers: [] });
             setOpen(false);
           }}
-          className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700"
+          disabled={!draft.title.trim() || endBeforeStart}
+          className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
         >
           新增
         </button>
