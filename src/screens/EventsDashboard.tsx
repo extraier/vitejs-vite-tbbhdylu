@@ -1,11 +1,13 @@
-import { Heart, Calendar, ArrowRight, Plus, Crown } from 'lucide-react';
+import { Heart, Calendar, ArrowRight, Plus, Crown, MoreVertical, Pencil, Trash2 } from 'lucide-react';
 import { TrendingVendors } from '../components/TrendingVendors';
 import { RewardsBanner } from '../components/RewardsBanner';
 
 import { ReferralModal } from '../components/modals/ReferralModal';
 import { SocialProofModal } from '../components/modals/SocialProofModal';
+import { EventRenameModal } from '../components/modals/EventRenameModal';
+import { EventDeleteModal } from '../components/modals/EventDeleteModal';
 import { useUserProfile } from '../hooks/useUserProfile';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 // 2026-07-21 — Three premium features unlockable via social proof
 // or payment:
@@ -29,6 +31,18 @@ interface EventsDashboardProps {
   // 2026-07-30 — purchaseModalOpen state lifted to App.jsx. The
   // dashboard triggers the shared modal through this callback.
   onPurchaseModalOpen?: () => void;
+  // 2026-07-31 — If the user deletes the event they're currently
+  // inside, we need App.jsx to clear `currentEvent` so the lobby
+  // reappears (App.jsx's !currentEvent branch renders this
+  // dashboard in the first place). Lifted to App so the state
+  // owner stays consistent with the create path (handleCreateEvent
+  // also lives in App.jsx).
+  onClearCurrentEvent?: () => void;
+  // 2026-07-31 — Optional toast callback so the rename/delete
+  // modals can show a confirmation message after a successful
+  // write. The dashboard doesn't own its own toast hook; we
+  // delegate to the parent's `showToast`.
+  onToast?: (msg: string) => void;
 }
 
 export function EventsDashboard({
@@ -44,6 +58,8 @@ export function EventsDashboard({
   currentEvent,
   onOpenChat,
   onPurchaseModalOpen,
+  onClearCurrentEvent,
+  onToast,
 }: EventsDashboardProps) {
   // 2026-07-30 — useUserProfile hook replaces the inline
   // unlocks + tier subscriptions added in Phases 2-4. The hook
@@ -51,13 +67,15 @@ export function EventsDashboard({
   // needs tier + unlocks here; createdAt/promotedAt are used by
   // MyProfile for the membership card.
   const { tier: userTier, unlocks } = useUserProfile(user);
-  // 2026-07-30 — purchaseModalOpen state lives in App.jsx now
-  // (lifted so UserMenu and MyProfile can open it). The dashboard
-  // receives it as props and writes through callbacks.
   const [referralModalOpen, setReferralModalOpen] = useState(false);
   // 2026-07-29 — SocialProofModal visibility (Phase 3 of premium build).
   // Replaces the alert() TODO that lived in RewardsBanner's onUploadClick.
   const [socialProofModalOpen, setSocialProofModalOpen] = useState(false);
+  // 2026-07-31 — Per-card rename / delete modal state. We hold
+  // the target event by ref (rather than id) so the modal renders
+  // with a stable snapshot of the event including its name.
+  const [renameTarget, setRenameTarget] = useState<any | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
 
 
 
@@ -114,7 +132,20 @@ export function EventsDashboard({
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {events.map((ev) => (
-              <EventCard key={ev.id} event={ev} onSelect={onSelectEvent} />
+              <EventCard
+                key={ev.id}
+                event={ev}
+                onSelect={onSelectEvent}
+                // 2026-07-31 — Open the rename/delete modals via
+                // local state. The Firestore writes happen inside
+                // the modal components themselves (so the modal
+                // owns the loading/error state and stays
+                // self-contained). The useFirestoreCollection hook
+                // at App.jsx:719 picks up the change and the
+                // dashboard reflects the new state automatically.
+                onRename={(target) => setRenameTarget(target)}
+                onDelete={(target) => setDeleteTarget(target)}
+              />
             ))}
           </div>
         )}
@@ -196,6 +227,47 @@ export function EventsDashboard({
         onClose={() => setSocialProofModalOpen(false)}
         ownerUid={user?.uid || ''}
       />
+
+      {/* 2026-07-31 — Per-card rename modal. Self-contained: opens
+          on the click of "改名" in the card's action menu, performs
+          the setDoc({merge:true}) internally, then closes. The
+          showToast comes from the dashboard's parent (App.jsx) via
+          a callback prop OR is duplicated here in a follow-up if
+          we decide to lift it. For now, keep the modal quiet so
+          it doesn't fight with the lobby's existing toasts. */}
+      {renameTarget && (
+        <EventRenameModal
+          event={renameTarget}
+          onClose={() => setRenameTarget(null)}
+          onSaved={(newName) => onToast?.(`✏️ 已改名為「${newName}」`)}
+        />
+      )}
+
+      {/* 2026-07-31 — Per-card delete confirmation modal. Requires
+          the user to type `DELETE` (literal, case-sensitive) to
+          enable the submit button. */}
+      {deleteTarget && (
+        <EventDeleteModal
+          event={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          // 2026-07-31 — If the user is currently inside this
+          // event, kick them back to the lobby (App.jsx owns
+          // currentEvent). The dashboard re-renders via the
+          // !currentEvent branch.
+          onDeleted={() => {
+            const wasCurrent =
+              currentEvent && currentEvent.id === deleteTarget.id;
+            if (wasCurrent) {
+              onClearCurrentEvent?.();
+            }
+            onToast?.(
+              wasCurrent
+                ? '🗑️ 婚禮專案已刪除，已返回總大堂。'
+                : '🗑️ 婚禮專案已刪除。',
+            );
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -203,9 +275,40 @@ export function EventsDashboard({
 interface EventCardProps {
   event: any;
   onSelect?: (ev: any) => void;
+  onRename?: (ev: any) => void;
+  onDelete?: (ev: any) => void;
 }
 
-function EventCard({ event, onSelect }: EventCardProps) {
+// 2026-07-31 — Per-card "⋯" menu. Reveals 改名 / 刪除 actions.
+// Click-outside-to-close, Escape-to-close. Mobile-friendly: the
+// button is always visible (≥md: opacity bumps to 100 on hover,
+// defaults to 30% so it doesn't crowd the card at rest).
+function EventCard({ event, onSelect, onRename, onDelete }: EventCardProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // 2026-07-31 — click-outside + Escape handlers. Both run only
+  // while the menu is open (saves a render-path during normal
+  // use). Cleanup function is crucial because the dashboard
+  // unmounts/remounts across navigations.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menuOpen]);
+
   return (
     <div
       role="button"
@@ -236,6 +339,61 @@ function EventCard({ event, onSelect }: EventCardProps) {
         </span>
         <ArrowRight className="w-5 h-5 text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity translate-x-[-10px] group-hover:translate-x-0" />
       </div>
+
+      {/* 2026-07-31 — per-card action menu (⋯ button + popover). */}
+      {(onRename || onDelete) && (
+        <div
+          ref={menuRef}
+          className="absolute top-3 left-3"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            aria-label="專案操作"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((v) => !v)}
+            className="p-1.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            <MoreVertical className="w-5 h-5" />
+          </button>
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute top-full mt-1 left-0 bg-white shadow-lg rounded-xl border border-slate-200 py-1 min-w-[140px] z-10 animate-in fade-in zoom-in-95 duration-150"
+            >
+              {onRename && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onRename(event);
+                  }}
+                  className="w-full text-left px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                >
+                  <Pencil className="w-4 h-4" />
+                  改名
+                </button>
+              )}
+              {onDelete && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onDelete(event);
+                  }}
+                  className="w-full text-left px-4 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 flex items-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  刪除
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

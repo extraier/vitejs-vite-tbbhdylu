@@ -2743,6 +2743,16 @@ export default function App() {
                 // <TrendingVendors> claim CTA.
                 user={user}
                 currentEvent={currentEvent}
+                // 2026-07-31 — Lobby card actions (rename + delete).
+                // onClearCurrentEvent kicks the user back to the
+                // lobby if they delete the event they're currently
+                // inside. onToast shows a confirmation after the
+                // action completes.
+                onClearCurrentEvent={() => {
+                  setCurrentEvent(null);
+                  setCurrentView('events-dashboard');
+                }}
+                onToast={showToast}
                 onOpenChat={(vendor) =>
                   handleOpenChat({
                     otherUid: vendor.id || vendor.uid,
