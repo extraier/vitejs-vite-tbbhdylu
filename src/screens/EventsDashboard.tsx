@@ -1,4 +1,4 @@
-import { Heart, Calendar, ArrowRight, Plus, Crown, MoreVertical, Pencil, Trash2 } from 'lucide-react';
+import { Heart, Calendar, ArrowRight, Plus, Crown, MoreVertical, Pencil, Trash2, Users } from 'lucide-react';
 import { TrendingVendors } from '../components/TrendingVendors';
 import { RewardsBanner } from '../components/RewardsBanner';
 
@@ -38,6 +38,12 @@ interface EventsDashboardProps {
   // owner stays consistent with the create path (handleCreateEvent
   // also lives in App.jsx).
   onClearCurrentEvent?: () => void;
+  // 2026-08-01 (pivot) — owner-names editor moved to a per-event
+  // EventSettingsModal. The lobby card's ⋯ menu item "新人名稱"
+  // opens it, scoped to the clicked event. App.jsx owns the
+  // modal state + visibility (so the modal can mount on top of
+  // any current view, not just the dashboard).
+  onOpenEventSettings?: (ev: any) => void;
   // 2026-07-31 — Optional toast callback so the rename/delete
   // modals can show a confirmation message after a successful
   // write. The dashboard doesn't own its own toast hook; we
@@ -59,6 +65,7 @@ export function EventsDashboard({
   onOpenChat,
   onPurchaseModalOpen,
   onClearCurrentEvent,
+  onOpenEventSettings,
   onToast,
 }: EventsDashboardProps) {
   // 2026-07-30 — useUserProfile hook replaces the inline
@@ -145,6 +152,11 @@ export function EventsDashboard({
                 // dashboard reflects the new state automatically.
                 onRename={(target) => setRenameTarget(target)}
                 onDelete={(target) => setDeleteTarget(target)}
+                // 2026-08-01 (pivot) — owner-names editor lives in
+                // EventSettingsModal (per-event). The ⋯ menu item
+                // surfaces it for owner + co-owner (CF accepts
+                // either as long as they own / co-own the event).
+                onOpenSettings={(target) => onOpenEventSettings?.(target)}
               />
             ))}
           </div>
@@ -277,13 +289,16 @@ interface EventCardProps {
   onSelect?: (ev: any) => void;
   onRename?: (ev: any) => void;
   onDelete?: (ev: any) => void;
+  // 2026-08-01 (pivot) — owner-names ⋯ menu item. Surfaced for
+  // both owner and co-owner cards; the CF accepts either caller.
+  onOpenSettings?: (ev: any) => void;
 }
 
 // 2026-07-31 — Per-card "⋯" menu. Reveals 改名 / 刪除 actions.
 // Click-outside-to-close, Escape-to-close. Mobile-friendly: the
 // button is always visible (≥md: opacity bumps to 100 on hover,
 // defaults to 30% so it doesn't crowd the card at rest).
-function EventCard({ event, onSelect, onRename, onDelete }: EventCardProps) {
+function EventCard({ event, onSelect, onRename, onDelete, onOpenSettings }: EventCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -346,7 +361,7 @@ function EventCard({ event, onSelect, onRename, onDelete }: EventCardProps) {
           first character of every card title). On mobile, the top
           right stays clear of the title because we set the menu
           z-index above the premium ribbon. */}
-      {(onRename || onDelete) && (
+      {(onRename || onDelete || onOpenSettings) && (
         <div
           ref={menuRef}
           className="absolute top-3 right-3 z-20"
@@ -379,6 +394,20 @@ function EventCard({ event, onSelect, onRename, onDelete }: EventCardProps) {
                 >
                   <Pencil className="w-4 h-4" />
                   改名
+                </button>
+              )}
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenSettings(event);
+                  }}
+                  className="w-full text-left px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                >
+                  <Users className="w-4 h-4" />
+                  新人名稱
                 </button>
               )}
               {onDelete && (

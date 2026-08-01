@@ -58,6 +58,7 @@ import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { useFirestoreDoc } from './hooks/useFirestoreDoc';
 import { useUserProfile } from './hooks/useUserProfile';
+import { useEventOwnerNames } from './hooks/useEventOwnerNames';
 import { useToast } from './hooks/useToast';
 // 2026-07-26 — Co-owners (couples / partners) front-end bindings.
 // See src/lib/partnerInvite.ts for the shapes; the Cloud Functions
@@ -122,6 +123,7 @@ import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
 import { SignUpPromptModal } from './components/modals/SignUpPromptModal';
 import { ChangePasswordModal } from './components/modals/ChangePasswordModal';
 import { InvitePartnerModal } from './components/modals/InvitePartnerModal';
+import { EventSettingsModal } from './components/modals/EventSettingsModal';
 
 export default function App() {
   // Auth
@@ -203,7 +205,20 @@ export default function App() {
   // be assigned to rundown entries. We subscribe here at the App
   // level so the names are live for every consumer (MyProfile, the
   // upcoming header chip, the 大日流程 picker) without re-subscribing.
-  const { ownerNames } = useUserProfile(user);
+  // 2026-08-01 (pivot) — owner names moved per-event. Read from
+  // useEventOwnerNames(currentEvent.id, user.uid) so the names
+  // propagate to the 大日流程 picker + ResourcesTab + Rundown.
+  // Commit-1 fallback: pass legacy `ownerNames` (now null from
+  // useUserProfile) so consumers that previously destructured it
+  // from useUserProfile still see the old user-level value if the
+  // event doc has no names yet (covers users who set their names
+  // before this pivot shipped).
+  const { ownerNames: legacyOwnerNames } = useUserProfile(user);
+  const { ownerNames } = useEventOwnerNames(
+    currentEvent?.id,
+    user?.uid,
+    legacyOwnerNames,
+  );
 
   // 2026-07-15 — auto-route vendors to their dashboard. When the user
   // signs in and has the `vendor: true` custom claim (set by
@@ -657,6 +672,13 @@ export default function App() {
   const [showInvitePartner, setShowInvitePartner] = useState(false);
   const [viewingVendorProfile, setViewingVendorProfile] = useState(null);
   const [viewingQrCode, setViewingQrCode] = useState(null);
+  // 2026-08-01 (pivot) — event-level settings modal. Stores the
+  // selected event so the modal can mount with the right scope.
+  // null = closed. The CF (updateOwnerNames) accepts both the
+  // owner (event._ownerUid === user.uid) and any co-owner
+  // (user.uid in event.coOwners), so the modal is shown for both
+  // owner + co-owner cards.
+  const [eventSettingsTarget, setEventSettingsTarget] = useState(null);
   const [viewingProposals, setViewingProposals] = useState(null);
   const [scanResult, setScanResult] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -2755,6 +2777,12 @@ export default function App() {
                   setCurrentEvent(null);
                   setCurrentView('events-dashboard');
                 }}
+                // 2026-08-01 (pivot) — owner-names editor lives in
+                // EventSettingsModal. Open it scoped to the clicked
+                // card's event. The modal also closes any toast
+                // path so the user sees the success message in the
+                // same surface where they triggered the action.
+                onOpenEventSettings={(ev) => setEventSettingsTarget(ev)}
                 onToast={showToast}
                 onOpenChat={(vendor) =>
                   handleOpenChat({
@@ -3251,6 +3279,30 @@ export default function App() {
           }}
         />
       )}
+      {eventSettingsTarget && (() => {
+        // 2026-08-01 (pivot + co-owner fix) — events live under
+        // the original owner's user doc, not the co-owner's.
+        // Both the Firestore subscription
+        // (useEventOwnerNames → /users/{uid}/events/{eventId}) AND
+        // the CF write target (/users/{uid}/events/{eventId})
+        // are scoped to the event's ownerUid, which is the
+        // `event._ownerUid` we already stamped on every event in
+        // the events[] merge (App.jsx:794-813). The caller's
+        // uid is irrelevant for path resolution — the CF's
+        // assertEventAccess checks the caller's identity against
+        // the event doc's userId / coOwners, so the right thing
+        // happens either way.
+        const ownerUid = eventSettingsTarget._ownerUid || user?.uid;
+        return (
+          <EventSettingsModal
+            open={true}
+            currentUser={{ ...user, uid: ownerUid }}
+            currentEvent={eventSettingsTarget}
+            onToast={showToast}
+            onClose={() => setEventSettingsTarget(null)}
+          />
+        );
+      })()}
       <PaymentModal
         isOpen={showPaymentModal}
         onClose={() => setShowPaymentModal(false)}
