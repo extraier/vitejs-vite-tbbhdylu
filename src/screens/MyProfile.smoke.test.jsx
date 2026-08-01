@@ -433,52 +433,13 @@ describe('MyProfile', () => {
     expect(screen.getByText('請登入後查看推薦資料。')).toBeTruthy();
   });
 
-  it('renders the OwnerNamesEditor with pre-filled names from the hook', () => {
-    const saveOwnerNames = vi.fn().mockResolvedValue(undefined);
-    useUserProfile.mockReturnValue({
-      tier: null,
-      unlocks: [],
-      createdAt: { toDate: () => new Date('2026-07-22') },
-      promotedAt: null,
-      referralCode: 'STD-A4X7K',
-      ownerNames: { boyName: '志明', girlName: '春嬌' },
-      saveOwnerNames,
-      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
-      loading: false,
-    });
-    render(<MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />);
-    // The owner-name editor mounts with the names from the hook
-    expect(screen.getByLabelText('新郎').value).toBe('志明');
-    expect(screen.getByLabelText('新娘').value).toBe('春嬌');
-  });
-
-  it('saves new owner names via the hook when the user clicks 儲存', async () => {
-    const saveOwnerNames = vi.fn().mockResolvedValue(undefined);
-    useUserProfile.mockReturnValue({
-      tier: null,
-      unlocks: [],
-      createdAt: { toDate: () => new Date('2026-07-22') },
-      promotedAt: null,
-      referralCode: 'STD-A4X7K',
-      ownerNames: { boyName: '志明', girlName: '春嬌' },
-      saveOwnerNames,
-      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
-      loading: false,
-    });
-    render(
-      <MyProfile
-        currentUser={baseUser}
-        onBack={() => {}}
-        onUpgrade={() => {}}
-        showToast={mocks.showToast}
-      />,
-    );
-    fireEvent.change(screen.getByLabelText('新郎'), { target: { value: '大志明' } });
-    fireEvent.click(screen.getAllByRole('button', { name: '儲存' })[0]);
-    await waitFor(() => {
-      expect(saveOwnerNames).toHaveBeenCalledWith({ boyName: '大志明', girlName: '春嬌' });
-    });
-  });
+  // 2026-08-01 (pivot) — The two OwnerNamesEditor assertions
+  // ('renders the OwnerNamesEditor with pre-filled names' + 'saves
+  // new owner names via the hook') were removed because the
+  // owner-names editor no longer lives inside MyProfile. It moved
+  // to EventSettingsModal (per-event). The 10 OwnerNamesEditor
+  // smoke-test assertions in src/components/OwnerNamesEditor.smoke.test.jsx
+  // still cover the editor's behavior end-to-end.
 
   it('shows deleted projects in trash and restores them', () => {
     const onRestoreEvent = vi.fn();

@@ -30,7 +30,12 @@ import { ChevronLeft, Crown, Copy, Check, LogOut, User as UserIcon, AlertCircle,
 import { useAuth } from '../hooks/useAuth';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { ReferralKpi } from '../components/ReferralKpi';
-import { OwnerNamesEditor } from '../components/OwnerNamesEditor';
+// 2026-08-01 (pivot) — OwnerNamesEditor block removed. Editing
+// the couple's display names has moved to the per-event
+// EventSettingsModal (accessible from the lobby card's ⋯ menu).
+// The user's profile page is now about identity (email, tier,
+// referral) only — not about any specific wedding's display names.
+// The OwnerNamesEditor import is removed accordingly.
 
 // 2026-07-30 — labels kept inline (not imported from RewardsBanner)
 // to avoid coupling between screens. tiny duplication, no shared
@@ -188,19 +193,11 @@ export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, sh
         </div>
       </section>
 
-      {/* 2026-08-01 — Owner names (新郎 / 新娘). User-scoped — one
-          pair per user, persists across all events. The names
-          propagate to the 大日流程 HelperPicker so the couple
-          can be assigned to rundown entries. Sits BELOW the email
-          section so the most-frequently-edited field (email
-          verification) still reads first. */}
-      <section className="mb-4">
-        <OwnerNamesEditor
-          ownerNames={ownerNames}
-          onSave={saveOwnerNames}
-          onToast={showToast}
-        />
-      </section>
+      {/* 2026-08-01 (pivot) — OwnerNamesEditor block removed.
+          New couples' display names live per-event; editing them
+          happens from EventSettingsModal (lobby card's ⋯ menu).
+          MyProfile is now identity-only: email verification,
+          membership tier, referral pipeline, password. */}
 
       {/* 2026-08-01 — Friend referral pipeline.
           Shows how many friends signed up with this user's code
