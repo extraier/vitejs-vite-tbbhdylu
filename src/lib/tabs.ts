@@ -43,6 +43,13 @@ export function tabsForRole(
       // actual scan targets. See RedPacketManager.jsx.
       ['red-packet', '🧧 電子人情'],
       ['photo-drop', '📸 互動相片牆'],
+      // 2026-08-01 — 婚禮設定 tab. Mirrors the ⋯ menu in the
+      // EventsDashboard lobby card so the owner can edit 新人名稱
+      // (and the upcoming venue/date fields) without needing to
+      // back out to the lobby. Same <EventSettingsModal> component
+      // is used by both entry points. Only the OWNER role sees this
+      // tab — helpers and reception don't need to edit display names.
+      ['event-settings', '⚙️ 婚禮設定'],
     ];
   }
 

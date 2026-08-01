@@ -7,13 +7,16 @@ import { tabsForRole } from './tabs';
 import { defaultHelperPerms } from './helpers';
 
 describe('tabsForRole', () => {
-  it('owner sees exactly 8 tabs in the canonical order', () => {
+  it('owner sees exactly 9 tabs in the canonical order', () => {
     // 2026-07-24 — added 'red-packet' (🧧 電子人情) between
     // 'couple-guests' and 'photo-drop' so the owner can manage
     // the PayMe / FPS / AlipayHK QR codes the guest portal
     // displays in the PaymentModal.
+    // 2026-08-01 — added 'event-settings' (⚙️ 婚禮設定) at the end
+    // so the owner can edit 新人名稱 without backing out to the
+    // lobby. Mirrors the EventsDashboard card ⋯ menu.
     const tabs = tabsForRole('owner', null, false);
-    expect(tabs.length).toBe(8);
+    expect(tabs.length).toBe(9);
     expect(tabs.map(([v]) => v)).toEqual([
       'couple-checklist',
       'wedding-day',
@@ -23,13 +26,14 @@ describe('tabsForRole', () => {
       'couple-guests',
       'red-packet',
       'photo-drop',
+      'event-settings',
     ]);
   });
 
   it('isAdmin no longer adds admin tabs to the bottom nav', () => {
     // 2026-07-01: admin prefix moved to RoleSimulator pills.
     const tabs = tabsForRole('owner', null, true);
-    expect(tabs.length).toBe(8);
+    expect(tabs.length).toBe(9);
     expect(tabs.map(([v]) => v)).toEqual([
       'couple-checklist',
       'wedding-day',
@@ -39,6 +43,7 @@ describe('tabsForRole', () => {
       'couple-guests',
       'red-packet',
       'photo-drop',
+      'event-settings',
     ]);
   });
 

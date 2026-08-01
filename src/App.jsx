@@ -682,6 +682,31 @@ export default function App() {
   // owner + co-owner cards.
   const [eventSettingsTarget, setEventSettingsTarget] = useState(null);
   const [viewingProposals, setViewingProposals] = useState(null);
+
+  // 2026-08-01 — sync the new 'event-settings' tab to the modal state.
+  // When the owner clicks the ⚙️ 婚禮設定 tab (added in tabs.ts), we
+  // mirror currentView into eventSettingsTarget so the existing
+  // modal render path (line ~3284) opens the modal. This avoids
+  // duplicating the modal markup for the tab vs. the lobby ⋯ menu
+  // — both entry points feed the same modal state.
+  //
+  // Hook order: declared here AFTER eventSettingsTarget so the
+  // setter is in scope. The effect reads currentView + currentEvent
+  // which are all declared above this block.
+  useEffect(() => {
+    if (currentView !== 'event-settings') return;
+    if (!currentEvent) {
+      // Edge case: tab clicked while no wedding is selected. Fall
+      // back to the lobby so the user isn't stranded on a tab with
+      // no modal. Guards against the user's tab click landing
+      // before their events-dashboard has loaded.
+      setCurrentView('events-dashboard');
+      return;
+    }
+    if (!eventSettingsTarget) {
+      setEventSettingsTarget(currentEvent);
+    }
+  }, [currentView, currentEvent, eventSettingsTarget]);
   const [scanResult, setScanResult] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -3295,13 +3320,24 @@ export default function App() {
         // the event doc's userId / coOwners, so the right thing
         // happens either way.
         const ownerUid = eventSettingsTarget._ownerUid || user?.uid;
+        // 2026-08-01 — when the modal was opened from the new
+        // ⚙️ 婚禮設定 tab (currentView === 'event-settings'), close
+        // routes the user back to the wedding's default view
+        // (couple-checklist). When opened from the lobby ⋯ menu,
+        // currentView is 'events-dashboard' and we leave it alone.
+        const openedFromTab = currentView === 'event-settings';
         return (
           <EventSettingsModal
             open={true}
             currentUser={{ ...user, uid: ownerUid }}
             currentEvent={eventSettingsTarget}
             onToast={showToast}
-            onClose={() => setEventSettingsTarget(null)}
+            onClose={() => {
+              setEventSettingsTarget(null);
+              if (openedFromTab) {
+                setCurrentView('couple-checklist');
+              }
+            }}
           />
         );
       })()}
