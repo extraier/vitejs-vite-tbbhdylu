@@ -1,39 +1,46 @@
 // 2026-08-01 — OwnerNamesEditor.
 //
-// Lets the user set their own 新郎 / 新娘 display names. These
-// names are USER-scoped (not event-scoped): a wedding planner
-// who runs 50 weddings should not have to re-enter their own
-// name 50 times. The names then propagate to the 大日流程
-// HelperPicker so the couple can be assigned to rundown
-// entries alongside the invited 兄弟姊妹.
+// Lets the user set their own 新郎 / 新娘 display names. The names
+// are EVENT-scoped (one pair per wedding event), not user-scoped.
+// Co-owners (the partner) see + edit the same names automatically
+// because the data lives on the shared event doc.
 //
-// Storage: writes to /artifacts/{appId}/users/{uid} via
-// useUserProfile.saveOwnerNames, which uses setDoc(merge:true).
-// No migration needed — empty / missing fields are valid.
+// Storage: writes to /artifacts/{appId}/users/{uid}/events/{eventId}
+// via useEventOwnerNames(eventId, uid), which calls the
+// updateOwnerNames Cloud Function (functions/src/userProfile.ts)
+// with payload { eventId, boyName, girlName }. The CF uses the
+// Admin SDK to bypass Firestore rules and writes ONLY the two
+// whitelisted fields + updatedAt with merge:true.
 //
-// UX:
+// UX (unchanged from pre-pivot):
 //   - Two text inputs side-by-side (新郎 / 新娘)
 //   - 儲存 button disabled when both empty or when nothing changed
 //   - Each input has a small "✕" clear button (aria-label=清除新郎/新娘)
-//   - On save, fires onSave({boyName, girlName}); on success shows
-//     a success toast, on failure shows an error toast
+//   - On save shows ✅ toast on success, ❌ on failure
 //   - The "未設定" placeholder reminds users they can leave the
 //     field blank — e.g. a same-sex couple only needs one name
+//
+// 2026-08-01 (pivot) — Component signature changed from
+// { ownerNames, onSave, onToast } to { currentUser, eventId, onToast }.
+// Subscription + write are owned internally via useEventOwnerNames.
 
 import { useEffect, useState } from 'react';
 import { Save, X as ClearIcon, Loader2 } from 'lucide-react';
+import { useEventOwnerNames } from '../hooks/useEventOwnerNames';
 
 const MAX_LEN = 30;
 
-export function OwnerNamesEditor({ ownerNames, onSave, onToast }) {
+export function OwnerNamesEditor({ currentUser, eventId, onToast }) {
+  const { ownerNames, saveOwnerNames } = useEventOwnerNames(eventId, currentUser?.uid);
   const [boyName, setBoyName] = useState(ownerNames?.boyName || '');
   const [girlName, setGirlName] = useState(ownerNames?.girlName || '');
   const [busy, setBusy] = useState(false);
 
-  // Reset when the parent re-loads the doc (e.g. after a Cloud
-  // Function rewrites the user doc). Without this the form would
-  // keep the user's in-progress edits even after a successful save
-  // bubbles back from the server.
+  // Reset when the subscription refreshes the doc (e.g. after a
+  // Cloud Function rewrites the event doc, or when another tab /
+  // co-owner updates the names). Without this the form would
+  // keep the user's in-progress edits even after a successful
+  // save bubbles back from the server.
   useEffect(() => {
     setBoyName(ownerNames?.boyName || '');
     setGirlName(ownerNames?.girlName || '');
@@ -57,7 +64,7 @@ export function OwnerNamesEditor({ ownerNames, onSave, onToast }) {
     if (!canSave) return;
     setBusy(true);
     try {
-      await onSave({ boyName: boyTrim, girlName: girlTrim });
+      await saveOwnerNames({ boyName: boyTrim, girlName: girlTrim });
       onToast?.('✅ 已儲存你嘅名。');
     } catch (err) {
       // eslint-disable-next-line no-console

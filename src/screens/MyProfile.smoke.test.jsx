@@ -51,6 +51,18 @@ vi.mock('../hooks/useUserProfile', () => ({
   useUserProfile: vi.fn(),
 }));
 
+// 2026-08-01 (pivot) — useEventOwnerNames backs the OwnerNamesEditor
+// inside MyProfile (until Commit 1's Task 1.4 removes that section).
+// Mocked here so the inner subscription + save don't fire against
+// the unmocked firestore singletons in jsdom.
+vi.mock('../hooks/useEventOwnerNames', () => ({
+  useEventOwnerNames: vi.fn(() => ({
+    ownerNames: { boyName: '', girlName: '' },
+    saveOwnerNames: vi.fn().mockResolvedValue(undefined),
+    loading: false,
+  })),
+}));
+
 // Stub the firebase singletons so module-init doesn't blow up
 // in jsdom. The hook itself is mocked above so these singletons
 // are never actually used in this test.
