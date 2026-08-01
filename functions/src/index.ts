@@ -500,6 +500,12 @@ export * from './templates';
 // 2026-07-11: vendor onboarding & self-service (applyAsVendor,
 // updateMyVendorProfile, uploadVendorPortfolio). Lives in ./vendors.ts.
 export * from './vendors';
+// 2026-08-01: per-event owner names (boyName / girlName on
+// users/{uid}/events/{eventId}). Recreated from deployed bytecode
+// — see functions/src/userProfile.ts. CF also accepts co-owners
+// so the partner can edit the couple's display names on shared
+// events.
+export * from './userProfile';
 // 2026-07-17: vendor ratings & reviews (submitRating, deleteMyRating,
 // listVendorRatings). Lives in ./ratings.ts.
 export * from './ratings';
