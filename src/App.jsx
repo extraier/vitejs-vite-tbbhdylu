@@ -2811,6 +2811,11 @@ export default function App() {
                 activeCategory={activeCategory}
                 activeVenue={activeVenue}
                 editingTaskId={editingTaskId}
+                // 2026-08-01 — owner (couple) names so the regular
+                // to-do list task editor can offer 新人自己 as an
+                // assignment alongside the 兄弟姊妹. Same ownerNames
+                // the 大日流程 HelperPicker already uses.
+                ownerNames={ownerNames}
                 onClearEditingTask={(id) => {
                   // 2026-07-24 — pass id so the per-row edit button
                   // can open the editor for that specific task.

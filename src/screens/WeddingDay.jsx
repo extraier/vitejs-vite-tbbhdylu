@@ -174,7 +174,12 @@ const RUNDOWN_GROUP_LABELS = {
 // share the chip-pill UI for visual consistency. Couples with
 // no helpers invited (only the two of them) can still assign
 // themselves to rundown entries.
-function HelperPicker({ helpers = [], ownerNames, value = [], onChange }) {
+// 2026-08-01 — Internal export for smoke tests. The component is
+// pure presentational (no Firestore, no side effects), so it's
+// safe to import directly from tests. See
+// src/screens/WeddingDay.owner-picker.test.jsx for the regression
+// suite that locks in the 新人自己 optgroup behaviour.
+export function HelperPicker({ helpers = [], ownerNames, value = [], onChange }) {
   const [showCustom, setShowCustom] = useState(false);
   const add = (h) => {
     if (value.find((x) => x.id === h.id)) return;
@@ -987,7 +992,7 @@ const RESOURCE_CATEGORIES = {
   other: '其他',
 };
 
-function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrders, currentUser, helpers, showToast }) {
+function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrders, currentUser, helpers, showToast, ownerNames }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
   // 2026-07-22 — Sort mode toggle. Same pattern as PlaylistTab.
@@ -1216,6 +1221,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
 
       <NewResourceRow
         helpers={helpers}
+        ownerNames={ownerNames}
         onSubmit={(d) => onUpsert({ id: `rs-${Date.now()}`, ...d })}
       />
 
@@ -1285,6 +1291,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                     key={editing}
                     item={(items || []).find((i) => i.id === editing)}
                     helpers={helpers}
+                    ownerNames={ownerNames}
                     onSave={(updated) => {
                       onUpsert(updated);
                       setEditing(null);
@@ -1338,6 +1345,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                   key={editing}
                   item={(items || []).find((i) => i.id === editing)}
                   helpers={helpers}
+                  ownerNames={ownerNames}
                   onSave={(updated) => {
                     onUpsert(updated);
                     setEditing(null);
@@ -1362,7 +1370,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
   );
 }
 
-function NewResourceRow({ onSubmit, helpers }) {
+function NewResourceRow({ onSubmit, helpers, ownerNames }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
     label: '',
@@ -1422,6 +1430,7 @@ function NewResourceRow({ onSubmit, helpers }) {
         <div className="col-span-12">
           <HelperPicker
             helpers={helpers}
+            ownerNames={ownerNames}
             value={draft.assignedHelpers}
             onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
           />
@@ -1466,7 +1475,7 @@ function NewResourceRow({ onSubmit, helpers }) {
  * caller merges it into Firestore via onUpsert. We deliberately
  * re-use the onUpsert path so the save logic stays single-source.
  */
-function EditResourceRow({ item, helpers, onSave, onCancel }) {
+function EditResourceRow({ item, helpers, ownerNames, onSave, onCancel }) {
   const [label, setLabel] = useState(item.label || '');
   const [qty, setQty] = useState(item.qty || '');
   const [category, setCategory] = useState(item.category || 'other');
@@ -1545,6 +1554,7 @@ function EditResourceRow({ item, helpers, onSave, onCancel }) {
         <div className="col-span-12">
           <HelperPicker
             helpers={helpers}
+            ownerNames={ownerNames}
             value={assignedHelpers}
             onChange={setAssignedHelpers}
           />
@@ -1650,7 +1660,7 @@ function SortableRow({ id, disabled = false, children }) {
   );
 }
 
-function TeaCeremonyTab({ people, onUpsert, onDelete, onSetOrders }) {
+function TeaCeremonyTab({ people, onUpsert, onDelete, onSetOrders, ownerNames }) {
   const [editing, setEditing] = useState(null);
 
   const grouped = useMemo(() => {
@@ -1703,7 +1713,7 @@ function TeaCeremonyTab({ people, onUpsert, onDelete, onSetOrders }) {
   // TouchSensor with a short activation delay for mobile (so a
   // brief tap doesn't accidentally start a drag), KeyboardSensor
   // for keyboard-only users with screen readers.
-  function TeaCeremonyGroupList({ groupId, list, editing, setEditing, onUpsert, onDelete, onPersist }) {
+  function TeaCeremonyGroupList({ groupId, list, editing, setEditing, onUpsert, onDelete, onPersist, ownerNames }) {
     const sensors = useSensors(
       useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
       useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
@@ -1739,6 +1749,7 @@ function TeaCeremonyTab({ people, onUpsert, onDelete, onSetOrders }) {
                     // can grab this with mouse / touch and drag
                     // the row to a new position.
                     dragHandleProps={dragHandleProps}
+                    ownerNames={ownerNames}
                   />
                 )}
               </SortableRow>
@@ -1789,6 +1800,7 @@ function TeaCeremonyTab({ people, onUpsert, onDelete, onSetOrders }) {
             onUpsert={onUpsert}
             onDelete={onDelete}
             onPersist={persistGroupOrder}
+            ownerNames={ownerNames}
           />
         </div>
       ))}
@@ -1823,12 +1835,19 @@ function PersonRow({
   // initiates a drag. Couples can still tap the rest of the row
   // for checkbox toggle, edit, etc.
   dragHandleProps,
+  // 2026-08-01 — single owner field. Couples want to mark
+  // "志明 handles 夫家 group" or "春嬌 handles 娘家 group" so
+  // they know who to nudge on the day. ownerId is one of
+  // 'owner-boy' | 'owner-girl' | '' — a flat string field on
+  // the person doc, persisted alongside the existing fields.
+  ownerNames,
 }) {
   const [draft, setDraft] = useState({
     name: person.name || '',
     relation: person.relation || 'relative',
     order: person.order ?? 99,
     notes: person.notes || '',
+    ownerId: person.ownerId || '',
   });
 
   if (isEditing) {
@@ -1864,6 +1883,52 @@ function PersonRow({
             className="col-span-9 p-2 rounded-lg border border-slate-300 text-sm"
           />
         </div>
+        {/* 2026-08-01 — Single-owner selector. Lets couples tag
+            who is responsible for this relative on the day
+            (e.g. 志明 handles 夫家 group). Rendered as a
+            pill row so it reads as a quick pick, not a 兄弟姊妹
+            picker (敬茶/影相 is a personal relationship, not a
+            task assignment). Empty state hides the row when
+            ownerNames is also empty so the editor stays clean. */}
+        {(ownerNames?.boyName || ownerNames?.girlName) && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] font-bold text-slate-500 mr-1">由邊位負責</span>
+            {ownerNames.boyName && (
+              <button
+                type="button"
+                onClick={() => setDraft({
+                  ...draft,
+                  ownerId: draft.ownerId === 'owner-boy' ? '' : 'owner-boy',
+                })}
+                className={`text-xs font-bold px-2 py-1 rounded-full border transition-colors ${
+                  draft.ownerId === 'owner-boy'
+                    ? 'bg-rose-100 text-rose-700 border-rose-300'
+                    : 'bg-white text-slate-500 border-slate-200 hover:border-rose-200 hover:text-rose-600'
+                }`}
+                aria-pressed={draft.ownerId === 'owner-boy'}
+              >
+                🤵 {ownerNames.boyName}
+              </button>
+            )}
+            {ownerNames.girlName && (
+              <button
+                type="button"
+                onClick={() => setDraft({
+                  ...draft,
+                  ownerId: draft.ownerId === 'owner-girl' ? '' : 'owner-girl',
+                })}
+                className={`text-xs font-bold px-2 py-1 rounded-full border transition-colors ${
+                  draft.ownerId === 'owner-girl'
+                    ? 'bg-rose-100 text-rose-700 border-rose-300'
+                    : 'bg-white text-slate-500 border-slate-200 hover:border-rose-200 hover:text-rose-600'
+                }`}
+                aria-pressed={draft.ownerId === 'owner-girl'}
+              >
+                👰 {ownerNames.girlName}
+              </button>
+            )}
+          </div>
+        )}
         <div className="flex justify-end gap-2">
           <button
             onClick={onEditToggle}
@@ -1929,6 +1994,17 @@ function PersonRow({
           )}
           {person.notes && (
             <span className="text-[10px] text-slate-500 truncate italic">「{person.notes}」</span>
+          )}
+          {person.ownerId && (
+            <span className="text-[10px] bg-rose-50 text-rose-700 px-2 py-0.5 rounded border border-rose-200">
+              {person.ownerId === 'owner-boy' && ownerNames?.boyName
+                ? `🤵 ${ownerNames.boyName}`
+                : person.ownerId === 'owner-girl' && ownerNames?.girlName
+                ? `👰 ${ownerNames.girlName}`
+                : person.ownerId === 'owner-boy'
+                ? '🤵 新郎'
+                : '👰 新娘'}
+            </span>
           )}
         </div>
       </div>
@@ -2102,7 +2178,7 @@ function youtubeId(url) {
   return null;
 }
 
-function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, currentUserUid, showToast }) {
+function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, currentUserUid, showToast, ownerNames }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -2340,6 +2416,8 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
             createdAt: Date.now(),
           })
         }
+        // 2026-08-01 — owner (couple) for the new song entry.
+        ownerNames={ownerNames}
       />
 
       {PLAYLIST_MOMENTS.map(({ id, label, e }) => {
@@ -2373,6 +2451,7 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
                           showToast('✅ 歌曲已更新');
                         }}
                         onCancel={() => setEditing(null)}
+                        ownerNames={ownerNames}
                       />
                     ) : (
                       <SortableRow key={song.id} id={song.id}>
@@ -2394,6 +2473,7 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
                               onUpsert({ ...song, votes: Array.from(votes) });
                             }}
                             onDelete={() => onDelete(song.id)}
+                            ownerNames={ownerNames}
                           />
                         )}
                       </SortableRow>
@@ -2414,6 +2494,7 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
                         showToast('✅ 歌曲已更新');
                       }}
                       onCancel={() => setEditing(null)}
+                      ownerNames={ownerNames}
                     />
                   ) : (
                     <SongRow
@@ -2433,6 +2514,7 @@ function PlaylistTab({ songs, onUpsert, onDelete, onReorder, onSetOrders, curren
                         onUpsert({ ...song, votes: Array.from(votes) });
                       }}
                       onDelete={() => onDelete(song.id)}
+                      ownerNames={ownerNames}
                     />
                   )
                 ))}
@@ -2473,6 +2555,10 @@ function SongRow({
   onMoveUp,
   onMoveDown,
   dragHandleProps,
+  // 2026-08-01 — owner (couple) for this song. Lets couples
+  // mark "first dance is 志明 & 春嬌" or "志明's pick" etc.
+  // ownerNames is the raw {boyName, girlName} from the hook.
+  ownerNames,
 }) {
   const voted = (song.votes || []).includes(currentUserUid);
   const ytId = youtubeId(song.link);
@@ -2582,6 +2668,17 @@ function SongRow({
           {song.suggestedByName && (
             <span className="ml-2 text-rose-500">· 建議: {song.suggestedByName}</span>
           )}
+          {song.ownerId && (
+            <span className="ml-2 bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded border border-rose-200">
+              {song.ownerId === 'owner-boy' && ownerNames?.boyName
+                ? `🤵 ${ownerNames.boyName}`
+                : song.ownerId === 'owner-girl' && ownerNames?.girlName
+                ? `👰 ${ownerNames.girlName}`
+                : song.ownerId === 'owner-boy'
+                ? '🤵 新郎'
+                : '👰 新娘'}
+            </span>
+          )}
         </div>
         {song.notes && (
           <div className="text-xs text-slate-500 mt-1 italic leading-tight">{song.notes}</div>
@@ -2620,7 +2717,7 @@ function SongRow({
   );
 }
 
-function NewSongRow({ onSubmit }) {
+function NewSongRow({ onSubmit, ownerNames }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
     title: '',
@@ -2629,6 +2726,7 @@ function NewSongRow({ onSubmit }) {
     link: '',
     notes: '',
     suggestedByName: '',
+    ownerId: '',
   });
 
   if (!open) {
@@ -2689,6 +2787,46 @@ function NewSongRow({ onSubmit }) {
           className="col-span-6 p-2 rounded-lg border border-slate-300 text-sm"
         />
       </div>
+      {/* 2026-08-01 — owner pill row in the new-song editor. */}
+      {(ownerNames?.boyName || ownerNames?.girlName) && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] font-bold text-slate-500 mr-1">屬於邊位</span>
+          {ownerNames.boyName && (
+            <button
+              type="button"
+              onClick={() => setDraft({
+                ...draft,
+                ownerId: draft.ownerId === 'owner-boy' ? '' : 'owner-boy',
+              })}
+              className={`text-xs font-bold px-2 py-1 rounded-full border transition-colors ${
+                draft.ownerId === 'owner-boy'
+                  ? 'bg-rose-100 text-rose-700 border-rose-300'
+                  : 'bg-white text-slate-500 border-slate-200 hover:border-rose-200 hover:text-rose-600'
+              }`}
+              aria-pressed={draft.ownerId === 'owner-boy'}
+            >
+              🤵 {ownerNames.boyName}
+            </button>
+          )}
+          {ownerNames.girlName && (
+            <button
+              type="button"
+              onClick={() => setDraft({
+                ...draft,
+                ownerId: draft.ownerId === 'owner-girl' ? '' : 'owner-girl',
+              })}
+              className={`text-xs font-bold px-2 py-1 rounded-full border transition-colors ${
+                draft.ownerId === 'owner-girl'
+                  ? 'bg-rose-100 text-rose-700 border-rose-300'
+                  : 'bg-white text-slate-500 border-slate-200 hover:border-rose-200 hover:text-rose-600'
+              }`}
+              aria-pressed={draft.ownerId === 'owner-girl'}
+            >
+              👰 {ownerNames.girlName}
+            </button>
+          )}
+        </div>
+      )}
       <div className="flex justify-end gap-2">
         <button
           onClick={() => setOpen(false)}
@@ -2700,7 +2838,7 @@ function NewSongRow({ onSubmit }) {
           onClick={() => {
             if (!draft.title.trim()) return;
             onSubmit({ ...draft });
-            setDraft({ title: '', artist: '', moment: 'entrance', link: '', notes: '', suggestedByName: '' });
+            setDraft({ title: '', artist: '', moment: 'entrance', link: '', notes: '', suggestedByName: '', ownerId: '' });
             setOpen(false);
           }}
           className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700"
@@ -2719,13 +2857,20 @@ function NewSongRow({ onSubmit }) {
  * the existing song's values. Saves via onSave → onUpsert so
  * the save path is shared with create.
  */
-function EditSongRow({ song, onSave, onCancel }) {
+function EditSongRow({ song, ownerNames, onSave, onCancel }) {
   const [title, setTitle] = useState(song.title || '');
   const [artist, setArtist] = useState(song.artist || '');
   const [moment, setMoment] = useState(song.moment || 'entrance');
   const [link, setLink] = useState(song.link || '');
   const [notes, setNotes] = useState(song.notes || '');
   const [suggestedByName, setSuggestedByName] = useState(song.suggestedByName || '');
+  // 2026-08-01 — owner field. Lets couples tag which partner
+  // this song is "for" or "picked by" (e.g. 志明's pick for
+  // the entrance song). ownerId is one of 'owner-boy' |
+  // 'owner-girl' | ''. Empty by default; rendered as a
+  // pill row at the bottom of the editor so couples can
+  // toggle without breaking their flow.
+  const [ownerId, setOwnerId] = useState(song.ownerId || '');
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -2740,6 +2885,7 @@ function EditSongRow({ song, onSave, onCancel }) {
         link: link.trim(),
         notes: notes.trim(),
         suggestedByName: suggestedByName.trim(),
+        ownerId: ownerId || '',
       });
     } finally {
       setSaving(false);
@@ -2806,6 +2952,42 @@ function EditSongRow({ song, onSave, onCancel }) {
           className="col-span-6 p-2 rounded-lg border border-slate-300 text-sm"
         />
       </div>
+      {/* 2026-08-01 — owner pill row. Same pattern as
+          PersonRow in 敬茶. Empty when ownerNames is empty
+          so the editor doesn't render an empty row. */}
+      {(ownerNames?.boyName || ownerNames?.girlName) && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[10px] font-bold text-slate-500 mr-1">屬於邊位</span>
+          {ownerNames.boyName && (
+            <button
+              type="button"
+              onClick={() => setOwnerId(ownerId === 'owner-boy' ? '' : 'owner-boy')}
+              className={`text-xs font-bold px-2 py-1 rounded-full border transition-colors ${
+                ownerId === 'owner-boy'
+                  ? 'bg-rose-100 text-rose-700 border-rose-300'
+                  : 'bg-white text-slate-500 border-slate-200 hover:border-rose-200 hover:text-rose-600'
+              }`}
+              aria-pressed={ownerId === 'owner-boy'}
+            >
+              🤵 {ownerNames.boyName}
+            </button>
+          )}
+          {ownerNames.girlName && (
+            <button
+              type="button"
+              onClick={() => setOwnerId(ownerId === 'owner-girl' ? '' : 'owner-girl')}
+              className={`text-xs font-bold px-2 py-1 rounded-full border transition-colors ${
+                ownerId === 'owner-girl'
+                  ? 'bg-rose-100 text-rose-700 border-rose-300'
+                  : 'bg-white text-slate-500 border-slate-200 hover:border-rose-200 hover:text-rose-600'
+              }`}
+              aria-pressed={ownerId === 'owner-girl'}
+            >
+              👰 {ownerNames.girlName}
+            </button>
+          )}
+        </div>
+      )}
       <div className="flex justify-end gap-2">
         <button
           onClick={onCancel}
@@ -2917,6 +3099,10 @@ export function WeddingDay({
             onSetOrders={onSetResourcePositions}
             currentUser={currentUser}
             helpers={helpers}
+            // 2026-08-01 — owner (couple) names so the HelperPicker
+            // can offer the couple as assignees alongside the
+            // 兄弟姊妹 in 物資 too.
+            ownerNames={ownerNames}
             showToast={showToast}
           />
         )}
@@ -2930,6 +3116,11 @@ export function WeddingDay({
             // all in parallel. Replaces the older onReorder
             // swap-pair handler.
             onSetOrders={onSetTeaCeremonyOrders}
+            // 2026-08-01 — owner names (新郎 / 新娘) so the
+            // PersonRow editor can let couples tag which
+            // partner is responsible for each relative on
+            // the day (e.g. 志明 handles 夫家 group).
+            ownerNames={ownerNames}
           />
         )}
         {active === 'playlist' && (
@@ -2941,7 +3132,11 @@ export function WeddingDay({
             // 2026-07-22b — drag-and-drop reorder in 歌單.
             onSetOrders={onSetPlaylistPositions}
             currentUserUid={currentUser?.uid}
-                      showToast={showToast}
+            // 2026-08-01 — owner names so the new-song + edit-song
+            // editors can offer a single-owner pill (e.g.
+            // 「志明's pick for entrance」).
+            ownerNames={ownerNames}
+            showToast={showToast}
           />
         )}
       </div>

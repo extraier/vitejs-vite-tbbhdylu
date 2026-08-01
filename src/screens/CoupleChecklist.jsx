@@ -349,6 +349,11 @@ export function CoupleChecklist({
   onSelectVendor,
   myVendorsPanel,
   vendorContacts = [],
+  // 2026-08-01 — owner (couple) names. Lets couples assign
+  // any regular to-do list task to themselves (e.g. 志明
+  // follows up on the 酒店 menu) without going through the
+  // 兄弟姊妹 flow. Passed down to <TaskFullEditor>.
+  ownerNames,
   // 2026-07-17 — Active helpers (兄弟姊妹) sourced from
   // users/{uid}/helpers in App.jsx. Same parallel pattern as
   // vendorContacts: each entry has at least id and a
@@ -797,6 +802,10 @@ function TaskRow({
         helpersLoading={helpersLoading}
         onSave={onUpdateTask}
         onCancel={onClearEditing}
+        // 2026-08-01 — owner (couple) names so the editor's
+        // 「指派28兄弟姊妹」 dropdown can offer 新人自己
+        // as an optgroup. Forwarded from <CoupleChecklist>.
+        ownerNames={ownerNames}
       />
     );
   }
@@ -1163,11 +1172,16 @@ function TaskCostEditor({ task, onSave, onCancel }) {
  */
 function TaskFullEditor({
   task,
-  vendorContacts,
   helpers,
   helpersLoading,
+  vendorContacts,
   onSave,
   onCancel,
+  // 2026-08-01 — owner (couple) names. Lets couples assign a
+  // regular task to themselves (e.g. 「志明 follow up on
+  // 酒店 menu」) without going through the 兄弟姊妹 flow.
+  // ownerNames is the raw {boyName, girlName} from the hook.
+  ownerNames,
 }) {
   const splitCategory = (cat) => {
     if (!cat) return { top: '', sub: '' };
@@ -1218,10 +1232,27 @@ function TaskFullEditor({
     let chosenHelperName = '';
     let chosenHelperUid = '';
     if (assignedHelperMode === 'pick') {
-      const h = helpers.find((x) => x.id === assignedHelperId);
-      chosenHelperId = h?.id || '';
-      chosenHelperName = h?.displayName || h?.name || '';
-      chosenHelperUid = h?.helperUid || '';
+      // 2026-08-01 — owner (couple) optgroup lives at values
+      // 'owner-boy' / 'owner-girl'. These aren't in the helpers
+      // list (which comes from the /helpers subcollection), so
+      // we special-case them here and look up the name in the
+      // ownerNames prop. The uid matches the id so existing
+      // rules + display logic treat the chip like a real
+      // helper.
+      if (assignedHelperId === 'owner-boy' && ownerNames?.boyName) {
+        chosenHelperId = 'owner-boy';
+        chosenHelperName = ownerNames.boyName;
+        chosenHelperUid = 'owner-boy';
+      } else if (assignedHelperId === 'owner-girl' && ownerNames?.girlName) {
+        chosenHelperId = 'owner-girl';
+        chosenHelperName = ownerNames.girlName;
+        chosenHelperUid = 'owner-girl';
+      } else {
+        const h = helpers.find((x) => x.id === assignedHelperId);
+        chosenHelperId = h?.id || '';
+        chosenHelperName = h?.displayName || h?.name || '';
+        chosenHelperUid = h?.helperUid || '';
+      }
     } else {
       chosenHelperName = assignedHelperName || '';
     }
@@ -1412,6 +1443,21 @@ function TaskFullEditor({
                 {h.perms?.canViewGuestList ? ' · 名冊' : ''}
               </option>
             ))}
+            {/* 2026-08-01 — owner (couple) optgroup. Lets couples
+                assign a regular task to themselves without going
+                through the 兄弟姊妹 flow. Only rendered when
+                at least one name is set; otherwise the option
+                would render as 死文字 with no uid. */}
+            {(ownerNames?.boyName || ownerNames?.girlName) && (
+              <optgroup label="新人自己">
+                {ownerNames.boyName && (
+                  <option value="owner-boy">🤵 {ownerNames.boyName}</option>
+                )}
+                {ownerNames.girlName && (
+                  <option value="owner-girl">👰 {ownerNames.girlName}</option>
+                )}
+              </optgroup>
+            )}
           </select>
         ) : (
           <input
