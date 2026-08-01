@@ -1,4 +1,4 @@
-// 2026-07-30 — useUserProfile hook.
+// 2026-08-01 — useUserProfile hook.
 //
 // Real-time subscription to the user doc + unlocks subcollection, so
 // any screen that needs "what's the user's premium tier? what unlocks
@@ -24,6 +24,15 @@
 //   referralCode — set by referralCodes.onUserCreate(). The user's
 //                  own STD-XXXXX code. Never changes after signup.
 //
+// 2026-08-01 (pivot) — ownerNames / saveOwnerNames have MOVED to
+// useEventOwnerNames(eventId, uid). The user doc is now strictly
+// server-only (no client-side reads OR writes of these fields).
+// For Commit 1 we keep these stubs so external plugins that
+// destructure { ownerNames, saveOwnerNames } from useUserProfile
+// don't crash with `undefined`. The stubs return null / throw a
+// descriptive error pointing at the new hook. Removed in Commit 2
+// migration CF + cleanup pass.
+//
 // Loading semantics:
 //   - loading=true on mount, until at least one unlock snapshot fires
 //   - The user doc snapshot fires immediately (the doc always exists;
@@ -32,8 +41,6 @@
 //     snapshot), which still flips loading=false.
 //   - The referral fetch is independent: while in flight the
 //     `referral.loading` flag stays true and the UI shows '…'.
-//
-// Subscriptions are cleaned up on unmount or uid change.
 
 import { useEffect, useState } from 'react';
 import { doc, collection, onSnapshot } from 'firebase/firestore';
@@ -49,12 +56,6 @@ export function useUserProfile(user) {
   const [promotedAt, setPromotedAt] = useState(null);
   const [createdAt, setCreatedAt] = useState(null);
   const [referralCode, setReferralCode] = useState(null);
-  // 2026-08-01 — owner display names (新郎 / 新娘). User-scoped
-  // (one pair per user, persists across all their events) so
-  // a wedding planner who runs many weddings only enters the
-  // names once. Propagated to the 大日流程 HelperPicker so the
-  // couple can be assigned to rundown entries.
-  const [ownerNames, setOwnerNames] = useState({ boyName: '', girlName: '' });
   const [unlocks, setUnlocks] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -75,7 +76,6 @@ export function useUserProfile(user) {
       setPromotedAt(null);
       setCreatedAt(null);
       setReferralCode(null);
-      setOwnerNames({ boyName: '', girlName: '' });
       setUnlocks([]);
       setLoading(false);
       return undefined;
@@ -88,14 +88,12 @@ export function useUserProfile(user) {
       setPromotedAt(data.promotedAt || null);
       setCreatedAt(data.createdAt || null);
       setReferralCode(data.referralCode || null);
-      // 2026-08-01 — owner names live on the user doc as
-      // `boyName` and `girlName` (flat string fields). Empty
-      // string is the canonical "not set" shape; missing
-      // fields are normalised to ''.
-      setOwnerNames({
-        boyName: data.boyName || '',
-        girlName: data.girlName || '',
-      });
+      // 2026-08-01 (pivot) — ownerNames reading removed. The user
+      // doc still carries `boyName` / `girlName` flat fields for
+      // legacy reasons (set by updateOwnerNames pre-pivot) but
+      // they're no longer read here. useEventOwnerNames reads
+      // them only as a Commit-1 fallback when the event doc has
+      // no names. Commit 2 migration deletes them entirely.
     });
 
     const unlocksRef = collection(db, 'artifacts', appId, 'users', uid, 'unlocks');
@@ -114,14 +112,6 @@ export function useUserProfile(user) {
   }, [uid]);
 
   // 2. Referral pipeline — single round-trip to getMyReferralInfo.
-  // We use the function (not a query on /users) because:
-  //   - referredCount is "people who signed up with my code" — this
-  //     is NOT stored on the user doc, only the function knows it
-  //     by counting `referredByCode === myCode` user docs.
-  //   - claimedCount is "referred friends who have ≥1 event" — same
-  //     story, and a Firestore `get()` per referred user would
-  //     exceed the SDK's quota for big pipelines.
-  //   - The function already exists for ReferralModal's track tab.
   useEffect(() => {
     if (!uid) {
       setReferral({ referred: 0, claimed: 0, loading: false, error: null });
@@ -157,40 +147,18 @@ export function useUserProfile(user) {
     };
   }, [uid]);
 
-  // 2026-08-01 (fix) — Persist owner names via the
-  // `updateOwnerNames` Cloud Function (functions/src/userProfile.ts)
-  // instead of a direct client setDoc. The user doc is otherwise
-  // server-only (tier / promotedAt / unlocks / referralCode are
-  // written by Auth triggers + grantUnlock), so the Firestore
-  // rules do NOT permit a direct client write to /users/{uid}.
-  // Calling setDoc from the client produced
-  // "permission-denied" + the ❌ 儲存失敗 toast in MyProfile.
-  //
-  // The CF uses the Admin SDK to bypass rules and writes ONLY
-  // boyName / girlName / updatedAt with merge:true, so other
-  // fields on the user doc are untouched. Server-side validation
-  // lives in userProfileLogic.ts (cleanOwnerNames): strips C0
-  // controls, trims, truncates to 30 chars, requires ≥1 field
-  // non-empty. Throw HttpsError(invalid-argument) on bad input.
-  //
-  // We then trust the server's cleaned values in the returned
-  // `{ ok, boyName, girlName }` payload (rather than echoing
-  // our raw inputs) so the form's `useEffect` reset listener
-  // never drifts away from the canonical state on a partial
-  // success.
-  const saveOwnerNames = async (next) => {
-    if (!uid) throw new Error('Not signed in');
-    const updateOwnerNames = httpsCallable(functions, 'updateOwnerNames');
-    const res = await updateOwnerNames({
-      boyName: next.boyName || '',
-      girlName: next.girlName || '',
-    });
-    const cleaned = res.data || {};
-    setOwnerNames({
-      boyName: cleaned.boyName ?? next.boyName ?? '',
-      girlName: cleaned.girlName ?? next.girlName ?? '',
-    });
-    return cleaned;
+  // 2026-08-01 (pivot) — DEPRECATED stubs. The couple's display
+  // names now live per-event on the event doc, owned by
+  // useEventOwnerNames(eventId, uid). These stubs return null /
+  // throw a descriptive error so external plugins that destructure
+  // `ownerNames` / `saveOwnerNames` from useUserProfile don't
+  // crash with `undefined`. Removed in Commit 2 migration.
+  const ownerNames_DEPRECATED = null;
+  const saveOwnerNames_DEPRECATED = async () => {
+    throw new Error(
+      '[useUserProfile] saveOwnerNames has moved to useEventOwnerNames(eventId, uid). ' +
+        'See pivot in commit message — useEventOwnerNames hook handles the new CF payload.',
+    );
   };
 
   // Derived: each storage-500mb unlock = +500MB. Lives in the hook
@@ -203,8 +171,10 @@ export function useUserProfile(user) {
     createdAt,
     promotedAt,
     referralCode,
-    ownerNames,
-    saveOwnerNames,
+    // Deprecated — see useEventOwnerNames(eventId, uid). Stub
+    // removed in Commit 2 migration.
+    ownerNames: ownerNames_DEPRECATED,
+    saveOwnerNames: saveOwnerNames_DEPRECATED,
     referral: {
       referred: referral.referred,
       claimed: referral.claimed,
