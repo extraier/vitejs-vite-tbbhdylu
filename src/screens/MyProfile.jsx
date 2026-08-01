@@ -30,6 +30,7 @@ import { ChevronLeft, Crown, Copy, Check, LogOut, User as UserIcon, AlertCircle,
 import { useAuth } from '../hooks/useAuth';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { ReferralKpi } from '../components/ReferralKpi';
+import { OwnerNamesEditor } from '../components/OwnerNamesEditor';
 
 // 2026-07-30 — labels kept inline (not imported from RewardsBanner)
 // to avoid coupling between screens. tiny duplication, no shared
@@ -45,7 +46,7 @@ const UNLOCK_LABELS = {
 
 export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, showToast, deletedEvents = [], onRestoreEvent }) {
   const { logout, hasPasswordProvider, sendEmailVerification } = useAuth();
-  const { tier, unlocks, createdAt, promotedAt, referralCode, referral, loading } = useUserProfile(currentUser);
+  const { tier, unlocks, createdAt, promotedAt, referralCode, ownerNames, saveOwnerNames, referral, loading } = useUserProfile(currentUser);
   const [copied, setCopied] = useState(null);
   const [verifySending, setVerifySending] = useState(false);
   const [verifySent, setVerifySent] = useState(false);
@@ -185,6 +186,20 @@ export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, sh
             </div>
           </div>
         </div>
+      </section>
+
+      {/* 2026-08-01 — Owner names (新郎 / 新娘). User-scoped — one
+          pair per user, persists across all events. The names
+          propagate to the 大日流程 HelperPicker so the couple
+          can be assigned to rundown entries. Sits BELOW the email
+          section so the most-frequently-edited field (email
+          verification) still reads first. */}
+      <section className="mb-4">
+        <OwnerNamesEditor
+          ownerNames={ownerNames}
+          onSave={saveOwnerNames}
+          onToast={showToast}
+        />
       </section>
 
       {/* 2026-08-01 — Friend referral pipeline.

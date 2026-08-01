@@ -49,6 +49,12 @@ export function useUserProfile(user) {
   const [promotedAt, setPromotedAt] = useState(null);
   const [createdAt, setCreatedAt] = useState(null);
   const [referralCode, setReferralCode] = useState(null);
+  // 2026-08-01 — owner display names (新郎 / 新娘). User-scoped
+  // (one pair per user, persists across all their events) so
+  // a wedding planner who runs many weddings only enters the
+  // names once. Propagated to the 大日流程 HelperPicker so the
+  // couple can be assigned to rundown entries.
+  const [ownerNames, setOwnerNames] = useState({ boyName: '', girlName: '' });
   const [unlocks, setUnlocks] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -69,6 +75,7 @@ export function useUserProfile(user) {
       setPromotedAt(null);
       setCreatedAt(null);
       setReferralCode(null);
+      setOwnerNames({ boyName: '', girlName: '' });
       setUnlocks([]);
       setLoading(false);
       return undefined;
@@ -81,6 +88,14 @@ export function useUserProfile(user) {
       setPromotedAt(data.promotedAt || null);
       setCreatedAt(data.createdAt || null);
       setReferralCode(data.referralCode || null);
+      // 2026-08-01 — owner names live on the user doc as
+      // `boyName` and `girlName` (flat string fields). Empty
+      // string is the canonical "not set" shape; missing
+      // fields are normalised to ''.
+      setOwnerNames({
+        boyName: data.boyName || '',
+        girlName: data.girlName || '',
+      });
     });
 
     const unlocksRef = collection(db, 'artifacts', appId, 'users', uid, 'unlocks');
@@ -142,6 +157,30 @@ export function useUserProfile(user) {
     };
   }, [uid]);
 
+  // 2026-08-01 — Persist owner names. Uses setDoc(merge:true) so
+  // we only touch the two fields, never clobbering tier / unlocks
+  // / referralCode / etc. The hook returns the new state so the
+  // caller can show a toast (and so a re-render reflects the save
+  // even if the realtime subscription is slow on this network).
+  const saveOwnerNames = async (next) => {
+    if (!uid) throw new Error('Not signed in');
+    const userRef = doc(db, 'artifacts', appId, 'users', uid);
+    const { setDoc } = await import('firebase/firestore');
+    await setDoc(
+      userRef,
+      {
+        boyName: next.boyName || '',
+        girlName: next.girlName || '',
+        updatedAt: Date.now(),
+      },
+      { merge: true },
+    );
+    setOwnerNames({
+      boyName: next.boyName || '',
+      girlName: next.girlName || '',
+    });
+  };
+
   // Derived: each storage-500mb unlock = +500MB. Lives in the hook
   // so consumers don't have to know the pricing constant.
   const storageMbBonus = unlocks.filter((u) => u === 'storage-500mb').length * STORAGE_BONUS_MB_PER_UNLOCK;
@@ -152,6 +191,8 @@ export function useUserProfile(user) {
     createdAt,
     promotedAt,
     referralCode,
+    ownerNames,
+    saveOwnerNames,
     referral: {
       referred: referral.referred,
       claimed: referral.claimed,

@@ -57,6 +57,7 @@ import { usePartnerInvitePreview } from './hooks/usePartnerInvitePreview';
 import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { useFirestoreDoc } from './hooks/useFirestoreDoc';
+import { useUserProfile } from './hooks/useUserProfile';
 import { useToast } from './hooks/useToast';
 // 2026-07-26 — Co-owners (couples / partners) front-end bindings.
 // See src/lib/partnerInvite.ts for the shapes; the Cloud Functions
@@ -196,6 +197,13 @@ export default function App() {
   // call unconditionally — it no-ops if no user.
   const helperCtx = useHelperAuth();
   const [helperAccepting, setHelperAccepting] = useState(false);
+
+  // 2026-08-01 — Owner names (新郎 / 新娘). User-scoped (one pair per
+  // user) and consumed by the 大日流程 HelperPicker so the couple can
+  // be assigned to rundown entries. We subscribe here at the App
+  // level so the names are live for every consumer (MyProfile, the
+  // upcoming header chip, the 大日流程 picker) without re-subscribing.
+  const { ownerNames } = useUserProfile(user);
 
   // 2026-07-15 — auto-route vendors to their dashboard. When the user
   // signs in and has the `vendor: true` custom claim (set by
@@ -3028,6 +3036,11 @@ export default function App() {
                 // subscribed in App.jsx (line 610) for use by the
                 // wedding-tasks panel — just plumb it through.
                 helpers={helpers}
+                // 2026-08-01 — Owner names (新郎 / 新娘) so the
+                // 大日流程 HelperPicker can offer the couple as
+                // assignees alongside the 兄弟姊妹. Live-updates
+                // when the user edits the names in MyProfile.
+                ownerNames={ownerNames}
                 // 2026-07-24 — pass the toast hook so the new edit
                 // save confirmations in 物資/歌單 can show "✅ 已更新".
                 showToast={showToast}

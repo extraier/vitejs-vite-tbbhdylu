@@ -81,6 +81,8 @@ beforeEach(() => {
     createdAt: { toDate: () => new Date('2026-07-22') },
     promotedAt: null,
     referralCode: 'STD-A4X7K',
+    ownerNames: { boyName: '', girlName: '' },
+    saveOwnerNames: vi.fn().mockResolvedValue(undefined),
     referral: {
       referred: 0,
       claimed: 0,
@@ -219,6 +221,8 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: { toDate: () => new Date('2026-07-29') },
       referralCode: 'STD-A4X7K',
+      ownerNames: { boyName: '志明', girlName: '春嬌' },
+      saveOwnerNames: vi.fn().mockResolvedValue(undefined),
       referral: { referred: 5, claimed: 3, storageMbBonus: 1500, loading: false, error: null },
       loading: false,
     });
@@ -239,6 +243,8 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: 'STD-A4X7K',
+      ownerNames: { boyName: '', girlName: '' },
+      saveOwnerNames: vi.fn().mockResolvedValue(undefined),
       referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
       loading: false,
     });
@@ -316,6 +322,8 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: 'STD-A4X7K',
+      ownerNames: { boyName: '', girlName: '' },
+      saveOwnerNames: vi.fn().mockResolvedValue(undefined),
       referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
       loading: false,
     });
@@ -334,6 +342,8 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: null,
+      ownerNames: { boyName: '', girlName: '' },
+      saveOwnerNames: vi.fn().mockResolvedValue(undefined),
       referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
       loading: false,
     });
@@ -353,6 +363,8 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: 'STD-A4X7K',
+      ownerNames: { boyName: '志明', girlName: '春嬌' },
+      saveOwnerNames: vi.fn().mockResolvedValue(undefined),
       referral: { referred: 4, claimed: 2, storageMbBonus: 1000, loading: false, error: null },
       loading: false,
     });
@@ -378,6 +390,8 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: 'STD-A4X7K',
+      ownerNames: { boyName: '', girlName: '' },
+      saveOwnerNames: vi.fn().mockResolvedValue(undefined),
       referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: true, error: null },
       loading: false,
     });
@@ -396,6 +410,8 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: 'STD-A4X7K',
+      ownerNames: { boyName: '', girlName: '' },
+      saveOwnerNames: vi.fn().mockResolvedValue(undefined),
       referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: 'unauth' },
       loading: false,
     });
@@ -403,6 +419,53 @@ describe('MyProfile', () => {
       <MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />,
     );
     expect(screen.getByText('請登入後查看推薦資料。')).toBeTruthy();
+  });
+
+  it('renders the OwnerNamesEditor with pre-filled names from the hook', () => {
+    const saveOwnerNames = vi.fn().mockResolvedValue(undefined);
+    useUserProfile.mockReturnValue({
+      tier: null,
+      unlocks: [],
+      createdAt: { toDate: () => new Date('2026-07-22') },
+      promotedAt: null,
+      referralCode: 'STD-A4X7K',
+      ownerNames: { boyName: '志明', girlName: '春嬌' },
+      saveOwnerNames,
+      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
+      loading: false,
+    });
+    render(<MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />);
+    // The owner-name editor mounts with the names from the hook
+    expect(screen.getByLabelText('新郎').value).toBe('志明');
+    expect(screen.getByLabelText('新娘').value).toBe('春嬌');
+  });
+
+  it('saves new owner names via the hook when the user clicks 儲存', async () => {
+    const saveOwnerNames = vi.fn().mockResolvedValue(undefined);
+    useUserProfile.mockReturnValue({
+      tier: null,
+      unlocks: [],
+      createdAt: { toDate: () => new Date('2026-07-22') },
+      promotedAt: null,
+      referralCode: 'STD-A4X7K',
+      ownerNames: { boyName: '志明', girlName: '春嬌' },
+      saveOwnerNames,
+      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
+      loading: false,
+    });
+    render(
+      <MyProfile
+        currentUser={baseUser}
+        onBack={() => {}}
+        onUpgrade={() => {}}
+        showToast={mocks.showToast}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('新郎'), { target: { value: '大志明' } });
+    fireEvent.click(screen.getAllByRole('button', { name: '儲存' })[0]);
+    await waitFor(() => {
+      expect(saveOwnerNames).toHaveBeenCalledWith({ boyName: '大志明', girlName: '春嬌' });
+    });
   });
 
   it('shows deleted projects in trash and restores them', () => {

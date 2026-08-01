@@ -166,7 +166,15 @@ const RUNDOWN_GROUP_LABELS = {
 // inviting helpers, defeating the point of having helpers in
 // the app. Now the dropdown is always visible and the free-text
 // is opt-in.
-function HelperPicker({ helpers = [], value = [], onChange }) {
+//
+// 2026-08-01 — Owner (couple) support. Pass `ownerNames: {boyName,
+// girlName}` and the picker renders the couple as a separate
+// "新人自己" group ABOVE the 兄弟姊妹 group. The couple IDs are
+// stable so they can be re-selected across sessions, and they
+// share the chip-pill UI for visual consistency. Couples with
+// no helpers invited (only the two of them) can still assign
+// themselves to rundown entries.
+function HelperPicker({ helpers = [], ownerNames, value = [], onChange }) {
   const [showCustom, setShowCustom] = useState(false);
   const add = (h) => {
     if (value.find((x) => x.id === h.id)) return;
@@ -204,13 +212,17 @@ function HelperPicker({ helpers = [], value = [], onChange }) {
         {value.map((h) => (
           <span
             key={h.id}
-            className="inline-flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200"
+            className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-1 rounded-full border ${
+              h.id === 'owner-boy' || h.id === 'owner-girl'
+                ? 'bg-rose-100 text-rose-700 border-rose-200'
+                : 'bg-indigo-100 text-indigo-700 border-indigo-200'
+            }`}
           >
             <span>{h.name || h.id}</span>
             <button
               type="button"
               onClick={() => remove(h.id)}
-              className="text-indigo-500 hover:text-indigo-900 leading-none"
+              className="leading-none opacity-70 hover:opacity-100"
               aria-label="移除"
             >
               ✕
@@ -221,6 +233,34 @@ function HelperPicker({ helpers = [], value = [], onChange }) {
           <span className="text-xs text-slate-400">未分配</span>
         )}
       </div>
+      {/* 2026-08-01 — Owner (couple) optgroup above the helper list.
+          Only render the optgroup if the user has set at least one
+          name. Couples who haven't filled in the names yet won't see
+          this — the fallback text nudges them to MyProfile. */}
+      {ownerNames && (ownerNames.boyName || ownerNames.girlName) && (
+        <select
+          value=""
+          onChange={(e) => {
+            const id = e.target.value;
+            if (!id) return;
+            const list = [
+              ownerNames.boyName && { id: 'owner-boy', name: ownerNames.boyName, uid: 'owner-boy' },
+              ownerNames.girlName && { id: 'owner-girl', name: ownerNames.girlName, uid: 'owner-girl' },
+            ].filter(Boolean);
+            const owner = list.find((x) => x.id === id);
+            if (owner) add(owner);
+          }}
+          className="w-full p-2 rounded-lg border border-rose-200 text-xs bg-rose-50/40 mb-1.5"
+        >
+          <option value="">+ 新人自己...</option>
+          {ownerNames.boyName && (
+            <option value="owner-boy">🤵 {ownerNames.boyName}</option>
+          )}
+          {ownerNames.girlName && (
+            <option value="owner-girl">👰 {ownerNames.girlName}</option>
+          )}
+        </select>
+      )}
       {/* 2026-07-22 — Always-on dropdown. Was hidden when
           helpers.length === 0, which pushed couples into the
           free-text input. Now we render it always so couples
@@ -308,7 +348,7 @@ function HelperPicker({ helpers = [], value = [], onChange }) {
   );
 }
 
-function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpers }) {
+function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpers, ownerNames }) {
   const [editing, setEditing] = useState(null);
   const [filterGroup, setFilterGroup] = useState('all');
   const [filterAssigned, setFilterAssigned] = useState('all');
@@ -468,6 +508,7 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpe
 
       <NewEntryRow
         helpers={helpers}
+        ownerNames={ownerNames}
         onSubmit={(data) => {
           onUpsert({ id: `rd-${Date.now()}`, ...data });
         }}
@@ -487,6 +528,7 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpe
                   <RundownCard
                     entry={entry}
                     helpers={helpers}
+                    ownerNames={ownerNames}
                     isFirst={idx === 0}
                     isLast={idx === sorted.length - 1}
                     isEditing={editing === entry.id}
@@ -513,6 +555,7 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpe
               key={entry.id}
               entry={entry}
               helpers={helpers}
+              ownerNames={ownerNames}
               isFirst={idx === 0}
               isLast={idx === sorted.length - 1}
               isEditing={editing === entry.id}
@@ -551,6 +594,7 @@ function FilterPill({ active, onClick, label }) {
 function RundownCard({
   entry,
   helpers,
+  ownerNames,
   isEditing,
   isFirst,
   isLast,
@@ -647,6 +691,7 @@ function RundownCard({
           <div className="col-span-12">
             <HelperPicker
               helpers={helpers}
+              ownerNames={ownerNames}
               value={draft.assignedHelpers}
               onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
             />
@@ -792,7 +837,7 @@ function RundownCard({
   );
 }
 
-function NewEntryRow({ onSubmit, helpers }) {
+function NewEntryRow({ onSubmit, helpers, ownerNames }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
     startTime: '12:00',
@@ -889,6 +934,7 @@ function NewEntryRow({ onSubmit, helpers }) {
         <div className="col-span-12">
           <HelperPicker
             helpers={helpers}
+            ownerNames={ownerNames}
             value={draft.assignedHelpers}
             onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
           />
@@ -2816,6 +2862,12 @@ export function WeddingDay({
   helpers = [],
   // 2026-07-24 — toast for the new edit save confirmations.
   showToast,
+  // 2026-08-01 — owner names (新郎 / 新娘). Plumbed down to
+  // <RundownTab> so the HelperPicker can offer the couple as
+  // assignees alongside the 兄弟姊妹. Optional for backwards
+  // compat with pre-2026-08-01 callers (renders the picker
+  // without the 新人自己 optgroup).
+  ownerNames,
 }) {
   const [active, setActive] = useState('rundown');
 
@@ -2842,6 +2894,11 @@ export function WeddingDay({
             onUpsert={onUpsertRundown}
             onDelete={onDeleteRundown}
             onReorder={onReorderRundown}
+            // 2026-08-01 — owner names (新郎 / 新娘) so the
+            // HelperPicker can offer the couple as assignees
+            // alongside the 兄弟姊妹. Live-updates when the user
+            // edits the names in MyProfile.
+            ownerNames={ownerNames}
             // 2026-07-22b — drag-and-drop reorder. Used in
             // 自訂 sort mode to write batched manualPosition
             // updates for the dragged entries.
