@@ -81,6 +81,13 @@ beforeEach(() => {
     createdAt: { toDate: () => new Date('2026-07-22') },
     promotedAt: null,
     referralCode: 'STD-A4X7K',
+    referral: {
+      referred: 0,
+      claimed: 0,
+      storageMbBonus: 0,
+      loading: false,
+      error: null,
+    },
     loading: false,
   });
 });
@@ -212,6 +219,7 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: { toDate: () => new Date('2026-07-29') },
       referralCode: 'STD-A4X7K',
+      referral: { referred: 5, claimed: 3, storageMbBonus: 1500, loading: false, error: null },
       loading: false,
     });
     render(
@@ -231,6 +239,7 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: 'STD-A4X7K',
+      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
       loading: false,
     });
     const onUpgrade = vi.fn();
@@ -307,6 +316,7 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: 'STD-A4X7K',
+      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
       loading: false,
     });
     render(
@@ -324,6 +334,7 @@ describe('MyProfile', () => {
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: null,
       referralCode: null,
+      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: null },
       loading: false,
     });
     render(
@@ -333,6 +344,65 @@ describe('MyProfile', () => {
     // No copy button when there's no code to copy.
     expect(screen.queryByText('複製邀請碼')).toBeNull();
     expect(screen.queryByText('複製 UID')).toBeNull();
+  });
+
+  it('renders referral KPIs with the right values', () => {
+    useUserProfile.mockReturnValue({
+      tier: null,
+      unlocks: ['storage-500mb', 'storage-500mb'],
+      createdAt: { toDate: () => new Date('2026-07-22') },
+      promotedAt: null,
+      referralCode: 'STD-A4X7K',
+      referral: { referred: 4, claimed: 2, storageMbBonus: 1000, loading: false, error: null },
+      loading: false,
+    });
+    render(
+      <MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />,
+    );
+    // 已推薦 (referred=4)
+    expect(screen.getByText('已推薦')).toBeTruthy();
+    // 已領取 (claimed=2)
+    expect(screen.getByText('已領取')).toBeTruthy();
+    // 額外儲存 (storageMbBonus=1000)
+    expect(screen.getByText('額外儲存')).toBeTruthy();
+    // The numeric values
+    expect(screen.getByText('4')).toBeTruthy();
+    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.getByText('1000MB')).toBeTruthy();
+  });
+
+  it('shows the loading dots while the referral fetch is in flight', () => {
+    useUserProfile.mockReturnValue({
+      tier: null,
+      unlocks: [],
+      createdAt: { toDate: () => new Date('2026-07-22') },
+      promotedAt: null,
+      referralCode: 'STD-A4X7K',
+      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: true, error: null },
+      loading: false,
+    });
+    render(
+      <MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />,
+    );
+    // Three "…" placeholders (one per KPI tile)
+    const dots = screen.getAllByText('…');
+    expect(dots.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('shows the unauth hint when the referral fetch fails with unauth', () => {
+    useUserProfile.mockReturnValue({
+      tier: null,
+      unlocks: [],
+      createdAt: { toDate: () => new Date('2026-07-22') },
+      promotedAt: null,
+      referralCode: 'STD-A4X7K',
+      referral: { referred: 0, claimed: 0, storageMbBonus: 0, loading: false, error: 'unauth' },
+      loading: false,
+    });
+    render(
+      <MyProfile currentUser={baseUser} onBack={() => {}} onUpgrade={() => {}} />,
+    );
+    expect(screen.getByText('請登入後查看推薦資料。')).toBeTruthy();
   });
 
   it('shows deleted projects in trash and restores them', () => {

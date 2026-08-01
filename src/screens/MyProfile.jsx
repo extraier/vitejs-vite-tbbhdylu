@@ -26,9 +26,10 @@
 // pills.
 
 import { useState } from 'react';
-import { ChevronLeft, Crown, Copy, Check, LogOut, User as UserIcon, AlertCircle, ShieldCheck, KeyRound, ChevronRight, RotateCcw } from 'lucide-react';
+import { ChevronLeft, Crown, Copy, Check, LogOut, User as UserIcon, AlertCircle, ShieldCheck, KeyRound, ChevronRight, RotateCcw, Users, HardDrive } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useUserProfile } from '../hooks/useUserProfile';
+import { ReferralKpi } from '../components/ReferralKpi';
 
 // 2026-07-30 — labels kept inline (not imported from RewardsBanner)
 // to avoid coupling between screens. tiny duplication, no shared
@@ -44,7 +45,7 @@ const UNLOCK_LABELS = {
 
 export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, showToast, deletedEvents = [], onRestoreEvent }) {
   const { logout, hasPasswordProvider, sendEmailVerification } = useAuth();
-  const { tier, unlocks, createdAt, promotedAt, referralCode, loading } = useUserProfile(currentUser);
+  const { tier, unlocks, createdAt, promotedAt, referralCode, referral, loading } = useUserProfile(currentUser);
   const [copied, setCopied] = useState(null);
   const [verifySending, setVerifySending] = useState(false);
   const [verifySent, setVerifySent] = useState(false);
@@ -186,7 +187,46 @@ export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, sh
         </div>
       </section>
 
-      {/* Membership status */}
+      {/* 2026-08-01 — Friend referral pipeline.
+          Shows how many friends signed up with this user's code
+          (`referred`), how many of those have created an event
+          (`claimed`), and how much bonus storage the user has
+          earned so far (500 MB per storage-500mb unlock, capped by
+          the unlocks subcollection). Pulled from getMyReferralInfo
+          via useUserProfile. The 三格 layout is intentional — one
+          row of KPI tiles, mobile-friendly (each tile gets equal
+          width on small screens). */}
+      <section className="mb-4">
+        <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">
+          推薦朋友
+        </h2>
+        <div className="grid grid-cols-3 gap-2">
+          <ReferralKpi
+            icon={<Users className="w-4 h-4" />}
+            label="已推薦"
+            value={referral.loading ? '…' : referral.referred}
+            tooltip="用你推薦碼註冊嘅朋友"
+          />
+          <ReferralKpi
+            icon={<Users className="w-4 h-4" />}
+            label="已領取"
+            value={referral.loading ? '…' : referral.claimed}
+            tooltip="朋友已建立至少一個婚禮，可領取 +500MB"
+          />
+          <ReferralKpi
+            icon={<HardDrive className="w-4 h-4" />}
+            label="額外儲存"
+            value={referral.loading ? '…' : `${referral.storageMbBonus}MB`}
+            tooltip="每推薦一位建立婚禮嘅朋友可獲 +500MB 儲存空間"
+          />
+        </div>
+        {referral.error === 'unauth' && (
+          <p className="mt-2 text-xs text-amber-700">請登入後查看推薦資料。</p>
+        )}
+      </section>
+
+      {/* Original membership status section, now positioned BELOW the
+          referral pipeline so the most-actionable info reads first. */}
       <section className="mb-4">
         <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">
           會員狀態
