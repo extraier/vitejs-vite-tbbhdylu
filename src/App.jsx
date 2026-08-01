@@ -200,25 +200,14 @@ export default function App() {
   const helperCtx = useHelperAuth();
   const [helperAccepting, setHelperAccepting] = useState(false);
 
-  // 2026-08-01 — Owner names (新郎 / 新娘). User-scoped (one pair per
-  // user) and consumed by the 大日流程 HelperPicker so the couple can
-  // be assigned to rundown entries. We subscribe here at the App
-  // level so the names are live for every consumer (MyProfile, the
-  // upcoming header chip, the 大日流程 picker) without re-subscribing.
-  // 2026-08-01 (pivot) — owner names moved per-event. Read from
-  // useEventOwnerNames(currentEvent.id, user.uid) so the names
-  // propagate to the 大日流程 picker + ResourcesTab + Rundown.
-  // Commit-1 fallback: pass legacy `ownerNames` (now null from
-  // useUserProfile) so consumers that previously destructured it
-  // from useUserProfile still see the old user-level value if the
-  // event doc has no names yet (covers users who set their names
-  // before this pivot shipped).
+  // 2026-08-01 (TDZ hotfix) — pulled into useUserProfile() below,
+  // immediately after the `currentEvent` declaration. The owner
+  // names subscription needs `currentEvent?.id`, but `currentEvent`
+  // is declared ~150 lines further down — reading it here would
+  // trigger Temporal Dead Zone ReferenceError and blank out the
+  // root. The call is therefore deferred to line ~360.
   const { ownerNames: legacyOwnerNames } = useUserProfile(user);
-  const { ownerNames } = useEventOwnerNames(
-    currentEvent?.id,
-    user?.uid,
-    legacyOwnerNames,
-  );
+  // (useEventOwnerNames hook call moved — see below.)
 
   // 2026-07-15 — auto-route vendors to their dashboard. When the user
   // signs in and has the `vendor: true` custom claim (set by
@@ -351,6 +340,19 @@ export default function App() {
   // Current selection
   const [currentEvent, setCurrentEvent] = useState(null);
   const [activeCategory, setActiveCategory] = useState(null);
+
+  // 2026-08-01 (TDZ hotfix) — owner-names subscription moved here
+  // from line 217, because `currentEvent` is declared above this
+  // point. The hook reads `currentEvent?.id` + `user?.uid`. The
+  // legacyOwnerNames fallback (from useUserProfile) covers users
+  // who set their names before the pivot shipped — it'll be
+  // removed in Commit 2 migration. Reads get filtered through the
+  // dedup-with-`?? ''` pattern so consumers never see undefined.
+  const { ownerNames } = useEventOwnerNames(
+    currentEvent?.id,
+    user?.uid,
+    legacyOwnerNames,
+  );
 
   // 2026-07-26 — Co-owners (couples / partners) auto-redeem. This
   // is split out from the top-of-function declaration so it can
