@@ -157,28 +157,40 @@ export function useUserProfile(user) {
     };
   }, [uid]);
 
-  // 2026-08-01 — Persist owner names. Uses setDoc(merge:true) so
-  // we only touch the two fields, never clobbering tier / unlocks
-  // / referralCode / etc. The hook returns the new state so the
-  // caller can show a toast (and so a re-render reflects the save
-  // even if the realtime subscription is slow on this network).
+  // 2026-08-01 (fix) — Persist owner names via the
+  // `updateOwnerNames` Cloud Function (functions/src/userProfile.ts)
+  // instead of a direct client setDoc. The user doc is otherwise
+  // server-only (tier / promotedAt / unlocks / referralCode are
+  // written by Auth triggers + grantUnlock), so the Firestore
+  // rules do NOT permit a direct client write to /users/{uid}.
+  // Calling setDoc from the client produced
+  // "permission-denied" + the ❌ 儲存失敗 toast in MyProfile.
+  //
+  // The CF uses the Admin SDK to bypass rules and writes ONLY
+  // boyName / girlName / updatedAt with merge:true, so other
+  // fields on the user doc are untouched. Server-side validation
+  // lives in userProfileLogic.ts (cleanOwnerNames): strips C0
+  // controls, trims, truncates to 30 chars, requires ≥1 field
+  // non-empty. Throw HttpsError(invalid-argument) on bad input.
+  //
+  // We then trust the server's cleaned values in the returned
+  // `{ ok, boyName, girlName }` payload (rather than echoing
+  // our raw inputs) so the form's `useEffect` reset listener
+  // never drifts away from the canonical state on a partial
+  // success.
   const saveOwnerNames = async (next) => {
     if (!uid) throw new Error('Not signed in');
-    const userRef = doc(db, 'artifacts', appId, 'users', uid);
-    const { setDoc } = await import('firebase/firestore');
-    await setDoc(
-      userRef,
-      {
-        boyName: next.boyName || '',
-        girlName: next.girlName || '',
-        updatedAt: Date.now(),
-      },
-      { merge: true },
-    );
-    setOwnerNames({
+    const updateOwnerNames = httpsCallable(functions, 'updateOwnerNames');
+    const res = await updateOwnerNames({
       boyName: next.boyName || '',
       girlName: next.girlName || '',
     });
+    const cleaned = res.data || {};
+    setOwnerNames({
+      boyName: cleaned.boyName ?? next.boyName ?? '',
+      girlName: cleaned.girlName ?? next.girlName ?? '',
+    });
+    return cleaned;
   };
 
   // Derived: each storage-500mb unlock = +500MB. Lives in the hook
