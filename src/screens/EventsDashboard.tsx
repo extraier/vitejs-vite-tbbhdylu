@@ -340,11 +340,16 @@ function EventCard({ event, onSelect, onRename, onDelete }: EventCardProps) {
         <ArrowRight className="w-5 h-5 text-rose-400 opacity-0 group-hover:opacity-100 transition-opacity translate-x-[-10px] group-hover:translate-x-0" />
       </div>
 
-      {/* 2026-07-31 — per-card action menu (⋯ button + popover). */}
+      {/* 2026-07-31 — per-card action menu (⋯ button + popover).
+          Positioned top-right to avoid covering the event name on
+          the left (the previous top-left placement overlapped the
+          first character of every card title). On mobile, the top
+          right stays clear of the title because we set the menu
+          z-index above the premium ribbon. */}
       {(onRename || onDelete) && (
         <div
           ref={menuRef}
-          className="absolute top-3 left-3"
+          className="absolute top-3 right-3 z-20"
           onClick={(e) => e.stopPropagation()}
         >
           <button
@@ -360,7 +365,7 @@ function EventCard({ event, onSelect, onRename, onDelete }: EventCardProps) {
           {menuOpen && (
             <div
               role="menu"
-              className="absolute top-full mt-1 left-0 bg-white shadow-lg rounded-xl border border-slate-200 py-1 min-w-[140px] z-10 animate-in fade-in zoom-in-95 duration-150"
+              className="absolute top-full mt-1 right-0 bg-white shadow-lg rounded-xl border border-slate-200 py-1 min-w-[140px] z-10 animate-in fade-in zoom-in-95 duration-150"
             >
               {onRename && (
                 <button
