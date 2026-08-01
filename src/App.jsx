@@ -105,6 +105,8 @@ import { JoinAsVendorCTA } from './components/JoinAsVendorCTA';
 import { UpgradeModal } from './components/modals/UpgradeModal';
 import { PurchaseModal } from './components/PurchaseModal';
 import { UserMenu } from './components/UserMenu';
+import { ProjectHeader } from './components/ProjectHeader';
+import { EventRenameModal } from './components/modals/EventRenameModal';
 import { PaymentModal } from './components/modals/PaymentModal';
 import { QrCodeModal } from './components/modals/QrCodeModal';
 import { EditGuestModal } from './components/modals/EditGuestModal';
@@ -635,6 +637,7 @@ export default function App() {
   // 'set' based on hasPasswordProvider() and passes the mode in.
   const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
   const [changePasswordMode, setChangePasswordMode] = useState('change'); // 'change' | 'set'
+  const [headerRenameOpen, setHeaderRenameOpen] = useState(false);
   const [showInvitationEditor, setShowInvitationEditor] = useState(false);
   const [editingGuest, setEditingGuest] = useState(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -767,16 +770,19 @@ export default function App() {
   // equal to user.uid AND coOwners contains user.uid).
   const events = useMemo(() => {
     if (!ownEvents && !coOwnedEvents) return [];
-    // For own events, attach `_ownerUid` so the picker can route
-    // subcollection reads correctly.
-    const ownWithOwner = (ownEvents || []).map((e) => ({
+    // Soft-deleted events stay in Firestore for restore, but are not
+    // shown in the active project picker.
+    const activeOwnEvents = (ownEvents || []).filter((e) => !e.deletedAt);
+    const ownWithOwner = activeOwnEvents.map((e) => ({
       ...e,
       _ownerUid: targetUid,
     }));
     // For co-owned events, the collectionGroup doc ref contains
     // the ownerUid. extract via .ref.path.
     // /artifacts/{appId}/users/{ownerUid}/events/{eventId}
-    const coOwnedWithOwner = (coOwnedEvents || []).map((e) => {
+    const coOwnedWithOwner = (coOwnedEvents || [])
+      .filter((e) => !e.deletedAt)
+      .map((e) => {
       const pathParts = (e._ref || e.ref?.path || '').split('/');
       // path = ['artifacts', appId, 'users', ownerUid, 'events', eventId]
       const ownerUid = pathParts[3];
@@ -801,6 +807,28 @@ export default function App() {
     }
     return merged;
   }, [ownEvents, coOwnedEvents, targetUid]);
+
+  const deletedEvents = useMemo(() => {
+    if (!ownEvents) return [];
+    return ownEvents
+      .filter((event) => Boolean(event.deletedAt))
+      .map((event) => ({ ...event, _ownerUid: targetUid }));
+  }, [ownEvents, targetUid]);
+
+  const handleRestoreEvent = async (event) => {
+    if (!event?._ownerUid || !event?.id) return;
+    try {
+      await setDoc(
+        doc(db, 'artifacts', appId, 'users', event._ownerUid, 'events', event.id),
+        { deletedAt: null, updatedAt: Date.now() },
+        { merge: true },
+      );
+      showToast('✅ 婚禮專案已還原。');
+    } catch (err) {
+      console.warn('[App] restore event failed:', err?.code, err?.message);
+      showToast('❌ 還原失敗，請稍後再試。');
+    }
+  };
 
   // 2026-07-15 — Auto-link any vendor contacts (across owners)
   // whose vendorEmail matches the currently signed-in user's email
@@ -2546,15 +2574,10 @@ export default function App() {
                       because it's redundant when there's only one view
                       anyway — tapping the heart goes to the role's
                       landing. */}
-                  <h1
-                    className="flex items-center gap-2 cursor-pointer min-w-0 flex-shrink-0"
-                    onClick={() => {
-                      // From outside a project, this navigates to the
-                      // dashboard (no event → renders the picker).
-                      // From inside a project, route to the role's
-                      // landing view rather than dumping the user onto
-                      // a blank screen — they always have at least one
-                      // event when this header is shown.
+                  <ProjectHeader
+                    event={currentEvent}
+                    onRename={() => setHeaderRenameOpen(true)}
+                    onBrandClick={() => {
                       if (!currentEvent) {
                         setCurrentView('events-dashboard');
                         return;
@@ -2563,27 +2586,7 @@ export default function App() {
                       else if (userRole === 'reception') setCurrentView('reception-scanner');
                       else setCurrentView('couple-checklist');
                     }}
-                  >
-                    <Heart className="w-6 h-6 fill-rose-500 text-rose-500 flex-shrink-0" />
-                    <span className="hidden sm:inline text-xl font-black text-slate-800 whitespace-nowrap">
-                      Save The Day
-                    </span>
-                    {/* 2026-07-31 — brand subtitle shown next to the
-                        brand mark on tablet/desktop. Hidden on mobile
-                        to keep the sticky header compact (the icon +
-                        Save The Day brand mark is enough at narrow
-                        widths; the subtitle becomes a second line
-                        below on smaller screens via the flex-col
-                        wrapper, but the `:inline` keeps it on the
-                        same row on sm and up where the header has
-                        space. */}
-                    <span className="hidden md:inline text-xs font-medium text-slate-500 border-l border-slate-200 pl-2 whitespace-nowrap">
-                      婚禮一站式管理
-                    </span>
-                    <span className="hidden sm:inline-flex text-xs font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded ml-2">
-                      主控台
-                    </span>
-                  </h1>
+                  />
                   <div className="flex items-center gap-2 sm:gap-4 min-w-0">
                     {/* 2026-07-15 — inbox icon with unread badge.
                         Visible to owners + vendors (not reception/
@@ -2605,14 +2608,6 @@ export default function App() {
                         )}
                       </button>
                     )}
-                    {/* Event name chip — truncates on mobile so it
-                        doesn't push other buttons off-screen. */}
-                    <div
-                      className="text-sm font-bold text-slate-800 bg-rose-50 px-2 sm:px-3 py-1 rounded-lg border border-rose-100 truncate max-w-[100px] sm:max-w-[180px] min-w-0"
-                      title={currentEvent.name}
-                    >
-                      {currentEvent.name}
-                    </div>
                     {userRole === 'owner' && (
                       <button
                         onClick={() => setShowHelperManager(true)}
@@ -2796,6 +2791,8 @@ export default function App() {
                 // "嘗試次數太多" / "發送失敗" messages. Same prop
                 // pattern as CoupleChecklist.
                 showToast={showToast}
+                deletedEvents={deletedEvents}
+                onRestoreEvent={handleRestoreEvent}
               />
             )}
 
@@ -3224,6 +3221,16 @@ export default function App() {
           mode={changePasswordMode}
           onClose={() => setChangePasswordModalOpen(false)}
           onSuccess={() => setChangePasswordModalOpen(false)}
+        />
+      )}
+      {headerRenameOpen && currentEvent && (
+        <EventRenameModal
+          event={currentEvent}
+          onClose={() => setHeaderRenameOpen(false)}
+          onSaved={(newName) => {
+            setCurrentEvent((event) => event ? { ...event, name: newName } : event);
+            showToast(`✏️ 已改名為「${newName}」`);
+          }}
         />
       )}
       <PaymentModal

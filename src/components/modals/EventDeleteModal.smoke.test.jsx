@@ -1,7 +1,7 @@
 // Smoke test for EventDeleteModal — focused on:
 //   1. The submit button stays disabled until the user types the
 //      exact string 'DELETE' (case-sensitive)
-//   2. deleteDoc fires on submit, with the right doc ref
+//   2. setDoc fires on submit with a deletedAt server timestamp
 //   3. onDeleted fires after a successful write
 //   4. Error mapping: a permission-denied error surfaces in
 //      Chinese
@@ -11,13 +11,14 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
-import { deleteDoc } from 'firebase/firestore';
+import { setDoc, serverTimestamp } from 'firebase/firestore';
 
 vi.mock('firebase/firestore', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    deleteDoc: vi.fn().mockResolvedValue(undefined),
+    setDoc: vi.fn().mockResolvedValue(undefined),
+    serverTimestamp: vi.fn(() => 'SERVER_TIMESTAMP'),
     doc: vi.fn(() => 'REF'),
   };
 });
@@ -68,20 +69,23 @@ describe('EventDeleteModal', () => {
     expect(screen.getByRole('button', { name: /確認刪除/ }).disabled).toBe(false);
   });
 
-  it('fires deleteDoc and onDeleted on a successful submit', async () => {
+  it('soft-deletes with deletedAt and fires onDeleted on a successful submit', async () => {
     render(<EventDeleteModal {...baseProps} />);
     const input = screen.getByLabelText(/請輸入/);
     fireEvent.change(input, { target: { value: 'DELETE' } });
     fireEvent.click(screen.getByRole('button', { name: /確認刪除/ }));
 
     await Promise.resolve();
-    expect(deleteDoc).toHaveBeenCalledTimes(1);
+    expect(setDoc).toHaveBeenCalledTimes(1);
+    expect(setDoc.mock.calls[0][1]).toMatchObject({ deletedAt: 'SERVER_TIMESTAMP' });
+    expect(setDoc.mock.calls[0][2]).toEqual({ merge: true });
+    expect(serverTimestamp).toHaveBeenCalledTimes(1);
     expect(baseProps.onDeleted).toHaveBeenCalledTimes(1);
     expect(baseProps.onClose).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces a permission-denied error in Chinese', async () => {
-    (deleteDoc).mockRejectedValueOnce({ code: 'permission-denied' });
+    (setDoc).mockRejectedValueOnce({ code: 'permission-denied' });
     render(<EventDeleteModal {...baseProps} />);
     const input = screen.getByLabelText(/請輸入/);
     fireEvent.change(input, { target: { value: 'DELETE' } });
@@ -93,12 +97,12 @@ describe('EventDeleteModal', () => {
     expect(baseProps.onClose).not.toHaveBeenCalled();
   });
 
-  it('does NOT call deleteDoc when the user types the wrong word', () => {
+  it('does NOT soft-delete when the user types the wrong word', () => {
     render(<EventDeleteModal {...baseProps} />);
     const input = screen.getByLabelText(/請輸入/);
     fireEvent.change(input, { target: { value: 'delete' } });
     fireEvent.click(screen.getByRole('button', { name: /確認刪除/ }));
-    expect(deleteDoc).not.toHaveBeenCalled();
+    expect(setDoc).not.toHaveBeenCalled();
   });
 
   it('closes when the cancel button is clicked', () => {

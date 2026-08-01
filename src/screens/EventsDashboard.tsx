@@ -262,8 +262,8 @@ export function EventsDashboard({
             }
             onToast?.(
               wasCurrent
-                ? '🗑️ 婚禮專案已刪除，已返回總大堂。'
-                : '🗑️ 婚禮專案已刪除。',
+                ? '🗑️ 婚禮專案已移到垃圾桶，已返回總大堂。'
+                : '🗑️ 婚禮專案已移到垃圾桶。',
             );
           }}
         />

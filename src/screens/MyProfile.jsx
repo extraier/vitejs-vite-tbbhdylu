@@ -26,7 +26,7 @@
 // pills.
 
 import { useState } from 'react';
-import { ChevronLeft, Crown, Copy, Check, LogOut, User as UserIcon, AlertCircle, ShieldCheck, KeyRound, ChevronRight } from 'lucide-react';
+import { ChevronLeft, Crown, Copy, Check, LogOut, User as UserIcon, AlertCircle, ShieldCheck, KeyRound, ChevronRight, RotateCcw } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { useUserProfile } from '../hooks/useUserProfile';
 
@@ -42,7 +42,7 @@ const UNLOCK_LABELS = {
   'permanent-archive': '永久保存婚禮檔案',
 };
 
-export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, showToast }) {
+export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, showToast, deletedEvents = [], onRestoreEvent }) {
   const { logout, hasPasswordProvider, sendEmailVerification } = useAuth();
   const { tier, unlocks, createdAt, promotedAt, referralCode, loading } = useUserProfile(currentUser);
   const [copied, setCopied] = useState(null);
@@ -207,6 +207,37 @@ export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, sh
             onUpgrade={onUpgrade}
           />
         )}
+      </section>
+
+      {/* Soft-deleted event trash. Subcollections remain attached to the
+          event doc, so restore only needs to clear deletedAt. */}
+      <section className="mb-4">
+        <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">
+          垃圾桶
+        </h2>
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          {deletedEvents.length === 0 ? (
+            <p className="px-4 py-4 text-sm text-slate-500">垃圾桶暫時係空嘅。</p>
+          ) : (
+            deletedEvents.map((event) => (
+              <div key={event.id} className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-100 last:border-b-0">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-slate-800 truncate">{event.name}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">已移到垃圾桶</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onRestoreEvent?.(event)}
+                  aria-label={`還原 ${event.name}`}
+                  className="flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1.5 rounded-lg border border-emerald-200 transition-colors flex-shrink-0"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  還原
+                </button>
+              </div>
+            ))
+          )}
+        </div>
       </section>
 
       {/* Account metadata */}

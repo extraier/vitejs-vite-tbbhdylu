@@ -334,4 +334,21 @@ describe('MyProfile', () => {
     expect(screen.queryByText('複製邀請碼')).toBeNull();
     expect(screen.queryByText('複製 UID')).toBeNull();
   });
+
+  it('shows deleted projects in trash and restores them', () => {
+    const onRestoreEvent = vi.fn();
+    render(
+      <MyProfile
+        currentUser={baseUser}
+        onBack={() => {}}
+        onUpgrade={() => {}}
+        deletedEvents={[{ id: 'ev-deleted', name: '已刪除婚禮', date: '2027-01-01' }]}
+        onRestoreEvent={onRestoreEvent}
+      />,
+    );
+
+    expect(screen.getByText('已刪除婚禮')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '還原 已刪除婚禮' }));
+    expect(onRestoreEvent).toHaveBeenCalledWith(expect.objectContaining({ id: 'ev-deleted' }));
+  });
 });

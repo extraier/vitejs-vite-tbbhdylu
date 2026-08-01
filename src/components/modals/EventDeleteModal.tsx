@@ -45,7 +45,7 @@
 
 import { useEffect, useState } from 'react';
 import { X, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
-import { doc, deleteDoc } from 'firebase/firestore';
+import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { db, appId } from '../../lib/firebase';
 
 interface EventDeleteModalProps {
@@ -98,12 +98,16 @@ export function EventDeleteModal({ event, onClose, onDeleted }: EventDeleteModal
     setError(null);
     try {
       const ref = doc(db, 'artifacts', appId, 'users', ownerUid, 'events', event.id);
-      await deleteDoc(ref);
+      await setDoc(
+        ref,
+        { deletedAt: serverTimestamp(), updatedAt: Date.now() },
+        { merge: true },
+      );
       onDeleted?.();
       onClose();
     } catch (err: any) {
       // eslint-disable-next-line no-console
-      console.warn('[EventDeleteModal] deleteDoc failed:', err?.code, err?.message);
+      console.warn('[EventDeleteModal] soft-delete failed:', err?.code, err?.message);
       setError(mapError(err));
     } finally {
       setBusy(false);
@@ -140,10 +144,10 @@ export function EventDeleteModal({ event, onClose, onDeleted }: EventDeleteModal
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 flex items-start gap-2">
               <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
               <div className="text-sm text-amber-800 leading-relaxed">
-                <div className="font-bold mb-1">呢個動作無法復原。</div>
+                <div className="font-bold mb-1">呢個專案會移到垃圾桶，可以稍後還原。</div>
                 婚禮專案「
                 <span className="font-bold">{event.name}</span>
-                」刪除後，列表會即時更新。
+                」會從目前列表移除，但資料會保留。
               </div>
             </div>
 
