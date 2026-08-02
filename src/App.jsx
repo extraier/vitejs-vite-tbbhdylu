@@ -401,6 +401,16 @@ export default function App() {
         if (cancelled) return;
         clearPartnerTokenFromUrl();
         try { sessionStorage.removeItem('pendingPartnerToken'); } catch {}
+        // 2026-08-02 (bad-signature follow-up) — also clear the
+        // localStorage stash used by usePartnerInvitePreview. Without
+        // this, every subsequent page load replays the (now-dead)
+        // token: previewPartnerInvite → 403 Bad signature, then
+        // usePartnerInvitePreview re-stashes to sessionStorage which
+        // makes this same effect fire redeemPartnerInviteV2 → 403
+        // again. Console noise forever. Clearing here means a fresh
+        // partner-invite link is the only way to re-engage, which
+        // matches the server-side "token is single-use" semantics.
+        try { localStorage.removeItem('__heropartnerinvite_token'); } catch {}
         const eventDocRef = doc(
           db,
           'artifacts',

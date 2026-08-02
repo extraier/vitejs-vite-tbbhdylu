@@ -159,10 +159,28 @@ export function usePartnerInvitePreview() {
         // eslint-disable-next-line no-console
         console.warn('[usePartnerInvitePreview] preview failed:', code, err?.message);
         setError(code);
-        // DO NOT clearStash() here — the redeem effect (App.jsx) might
-        // still succeed via sessionStorage['pendingPartnerToken'].
-        // The redeem path is independent and shouldn't be blocked by
-        // a preview-only failure (e.g. CORS, network blip).
+        // 2026-08-02 (bad-signature follow-up) — distinguish "token is
+        // permanently dead" (Bad signature, NOT_FOUND, INVALID_ARGUMENT,
+        // UNREGISTERED) from transient failures (network blip, CORS).
+        // For dead-token errors, clear the localStorage stash so future
+        // mounts don't replay it and spam the console with 403s. For
+        // transient errors, keep the stash so the user can refresh and
+        // try again.
+        const isDeadToken =
+          code === 'Bad signature' ||
+          code === 'NOT_FOUND' ||
+          code === 'INVALID_ARGUMENT' ||
+          code === 'UNREGISTERED' ||
+          code === 'invalid-response' ||
+          /bad signature/i.test(err?.message || '');
+        if (isDeadToken) {
+          clearStash();
+        }
+        // For transient preview errors (NOT dead-token) DO NOT clearStash()
+        // — the redeem effect (App.jsx) might still succeed via
+        // sessionStorage['pendingPartnerToken']. The redeem path is
+        // independent and shouldn't be blocked by a preview-only
+        // failure (e.g. CORS, network blip).
       } finally {
         if (!cancelled) setLoading(false);
       }
