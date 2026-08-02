@@ -174,7 +174,19 @@ function VendorInquiryForm({ vendor, currentUser, onClose }) {
 // require widening the admin-only CFs (activateSeededVendor,
 // sendVendorInviteEmail) to accept couples, which is its own
 // permission-model decision. Tracked separately.
-function BrowseOnlyNotice({ vendor, onOpenInvite }) {
+function BrowseOnlyNotice({ vendor, onOpenInvite, currentUserRole }) {
+  // 2026-08-02 — gate the ✉️ 邀請商戶上線 button on the couple
+  // role. VendorModal only mounts BrowseOnlyNotice for signed-in
+  // users (AnonymousCTA handles the signed-out path at line ~287),
+  // but signed-in users can still be 'vendor', 'helper', or
+  // 'reception'. Only 'owner' (couple) couples are the intended
+  // audience for the onboarding nudge — vendors / helpers / staff
+  // would either 403 against the now-widened CFs or would be
+  // inviting vendors they don't have a wedding context for.
+  //
+  // The WhatsApp shortcut stays unconditional (it's a wa.me deep
+  // link with no backend call, so any signed-in viewer can use it).
+  const canInvite = currentUserRole === 'owner';
   // Strip everything except digits — wa.me needs E.164 digits with
   // no spaces, dashes, or leading '+'. If the CSV imported "+852
   // 9123 4567" this becomes "85291234567" which routes correctly.
@@ -224,7 +236,7 @@ function BrowseOnlyNotice({ vendor, onOpenInvite }) {
                 users with at least one event doc), not just admins.
                 Vendors themselves still can't call — they don't have
                 event docs. */}
-            {onOpenInvite && (
+            {onOpenInvite && canInvite && (
               <button
                 type="button"
                 onClick={() => onOpenInvite(vendor)}
@@ -350,7 +362,7 @@ export function VendorModal({ vendor, onClose, currentUser, currentUserRole, onO
                   <AnonymousCTA />
                 )
               ) : (
-                <BrowseOnlyNotice vendor={vendor} onOpenInvite={onOpenInvite} />
+                <BrowseOnlyNotice vendor={vendor} onOpenInvite={onOpenInvite} currentUserRole={currentUserRole} />
               )}
             </div>
 

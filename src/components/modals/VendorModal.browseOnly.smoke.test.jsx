@@ -73,15 +73,30 @@ describe('BrowseOnlyNotice WhatsApp shortcut', () => {
   // open the same VendorInviteLinkModal admins use, retitled. The
   // button only renders when onOpenInvite is provided (so admins
   // who mount VendorModal without that prop don't see the button
-  // by accident).
-  it('renders an invite-vendor button when onOpenInvite is provided', () => {
+  // by accident) AND when currentUserRole === 'owner' (so vendors,
+  // helpers, and reception staff don't see a button that would 403
+  // against the couple-widened CFs).
+  it('renders an invite-vendor button only for owner-role couples', () => {
+    // Both props must be threaded from VendorModal.
     expect(source).toContain('onOpenInvite');
     expect(source).toContain('data-testid="browse-only-invite"');
     expect(source).toContain('✉️ 邀請商戶上線');
-    // Button must call onOpenInvite with the vendor — not navigate
-    // away, not copy a link, not open wa.me. The actual minting
-    // happens inside VendorInviteLinkModal which talks to
-    // activateSeededVendor (couple-widened via functions/src/vendorActivation.ts).
+    // Gating: button must require both onOpenInvite AND canInvite
+    // (which is currentUserRole === 'owner'). Order matters — if a
+    // refactor drops the canInvite check, signed-in vendors / helpers
+    // would see a button that 403s them.
+    expect(source).toContain("canInvite = currentUserRole === 'owner'");
+    expect(source).toMatch(/onOpenInvite\s*&&\s*canInvite\s*&&\s*\(/);
+    // Button onClick must still call onOpenInvite with the vendor.
     expect(source).toMatch(/onClick=\{?\(\)\s*=>\s*onOpenInvite\(vendor\)/);
+  });
+
+  it('threads currentUserRole from VendorModal to BrowseOnlyNotice', () => {
+    // Defends against a future refactor that drops the prop wire.
+    // Without it, the canInvite check inside BrowseOnlyNotice would
+    // always evaluate to false and the button would never render.
+    expect(source).toMatch(
+      /<BrowseOnlyNotice[^>]*currentUserRole=\{currentUserRole\}/,
+    );
   });
 });
