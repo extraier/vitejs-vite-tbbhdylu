@@ -113,6 +113,7 @@ import { PaymentModal } from './components/modals/PaymentModal';
 import { QrCodeModal } from './components/modals/QrCodeModal';
 import { EditGuestModal } from './components/modals/EditGuestModal';
 import { VendorModal } from './components/modals/VendorModal';
+import { VendorInviteLinkModal } from './components/modals/VendorInviteLinkModal';
 import { MyVendorsPanel } from './components/MyVendorsPanel';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { InviteModal } from './components/modals/InviteModal';
@@ -683,6 +684,13 @@ export default function App() {
   // surfaces a "邀請另一半" button that flips this flag.
   const [showInvitePartner, setShowInvitePartner] = useState(false);
   const [viewingVendorProfile, setViewingVendorProfile] = useState(null);
+  // 2026-08-02 — couple-side invite flow. When a couple clicks
+  // "✉️ 邀請商戶上線" in VendorModal's BrowseOnlyNotice, we close
+  // VendorModal (to avoid modal-on-modal stacking) and set this so
+  // VendorInviteLinkModal opens with the same vendor. Title is
+  // overridden to "邀請 {name} 上線" to make the couple-side intent
+  // clear (onboarding nudge, not re-invite).
+  const [coupleInvitingVendor, setCoupleInvitingVendor] = useState(null);
   const [viewingQrCode, setViewingQrCode] = useState(null);
   // 2026-08-01 (pivot) — event-level settings modal. Stores the
   // selected event so the modal can mount with the right scope.
@@ -3405,9 +3413,31 @@ export default function App() {
       <VendorModal
         vendor={viewingVendorProfile}
         onClose={() => setViewingVendorProfile(null)}
+        // 2026-08-02 — couples invite flow. BrowseOnlyNotice calls
+        // onOpenInvite(vendor) when the couple taps the "✉️ 邀請商戶上線"
+        // button. We close VendorModal first to avoid modal-on-modal
+        // stacking, then open VendorInviteLinkModal with the same vendor.
+        onOpenInvite={(vendor) => {
+          setViewingVendorProfile(null);
+          setCoupleInvitingVendor(vendor);
+        }}
         currentUser={user}
         currentUserRole={userRole}
       />
+      {coupleInvitingVendor && (
+        <VendorInviteLinkModal
+          vendor={{
+            vendorUid:
+              coupleInvitingVendor.id ||
+              coupleInvitingVendor.vendorUid ||
+              coupleInvitingVendor.slug,
+            name: coupleInvitingVendor.name,
+            signupStatus: coupleInvitingVendor.signupStatus,
+          }}
+          onClose={() => setCoupleInvitingVendor(null)}
+          title={`邀請 ${coupleInvitingVendor.name || coupleInvitingVendor.id} 上線`}
+        />
+      )}
       {/* 2026-07-24 — only mount FullscreenSlideshow when isFullscreen
           is true. The original code rendered it unconditionally and
           relied on the component returning null when photos.length

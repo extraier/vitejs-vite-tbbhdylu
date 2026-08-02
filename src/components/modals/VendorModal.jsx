@@ -174,7 +174,7 @@ function VendorInquiryForm({ vendor, currentUser, onClose }) {
 // require widening the admin-only CFs (activateSeededVendor,
 // sendVendorInviteEmail) to accept couples, which is its own
 // permission-model decision. Tracked separately.
-function BrowseOnlyNotice({ vendor }) {
+function BrowseOnlyNotice({ vendor, onOpenInvite }) {
   // Strip everything except digits — wa.me needs E.164 digits with
   // no spaces, dashes, or leading '+'. If the CSV imported "+852
   // 9123 4567" this becomes "85291234567" which routes correctly.
@@ -204,18 +204,38 @@ function BrowseOnlyNotice({ vendor }) {
           <p className="text-sm text-slate-600 leading-relaxed">
             {vendor.name} 嘅商戶帳戶仲未完成啟動。你仍然可以瀏覽佢嘅作品集同參考價錢，但傳訊息功能要等商戶登入後先會開通。
           </p>
-          {whatsappUrl && (
-            <a
-              href={whatsappUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-3 inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors shadow-sm"
-              data-testid="browse-only-whatsapp"
-            >
-              <MessageCircle className="w-4 h-4" />
-              💬 WhatsApp 商戶
-            </a>
-          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {whatsappUrl && (
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors shadow-sm"
+                data-testid="browse-only-whatsapp"
+              >
+                <MessageCircle className="w-4 h-4" />
+                💬 WhatsApp 商戶
+              </a>
+            )}
+            {/* 2026-08-02 — Option-B invite path. Opens the same
+                VendorInviteLinkModal admins use (retitled to "邀請
+                {name} 上線"). Backend widened: activateSeededVendor +
+                sendVendorInviteEmail now accept couples (signed-in
+                users with at least one event doc), not just admins.
+                Vendors themselves still can't call — they don't have
+                event docs. */}
+            {onOpenInvite && (
+              <button
+                type="button"
+                onClick={() => onOpenInvite(vendor)}
+                className="inline-flex items-center gap-2 bg-white border-2 border-emerald-500 text-emerald-700 hover:bg-emerald-50 text-sm font-bold px-4 py-2 rounded-xl transition-colors"
+                data-testid="browse-only-invite"
+              >
+                <Send className="w-4 h-4" />
+                ✉️ 邀請商戶上線
+              </button>
+            )}
+          </div>
           <p className="text-xs text-slate-400 mt-2">
             想盡早接觸呢間商戶？試下喺「接單大堂」發佈明確嘅查詢，商戶一上線就會睇到。
           </p>
@@ -246,7 +266,7 @@ function AnonymousCTA() {
   );
 }
 
-export function VendorModal({ vendor, onClose, currentUser, currentUserRole }) {
+export function VendorModal({ vendor, onClose, currentUser, currentUserRole, onOpenInvite }) {
   // 2026-07-20 — lightbox state. When a couple clicks a portfolio
   // thumbnail we open the fullscreen lightbox. Tracks each open to
   // /vendorImageViews for analytics.
@@ -330,7 +350,7 @@ export function VendorModal({ vendor, onClose, currentUser, currentUserRole }) {
                   <AnonymousCTA />
                 )
               ) : (
-                <BrowseOnlyNotice vendor={vendor} />
+                <BrowseOnlyNotice vendor={vendor} onOpenInvite={onOpenInvite} />
               )}
             </div>
 

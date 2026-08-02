@@ -68,4 +68,20 @@ describe('BrowseOnlyNotice WhatsApp shortcut', () => {
     expect(source).toContain('target="_blank"');
     expect(source).toContain('rel="noopener noreferrer"');
   });
+
+  // 2026-08-02 (Option-B half) — second action: couples can also
+  // open the same VendorInviteLinkModal admins use, retitled. The
+  // button only renders when onOpenInvite is provided (so admins
+  // who mount VendorModal without that prop don't see the button
+  // by accident).
+  it('renders an invite-vendor button when onOpenInvite is provided', () => {
+    expect(source).toContain('onOpenInvite');
+    expect(source).toContain('data-testid="browse-only-invite"');
+    expect(source).toContain('✉️ 邀請商戶上線');
+    // Button must call onOpenInvite with the vendor — not navigate
+    // away, not copy a link, not open wa.me. The actual minting
+    // happens inside VendorInviteLinkModal which talks to
+    // activateSeededVendor (couple-widened via functions/src/vendorActivation.ts).
+    expect(source).toMatch(/onClick=\{?\(\)\s*=>\s*onOpenInvite\(vendor\)/);
+  });
 });

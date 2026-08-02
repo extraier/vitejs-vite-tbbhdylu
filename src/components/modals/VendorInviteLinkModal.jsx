@@ -25,8 +25,14 @@ import {
   sendVendorInviteEmail,
 } from '../../lib/vendorActivation';
 
-export function VendorInviteLinkModal({ vendor, onClose }) {
+export function VendorInviteLinkModal({ vendor, onClose, title }) {
   // vendor = { vendorUid, name, signupStatus, invitationExpiresAt } from AdminVendors row
+  // 2026-08-02 — optional `title` prop. Admin path passes nothing and
+  // gets "邀請 {name}". Couple path (from BrowseOnlyNotice) passes
+  // "邀請 {name} 上線" to make it clear this is the vendor-onboarding
+  // nudge, not a re-invite / re-issue. Defaults preserve existing
+  // admin UX byte-for-byte.
+  const modalTitle = title ?? `邀請 ${vendor.name || vendor.vendorUid}`;
   const [signupUrl, setSignupUrl] = useState(null);
   const [expiresAt, setExpiresAt] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -134,7 +140,7 @@ export function VendorInviteLinkModal({ vendor, onClose }) {
         <div className="p-5 border-b border-slate-200 flex justify-between items-center">
           <h3 className="font-black text-slate-800 flex items-center gap-2 text-lg">
             <Send className="w-5 h-5 text-emerald-500" />
-            邀請 {vendor.name || vendor.vendorUid}
+            {modalTitle}
           </h3>
           <button
             onClick={onClose}
