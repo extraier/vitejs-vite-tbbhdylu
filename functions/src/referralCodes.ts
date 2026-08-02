@@ -371,7 +371,13 @@ export const requestReferralClaim = onCall(
     }
 
     // ---- 5. Auto-grant the unlock (idempotent) ----
-    const result = await grantUnlock(callerUid, 'storage-500mb', 'referral', {
+    // 2026-08-02 — one referral grants BOTH storage-500mb AND
+    // watermark-removed. Both grantUnlock calls are idempotent,
+    // so re-firing on every claim is safe.
+    await grantUnlock(callerUid, 'storage-500mb', 'referral', {
+      referredUid: friendUid,
+    });
+    const result = await grantUnlock(callerUid, 'watermark-removed', 'referral', {
       referredUid: friendUid,
     });
 

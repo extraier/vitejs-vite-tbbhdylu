@@ -970,9 +970,21 @@ export { listSocialProofs } from './unlocks';
 
 // 2026-07-31 — Branded Auth verification email. Firebase Auth's
 // default English template is functional but off-brand for our
-// bilingual (HK Cantonese primary) audience. This callable builds the
-// verification link via the Admin SDK, then ships a branded HTML
+// bilingual (HK Cantonese primary) audience. This callable builds
+// the verification link via the Admin SDK, then ships a branded HTML
 // email through SendGrid. Front-end calls this instead of
 // user.sendEmailVerification(). The Firebase-side default template
 // stays as a fallback for anyone using the SDK directly.
 export { sendBrandedVerificationV2 } from './brandedEmail';
+
+// 2026-08-02 — Owner upload-preferences token. The owner calls
+// this from their session to mint a short-lived HMAC-signed token
+// that says "my wedding should NOT be watermarked" (when they
+// have the `watermark-removed` unlock). The token is sent with
+// every photo upload (owner's + guests') and verified by the
+// Vercel /api/photo-upload proxy, which forwards the
+// watermark-disabled signal to the NAS photo_upload_server.py.
+// This is what makes the RewardsBanner's "+500MB + 移除浮水印"
+// promise actually true end-to-end — the watermark is applied
+// on the NAS during the upload itself, not in Firebase.
+export { getUploadPreferencesToken } from './uploadPreferencesToken';

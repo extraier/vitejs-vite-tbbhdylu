@@ -2,20 +2,33 @@
  * Cloud Functions — Unlocks (Social Proof + Payment Path)
  * ========================================================
  *
- * Couples unlock three premium features by either social proof
+ * Couples unlock four premium features by either social proof
  * OR paying:
  *
  *   1 IG/FB story/post with @savetheday.hk  → custom invite template
  *   1 friend referral who creates event     → +500MB + watermark off
  *   1 Instagram Reels featuring Save The Day → permanent archive
- *
- *   Or pay per-feature: $49 / $29 / $39 (bundle = $99)
+ *   Pay per-feature                          → watermark off ($29)
  *
  * This module is the single source of truth for granting unlocks.
  * Both paths call grantUnlock() with appropriate `source` field.
  * Frontend reads /artifacts/{appId}/users/{uid}/unlocks/{unlockId} to gate UI.
  *
  * 2026-07-21 — initial release.
+ * 2026-08-02 — added 'watermark-removed' type. Until this commit
+ * the banner promised "推介 1 位朋友 → +500MB + 移除浮水印" but
+ * only the storage unlock was real; the watermark side required
+ * an upload-path integration that didn't exist. The watermark
+ * itself is applied on the NAS in photo_upload_server.py
+ * (deploy/photo_upload_server.py — runs as the photo server on
+ * the UGREEN NAS at /volume1/flight-scanner/wedding-photos).
+ * The NAS-side upload server queries the owner's unlock doc via
+ * Firebase Admin SDK (service-account key in
+ * /home/openclaw/.config/firebase-admin-key.json on the NAS)
+ * before deciding whether to watermark a new upload. If the
+ * user has the 'watermark-removed' unlock, the upload lands
+ * clean. Default-on watermark means every photo is watermarked
+ * unless the user has this unlock (earned via referral or paid).
  */
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
@@ -36,12 +49,19 @@ export const UNLOCK_PRICING = {
   'custom-template': 49,
   'storage-500mb': 29,
   'permanent-archive': 39,
+  // 2026-08-02 — watermark-removed is now its own paid feature.
+  // Couples can earn it free via a referral (granted alongside
+  // storage-500mb) or pay for it directly. $29 mirrors the
+  // storage-500mb price point (same social-proof / paid split
+  // applies to both).
+  'watermark-removed': 29,
 } as const;
 
 export const UNLOCK_TYPES = [
   'custom-template',
   'storage-500mb',
   'permanent-archive',
+  'watermark-removed',
 ] as const;
 
 export type UnlockType = typeof UNLOCK_TYPES[number];
@@ -383,7 +403,17 @@ export const adminVerifyReferral = onCall(
     }
 
     if (decision === 'approve') {
+      // 2026-08-02 — one referral now grants BOTH storage-500mb
+      // AND watermark-removed. The RewardsBanner has been
+      // promising "推介 1 位朋友 → +500MB + 移除浮水印" since
+      // launch; until this commit only the storage half worked.
+      // Both grants are idempotent (grantUnlock short-circuits on
+      // existing docs of the same type), so this is safe to
+      // re-fire on every approval.
       await grantUnlock(uid, 'storage-500mb', 'referral', {
+        referredUid: claim.friendUid,
+      });
+      await grantUnlock(uid, 'watermark-removed', 'referral', {
         referredUid: claim.friendUid,
       });
       await claimRef.update({
@@ -432,7 +462,7 @@ export const submitPaymentReceipt = onCall(
       reference?: string;
     };
 
-    if (!['custom-template', 'storage-500mb', 'permanent-archive', 'bundle', 'premium'].includes(unlockType)) {
+    if (!['custom-template', 'storage-500mb', 'permanent-archive', 'watermark-removed', 'bundle', 'premium'].includes(unlockType)) {
       throw new HttpsError('invalid-argument', 'invalid unlockType.');
     }
     if (!['payme', 'fps'].includes(paymentMethod)) {
@@ -499,11 +529,15 @@ export const adminVerifyPayment = onCall(
     if (decision === 'approve') {
       // 2026-07-30 — 'premium' is the new label for the bundle.
       // 'bundle' is kept for backward compat with receipts submitted
-      // before the 2026-07-30 rename. Both run the same "grant all 3"
+      // before the 2026-07-30 rename. Both run the same "grant all 4"
       // path so the user gets the full premium experience.
+      // 2026-08-02 — bundle now also grants watermark-removed (the
+      // default-on photo watermark is a premium feature too; paying
+      // for the bundle should give the same outcome as the
+      // referral that previously promised "+500MB + 移除浮水印").
       const unlockTypes: UnlockType[] =
         receipt.unlockType === 'bundle' || receipt.unlockType === 'premium'
-          ? ['custom-template', 'storage-500mb', 'permanent-archive']
+          ? ['custom-template', 'storage-500mb', 'permanent-archive', 'watermark-removed']
           : [receipt.unlockType as UnlockType];
 
       for (const t of unlockTypes) {
