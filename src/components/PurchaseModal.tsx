@@ -18,14 +18,21 @@ import type { UnlockType } from '../screens/EventsDashboard';
 
 const UNLOCK_LABELS: Record<UnlockType, string> = {
   'custom-template': '上傳自訂電子喜帖設計',
-  'storage-500mb': '+500MB 相簿 + 移除浮水印',
+  // 2026-08-02 — storage is just storage now. Watermark
+  // removal is its own unlock line below.
+  'storage-500mb': '+500MB 相簿容量',
   'permanent-archive': '永久保存婚禮檔案',
+  // 2026-08-02 — Watermark removal as its own payable unlock.
+  // Couples can pay $29 directly without doing the referral
+  // social proof (matches the storage-500mb $29 price point).
+  'watermark-removed': '移除相簿浮水印',
 };
 
 const UNLOCK_PRICING: Record<UnlockType, number> = {
   'custom-template': 49,
   'storage-500mb': 29,
   'permanent-archive': 39,
+  'watermark-removed': 29,
 };
 
 const BUNDLE_PRICE = 99;

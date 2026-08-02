@@ -1,28 +1,38 @@
 /**
  * RewardsBanner — subtle banner shown on EventsDashboard.
  *
- * Three unlock actions for premium features (all admin-verified):
+ * Four unlock actions for premium features (all admin-verified):
  *   • 1 IG/FB story OR post with @savetheday.hk → custom invite template
- *   • 1 friend referral who creates an event → +500MB + watermark removal
+ *   • 1 friend referral who creates an event     → +500MB storage
  *   • 1 Instagram Reels featuring Save The Day → permanent archive
+ *   • Pay per-feature (or the same referral also unlocks this):
+ *                                                  → watermark removal
  *
- * Each action also has a paid alternative ($49 / $29 / $39).
+ * Each action also has a paid alternative ($49 / $29 / $39 / $29).
  *
  * Three states:
  *   1. Has all unlocks: hidden (don't nag)
  *   2. Has some unlocks: shows locked list + CTA to earn OR pay
  *   3. Has none: invite them to start
  *
- * On click → opens SocialProofModal (TODO) via onUploadClick
+ * On click → opens SocialProofModal via onUploadClick
  * On pay click → opens PurchaseModal via onPayClick
  *
  * 2026-07-21 — initial release.
+ * 2026-08-02 — added `watermark-removed`. Previously the banner
+ * advertised "推介 1 位朋友 → +500MB + 移除浮水印" as if a single
+ * referral unlocked both, but only the storage half actually
+ * worked. The watermark side required a backend CF + NAS-side
+ * Pillow integration that didn't exist. As of this commit both
+ * halves are real and granted atomically (one referral = two
+ * unlocks). The banner now shows them as separate rows so the
+ * couple can see each unlock independently.
  */
 
-import { Sparkles, Instagram, Users, Video, CreditCard, ExternalLink, Crown } from 'lucide-react';
+import { Sparkles, Instagram, Users, Video, CreditCard, ExternalLink, Crown, Stamp } from 'lucide-react';
 import type { UnlockType } from '../screens/EventsDashboard';
 
-const ALL_UNLOCKS: UnlockType[] = ['custom-template', 'storage-500mb', 'permanent-archive'];
+const ALL_UNLOCKS: UnlockType[] = ['custom-template', 'storage-500mb', 'permanent-archive', 'watermark-removed'];
 
 const UNLOCK_INFO: Record<UnlockType, {
   label: string;
@@ -40,9 +50,15 @@ const UNLOCK_INFO: Record<UnlockType, {
     icon: Instagram,
     priceHKD: 49,
   },
+  // 2026-08-02 — storage-500mb is now JUST storage. The
+  // "+ 移除浮水印" suffix was bundled into this label because
+  // both were promised by a single referral, but the
+  // watermark half was a lie (no backend code applied it).
+  // Now `watermark-removed` is its own unlock row below; this
+  // row reads cleanly on its own.
   'storage-500mb': {
-    label: '+500MB 相簿容量 + 移除浮水印',
-    emoji: '📸',
+    label: '+500MB 相簿容量',
+    emoji: '💾',
     emojiBig: '👥',
     howToEarn: '推介 1 位朋友建立婚禮',
     icon: Users,
@@ -55,6 +71,22 @@ const UNLOCK_INFO: Record<UnlockType, {
     howToEarn: '拍 1 段 IG Reels 用 Save The Day',
     icon: Video,
     priceHKD: 39,
+  },
+  // 2026-08-02 — Watermark removal as its own unlock. Each
+  // referral approval grants this alongside `storage-500mb`,
+  // so a single social-share action unlocks BOTH rows.
+  // Couples can also pay $29 to skip the social proof. The
+  // upload pipeline checks for this unlock via the owner's
+  // HMAC-signed upload-preferences token; when present, the
+  // NAS skips the Pillow corner-watermark step on every
+  // upload (owner's + guests').
+  'watermark-removed': {
+    label: '移除相簿浮水印',
+    emoji: '✨',
+    emojiBig: '🎁',
+    howToEarn: '推介 1 位朋友建立婚禮',
+    icon: Stamp,
+    priceHKD: 29,
   },
 };
 
@@ -74,7 +106,15 @@ export function RewardsBanner({ unlocks, onUploadClick, onPayClick, onReferralCl
   // 2026-07-29 — referral is only valid for storage-500mb. Hide the
   // referral button if that's already unlocked (the user has 0 incentive
   // to claim more referrals for a feature they already have).
-  const showReferral = locked.includes('storage-500mb');
+  // 2026-08-02 — referrals now unlock BOTH storage-500mb AND
+  // watermark-removed in one go. So the referral CTA is also
+  // relevant when watermark-removed is locked (because claiming
+  // one referral gives them both). The check now uses
+  // `locked.includes(...)` for either type to mirror the
+  // grant flow. Couples who already have storage but not
+  // watermark still see the button — they're still earning
+  // something via referral.
+  const showReferral = locked.includes('storage-500mb') || locked.includes('watermark-removed');
 
   // Hide if user has everything (don't nag)
   if (locked.length === 0) return null;

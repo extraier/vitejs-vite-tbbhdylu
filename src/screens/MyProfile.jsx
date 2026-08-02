@@ -42,11 +42,27 @@ import { ReferralKpi } from '../components/ReferralKpi';
 // const we have to keep in sync. Labels match PurchaseModal's
 // UNLOCK_LABELS so the profile screen reads consistently with the
 // upgrade modal.
-const UNLOCK_TYPES = ['custom-template', 'storage-500mb', 'permanent-archive'];
+// 2026-07-21 — Three premium features unlockable via social proof
+// or payment:
+//   custom-template     — 1 IG/FB story OR post with @savetheday.hk tag
+//   storage-500mb       — 1 friend referral who creates an event
+//   permanent-archive   — 1 Instagram Reels featuring Save The Day
+// 2026-08-02 — Added `watermark-removed`. Granted alongside
+// `storage-500mb` whenever a referral is approved, and via the
+// PayMe/FPS pay-for-watermark path. Mirrors the
+// functions/src/unlocks.ts UNLOCK_TYPES list (kept in sync by
+// the smoke tests).
+const UNLOCK_TYPES = ['custom-template', 'storage-500mb', 'permanent-archive', 'watermark-removed'];
 const UNLOCK_LABELS = {
   'custom-template': '上傳自訂電子喜帖設計',
-  'storage-500mb': '+500MB 相簿 + 移除浮水印',
+  'storage-500mb': '+500MB 相簿容量',
   'permanent-archive': '永久保存婚禮檔案',
+  // 2026-08-02 — Watermark removal is its own unlock, separate
+  // from the +500MB storage. Each earned/purchased
+  // independently. The banner used to bundle them as
+  // "+500MB + 移除浮水印"; now each has its own row so the
+  // couple can see exactly which unlock they have.
+  'watermark-removed': '移除相簿浮水印',
 };
 
 export function MyProfile({ currentUser, onBack, onUpgrade, onChangePassword, showToast, deletedEvents = [], onRestoreEvent }) {

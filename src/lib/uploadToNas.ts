@@ -37,6 +37,18 @@ type UploadArgs = {
   guestId: string;
   uploaderName?: string;
   onProgress?: (pct: number) => void;
+  // 2026-08-02 — Owner upload-preferences token. Minted by the
+  // getUploadPreferencesToken CF when the owner has the
+  // `watermark-removed` unlock. The Vercel proxy verifies the
+  // HMAC signature and forwards `X-Watermark-Disabled: true`
+  // to the NAS, which skips the Pillow watermark step. When
+  // null/absent (owner has no unlock, or guest via PersonalGuestPortal
+  // without the owner's token), the proxy falls through to
+  // default-on watermark.
+  //
+  // Optional. Old call sites without it still work — they just
+  // get watermarked photos.
+  prefsToken?: string | null;
 };
 
 type UploadResult = { url: string; thumbnailUrl: string; bytes: number };
@@ -49,6 +61,7 @@ export function uploadPhotoToNas({
   eventId,
   guestId,
   uploaderName,
+  prefsToken,
   onProgress,
 }: UploadArgs): Promise<UploadResult> {
   // The proxy (/api/photo-upload) handles auth entirely server-side.
@@ -66,6 +79,18 @@ export function uploadPhotoToNas({
     form.append('eventId', eventId);
     form.append('guestId', guestId);
     form.append('uploaderName', uploaderName || 'Anonymous');
+    // 2026-08-02 — Attach the owner's upload-preferences token
+    // (HMAC-signed, short-lived). The Vercel proxy reads it
+    // out of the multipart, verifies the signature against the
+    // mirrored HMAC_KEY, and forwards `X-Watermark-Disabled: true`
+    // to the NAS ONLY when the token verifies AND the embedded
+    // `watermarkDisabled === true`. We only append when present
+    // — old call sites (no token = no unlock) just don't
+    // include the field, which the proxy treats as "no override,
+    // default-on watermark applies".
+    if (prefsToken) {
+      form.append('prefsToken', prefsToken);
+    }
 
     // Use XHR instead of fetch so we can report upload progress (fetch can't
     // until the Streams API stabilizes for upload bodies).

@@ -42,6 +42,34 @@ const NAS_HMAC_SECRET =
   '';
 const TOKEN_TTL_MS = 5 * 60 * 1000; // 5 min — server enforces this
 
+// 2026-08-02 — Upload-preferences token (Option 1, watermark).
+// The owner mints a short-lived HMAC-signed token via the
+// Firebase getUploadPreferencesToken CF. The token carries the
+// owner's `watermark-removed` unlock status, signed with the
+// same HMAC_KEY secret used for partner-invite tokens. The
+// Vercel proxy mirrors HMAC_KEY in its env and verifies the
+// signature here. If valid AND not expired, we forward
+// `X-Watermark-Disabled: true|false` to the NAS; the NAS reads
+// the header and skips the Pillow watermark step when set.
+//
+// Why this lives at the proxy boundary (and not at the client):
+// the HMAC secret must NEVER reach the browser. A client-side
+// check would let any guest flip `watermarkDisabled: true` in
+// the form payload and upload a "clean" photo of someone
+// else's wedding. The server-side verification keeps the trust
+// boundary at the proxy.
+//
+// Constant-time HMAC compare is already in functions/src/hmac.ts
+// for the partner-invite flow — same primitive reused here.
+// We re-implement verify here rather than importing functions/
+// because Vercel functions and Firebase functions are deployed
+// as separate runtimes; cross-importing would require bundling
+// firebase-functions into the Vercel edge runtime.
+const UPLOAD_PREFERENCES_HMAC_SECRET =
+  process.env.HMAC_KEY ||  // mirrors the Firebase secret
+  process.env.UPLOAD_PREFERENCES_HMAC_SECRET ||
+  '';
+
 export default async function handler(req, res) {
   // Top-level safety net. If anything below throws, log it AND
   // respond — so we get a real error body instead of Cloudflare's
@@ -156,6 +184,45 @@ async function _handler(req, res) {
     nasHost: new URL(NAS_UPLOAD_URL).host,
   });
 
+  // 2026-08-02 — Verify the upload-preferences token (if any).
+  // The client sends it as a multipart field `prefsToken` (text
+  // part) — NOT a custom header, because the multipart already
+  // parsed by parseMultipartForIds gets stripped before we forward
+  // upstream. The token is HMAC-signed; tampering throws away
+  // the watermark-disabled signal (default-on watermark kicks
+  // in). Returning 401 would be hostile: the photo upload itself
+  // is still valid, just watermarked. We log + fall through.
+  let watermarkDisabled = false;
+  const prefsToken = parsed.prefsToken;
+  if (prefsToken) {
+    const verified = await verifyUploadPreferencesToken(
+      prefsToken,
+      UPLOAD_PREFERENCES_HMAC_SECRET,
+    );
+    if (verified) {
+      // Defense in depth: the token's ownerUid must match the
+      // event owner — but here we only have the eventId, not
+      // the ownerUid, in the multipart. The token IS signed by
+      // the owner's Firebase Auth context (via the CF), and the
+      // CF verified `req.auth.uid === ownerUid`. So an attacker
+      // who somehow got the secret could forge a token, but
+      // they don't have the secret. Tampering breaks the sig.
+      if (verified.expiresAt < Date.now()) {
+        // eslint-disable-next-line no-console
+        console.warn('[photo-upload] expired prefs token, watermark on', {
+          expiresAt: verified.expiresAt,
+          now: Date.now(),
+        });
+        watermarkDisabled = false;
+      } else if (verified.watermarkDisabled === true) {
+        watermarkDisabled = true;
+      }
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn('[photo-upload] bad prefs token, watermark on');
+    }
+  }
+
   let upstream;
   try {
     upstream = await fetch(NAS_UPLOAD_URL, {
@@ -164,6 +231,11 @@ async function _handler(req, res) {
         'Content-Type': contentType,
         'X-Upload-Token': token,
         'X-Upload-Expires': String(expiresMs),
+        // 2026-08-02 — forward the watermark-disabled signal so
+        // the NAS can skip Pillow when set. Default is "false"
+        // (i.e. watermark ON) — we never send a header if the
+        // token didn't verify. The NAS reads the header verbatim.
+        ...(watermarkDisabled ? { 'X-Watermark-Disabled': 'true' } : {}),
       },
       body,  // forward the original multipart unchanged
     });
@@ -210,11 +282,21 @@ function parseMultipartForIds(buf, contentTypeHeader) {
   // Strip eventId / guestId fields, keep everything else (file,
   // uploaderName, etc.) intact for forwarding.
   const idsToStrip = new Set(['eventId', 'guestId']);
+  // 2026-08-02 — also strip the prefsToken field from the forwarded
+  // multipart. We read it for HMAC verification at the proxy, but
+  // the NAS receiver doesn't need (or want) to see it. The token
+  // IS already verified by the time the NAS gets the request —
+  // the only thing the NAS sees is the resulting
+  // `X-Watermark-Disabled: true|false` header. Treating prefsToken
+  // like any other ID-style field keeps the multipart parser
+  // simple.
+  idsToStrip.add('prefsToken');
   const parts = splitBufferOnBoundary(buf, delimStr);
   let out = Buffer.alloc(0);
   const delimBuf = Buffer.from(delimStr, 'utf-8');
   let eventId = null;
   let guestId = null;
+  let prefsToken = null;
   for (const part of parts) {
     if (part.length === 0) continue;
     // Look at the headers as a string so .match()/.indexOf() work
@@ -242,6 +324,7 @@ function parseMultipartForIds(buf, contentTypeHeader) {
       const value = body.subarray(0, bodyEnd).toString('utf-8');
       if (name === 'eventId') eventId = value;
       else if (name === 'guestId') guestId = value;
+      else if (name === 'prefsToken') prefsToken = value;
       // Strip this part — don't include it in `out`.
       continue;
     }
@@ -253,7 +336,7 @@ function parseMultipartForIds(buf, contentTypeHeader) {
   if (!eventId || !guestId) {
     return { ok: false, error: 'missing eventId or guestId' };
   }
-  return { ok: true, eventId, guestId, bodyWithoutIds: out };
+  return { ok: true, eventId, guestId, prefsToken, bodyWithoutIds: out };
 }
 
 // Returns the byte offset of the CRLFCRLF separator inside a Buffer,
@@ -294,6 +377,69 @@ async function mintHmacToken(secret, eventId, guestId, expiresMs) {
   let hex = '';
   for (const b of bytes) hex += b.toString(16).padStart(2, '0');
   return hex;
+}
+
+// 2026-08-02 — Verify an upload-preferences token. Same
+// algorithm as functions/src/hmac.ts:signToken + verifyToken
+// (b64url(json(payload)).base64url(hmac256(secret, b64))).
+// Returns null on any failure (missing secret, malformed
+// token, bad signature) — caller treats null as "no override,
+// default-on watermark applies". Never throws so a malicious
+// token can't take down the upload path.
+//
+// Why sync via globalThis.crypto.subtle: Vercel's Node 22
+// runtime exposes the Web Crypto API on globalThis.crypto.
+// SubtleCrypto is technically async but verifyToken is called
+// from an async context (`_handler`) and we just .then() it.
+// Constant-time compare is done via the loop below; SubtleCrypto
+// itself uses HMAC verification internally that is constant-time.
+async function verifyUploadPreferencesToken(token, secret) {
+  if (!secret) return null;  // fail-closed: missing secret → null
+  if (typeof token !== 'string' || token.length === 0) return null;
+  const dot = token.indexOf('.');
+  if (dot === -1) return null;
+  const b64 = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  if (!b64 || !sig) return null;
+  let expected;
+  try {
+    // 2026-08-02 — Use Web Crypto (globalThis.crypto.subtle)
+    // for cross-runtime portability. Vercel Node 22 has it
+    // built-in; the existing mintHmacToken above uses the same
+    // API. We avoid node:crypto here to keep the file ESM-clean
+    // (the project root is "type": "module" and Vitest tests
+    // import from this file directly).
+    const key = await globalThis.crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const sigBuf = await globalThis.crypto.subtle.sign(
+      'HMAC',
+      key,
+      new TextEncoder().encode(b64),
+    );
+    expected = Buffer.from(sigBuf).toString('base64url');
+  } catch (err) {
+    return null;
+  }
+  if (sig.length !== expected.length) return null;
+  // Constant-time compare.
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length) return null;
+  let diff = 0;
+  for (let i = 0; i < sigBuf.length; i++) diff |= sigBuf[i] ^ expBuf[i];
+  if (diff !== 0) return null;
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
+  } catch (err) {
+    return null;
+  }
+  return payload;
 }
 
 // The multipart's boundary is in the original Content-Type. We

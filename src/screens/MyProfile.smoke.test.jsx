@@ -228,8 +228,12 @@ describe('MyProfile', () => {
 
   it('shows 👑 Premium 會員 card when tier=premium', () => {
     useUserProfile.mockReturnValue({
+      // 2026-08-02 — `watermark-removed` is now the 4th unlock
+      // type (granted alongside storage-500mb on every referral).
+      // The profile card lists all unlocked features, so the
+      // list item count goes from 3 to 4.
       tier: 'premium',
-      unlocks: ['custom-template', 'storage-500mb', 'permanent-archive'],
+      unlocks: ['custom-template', 'storage-500mb', 'permanent-archive', 'watermark-removed'],
       createdAt: { toDate: () => new Date('2026-07-22') },
       promotedAt: { toDate: () => new Date('2026-07-29') },
       referralCode: 'STD-A4X7K',
@@ -243,7 +247,7 @@ describe('MyProfile', () => {
     );
     expect(screen.getByText('👑 Premium 會員')).toBeTruthy();
     const items = screen.getAllByRole('listitem');
-    expect(items.length).toBe(3);
+    expect(items.length).toBe(4);
     const checks = items.map((li) => li.textContent.includes('✓'));
     expect(checks.every(Boolean)).toBe(true);
   });

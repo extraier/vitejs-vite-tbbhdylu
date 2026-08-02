@@ -11,10 +11,17 @@ import { useState, useEffect, useRef } from 'react';
 
 // 2026-07-21 — Three premium features unlockable via social proof
 // or payment:
-//   custom-template   — 1 IG/FB story OR post with @savetheday.hk tag
-//   storage-500mb     — 1 friend referral who creates an event
-//   permanent-archive — 1 Instagram Reels featuring Save The Day
-export type UnlockType = 'custom-template' | 'storage-500mb' | 'permanent-archive';
+//   custom-template     — 1 IG/FB story OR post with @savetheday.hk tag
+//   storage-500mb       — 1 friend referral who creates an event
+//   permanent-archive   — 1 Instagram Reels featuring Save The Day
+// 2026-08-02 — Fourth unlock type, `watermark-removed`. Granted
+// alongside `storage-500mb` on every referral approval (both are
+// $29 individually, both come from the same social proof). The
+// upload pipeline reads this unlock via the owner's HMAC-signed
+// upload-preferences token; when set, photos upload without the
+// default-on corner watermark. See src/components/RewardsBanner.tsx
+// for the user-facing copy.
+export type UnlockType = 'custom-template' | 'storage-500mb' | 'permanent-archive' | 'watermark-removed';
 
 interface EventsDashboardProps {
   events: any[];

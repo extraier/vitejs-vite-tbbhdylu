@@ -138,16 +138,28 @@ describe('PurchaseModal — Premium-first framing (2026-07-30)', () => {
         onClose={() => {}}
         ownerUid="u1"
         onSuccess={() => {}}
-        lockedTypes={['custom-template', 'storage-500mb', 'permanent-archive']}
+        // 2026-08-02 — `watermark-removed` is now a payable
+        // unlock on its own. The test now locks all four types
+        // and the modal renders each as a separate button row
+        // with its own price label.
+        lockedTypes={['custom-template', 'storage-500mb', 'permanent-archive', 'watermark-removed']}
       />,
     );
-    // 3 per-unlock buttons with their prices
+    // 4 per-unlock buttons with their labels + prices
     expect(screen.getByText('上傳自訂電子喜帖設計')).toBeTruthy();
-    expect(screen.getByText('+500MB 相簿 + 移除浮水印')).toBeTruthy();
+    // Storage label lost the bundled "+ 移除浮水印" suffix —
+    // the watermark unlock has its own row below.
+    expect(screen.getByText('+500MB 相簿容量')).toBeTruthy();
     expect(screen.getByText('永久保存婚禮檔案')).toBeTruthy();
-    // $49 / $29 / $39 — the per-unlock prices
+    expect(screen.getByText('移除相簿浮水印')).toBeTruthy();
+    // $49 / $29 / $39 / $29 — the per-unlock prices
     expect(screen.getByText('$49')).toBeTruthy();
-    expect(screen.getByText('$29')).toBeTruthy();
+    // 2026-08-02 — Two $29 prices now appear (storage AND
+    // watermark). Use getAllByText because Vitest's getByText
+    // throws on multiple matches. Length 2 confirms both
+    // new unlocks are priced identically.
+    const price29 = screen.getAllByText('$29');
+    expect(price29.length).toBe(2);
     expect(screen.getByText('$39')).toBeTruthy();
   });
 });
