@@ -155,7 +155,38 @@ function VendorInquiryForm({ vendor, currentUser, onClose }) {
 // 'claimed'). Couples can still see the gallery + price +
 // description, just can't send a message. Explains why in CJK so
 // they understand the constraint.
+//
+// 2026-08-02 — Add a WhatsApp shortcut when the public vendor doc
+// has a phone on file (vendor.contact.phone). HK vendors respond to
+// WhatsApp 5-10x faster than email, and the seeded vendor docs
+// often carry a contact.phone from the CSV import. The button is
+// hidden (not greyed out) when no phone is on file — couples with
+// no phone on file still see the existing cross-sell to 接單大堂.
+//
+// Why wa.me/{digits}?text=... — the wa.me deep link is the
+// standard cross-platform WhatsApp entry point (no app install
+// required on desktop, opens the app on mobile). The greeting text
+// pre-fills the message field so the couple doesn't have to type
+// it from scratch. Same pattern as the existing
+// VendorInviteModal.jsx (line 36-38) for parity.
+//
+// The modal reuse (Email / 邀請連結 path) is deferred — it would
+// require widening the admin-only CFs (activateSeededVendor,
+// sendVendorInviteEmail) to accept couples, which is its own
+// permission-model decision. Tracked separately.
 function BrowseOnlyNotice({ vendor }) {
+  // Strip everything except digits — wa.me needs E.164 digits with
+  // no spaces, dashes, or leading '+'. If the CSV imported "+852
+  // 9123 4567" this becomes "85291234567" which routes correctly.
+  const rawPhone = vendor?.contact?.phone;
+  const phoneDigits = rawPhone ? String(rawPhone).replace(/\D/g, '') : '';
+  const hasWhatsApp = phoneDigits.length >= 7;
+  const whatsappUrl = hasWhatsApp
+    ? `https://wa.me/${phoneDigits}?text=${encodeURIComponent(
+        `Hi ${vendor.name}！我哋正籌備緊婚禮，想喺 Save The Day 邀請你加入，方便日後跟進報價同檔期 🙏`,
+      )}`
+    : null;
+
   return (
     <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5">
       <div className="flex items-start gap-3">
@@ -173,6 +204,18 @@ function BrowseOnlyNotice({ vendor }) {
           <p className="text-sm text-slate-600 leading-relaxed">
             {vendor.name} 嘅商戶帳戶仲未完成啟動。你仍然可以瀏覽佢嘅作品集同參考價錢，但傳訊息功能要等商戶登入後先會開通。
           </p>
+          {whatsappUrl && (
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors shadow-sm"
+              data-testid="browse-only-whatsapp"
+            >
+              <MessageCircle className="w-4 h-4" />
+              💬 WhatsApp 商戶
+            </a>
+          )}
           <p className="text-xs text-slate-400 mt-2">
             想盡早接觸呢間商戶？試下喺「接單大堂」發佈明確嘅查詢，商戶一上線就會睇到。
           </p>
