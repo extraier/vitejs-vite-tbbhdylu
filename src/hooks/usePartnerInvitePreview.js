@@ -175,6 +175,25 @@ export function usePartnerInvitePreview() {
           /bad signature/i.test(err?.message || '');
         if (isDeadToken) {
           clearStash();
+          // 2026-08-02 (round 2) — also clear the sessionStorage
+          // handoff key that App.jsx's auto-redeem effect reads.
+          // The sessionStorage write at line ~127 happens BEFORE
+          // the preview fires, so even when we correctly identify
+          // the token as dead and clear localStorage, App.jsx would
+          // still find the token in sessionStorage and fire
+          // redeemPartnerInviteV2 → another 403 Bad signature in
+          // the console. Clearing both stops the noise at the source.
+          //
+          // Use the same try/catch pattern as the existing
+          // sessionStorage write above — sessionStorage can throw
+          // in private-browsing or storage-exceeded modes, and
+          // silent no-op is correct here (the dead-token error
+          // already fired; we just want to stop the replay).
+          try {
+            sessionStorage.removeItem('pendingPartnerToken');
+          } catch {
+            /* sessionStorage blocked — best-effort cleanup */
+          }
         }
         // For transient preview errors (NOT dead-token) DO NOT clearStash()
         // — the redeem effect (App.jsx) might still succeed via

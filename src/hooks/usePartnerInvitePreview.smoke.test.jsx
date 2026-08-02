@@ -45,4 +45,28 @@ describe('usePartnerInvitePreview token handoff', () => {
     expect(classifyAt).toBeGreaterThan(-1);
     expect(clearAt).toBeGreaterThan(classifyAt);
   });
+
+  // 2026-08-02 (round 2) — clear sessionStorage too. The hook
+  // stashes the token to sessionStorage at effect-start so App.jsx's
+  // auto-redeem effect can find it after auth. Without clearing
+  // sessionStorage on dead-token errors, App.jsx still finds the
+  // stale token and fires redeemPartnerInviteV2 → another 403 Bad
+  // signature in the console. localStorage alone is half the fix.
+  it('clears the sessionStorage handoff key when the preview fails with a dead-token error', () => {
+    const source = fs.readFileSync(sourcePath, 'utf8');
+    expect(source).toContain(
+      "sessionStorage.removeItem('pendingPartnerToken')",
+    );
+    // The sessionStorage clear must live INSIDE the isDeadToken
+    // branch (not at top-level), so transient errors keep the
+    // handoff intact for App.jsx's redeem path to retry.
+    const isDeadTokenBranch = source.indexOf('if (isDeadToken)');
+    const sessionClear = source.indexOf(
+      "sessionStorage.removeItem('pendingPartnerToken')",
+    );
+    const branchEnd = source.indexOf('}', isDeadTokenBranch);
+    expect(isDeadTokenBranch).toBeGreaterThan(-1);
+    expect(sessionClear).toBeGreaterThan(isDeadTokenBranch);
+    expect(sessionClear).toBeLessThan(branchEnd);
+  });
 });
