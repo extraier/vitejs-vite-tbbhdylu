@@ -30,6 +30,19 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# 2026-08-02 — Photo watermark (Option 1, default-on).
+# Pillow is stdlib-adjacent on Debian/Ubuntu (python3-pil) and
+# pre-installed on the UGREEN NAS. Lazy-import inside
+# _apply_watermark() so a missing Pillow doesn't take down the
+# upload server entirely — a broken watermark is preferable to
+# a broken upload pipeline. PIL availability is checked at
+# request time, not at module load.
+try:
+    from PIL import Image, ImageDraw, ImageFont  # noqa: F401
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
+
 # ---- Config (overridable via env) ----
 BIND = os.environ.get("PHOTO_BIND", "127.0.0.1")
 PORT = int(os.environ.get("PHOTO_PORT", "9879"))
@@ -43,6 +56,32 @@ PUBLIC_ORIGIN = os.environ.get(
 MAX_BYTES = int(os.environ.get("PHOTO_MAX_BYTES", str(20 * 1024 * 1024)))
 # Allowed mime types
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+# 2026-08-02 — File types we ACTUALLY watermark. HEIC/HEIF are
+# left as-is because Pillow's HEIC support requires libheif and
+# the wheels aren't always available on the UGREEN NAS. Falling
+# back to "skip HEIC, watermark everything else" is a graceful
+# degradation. Couples who care about HEIC watermarks can
+# convert before upload (most phones write JPEG + HEIC).
+WATERMARK_TYPES = {"image/jpeg", "image/png", "image/webp"}
+# Default-on watermark toggle. When the Vercel /api/photo-upload
+# proxy forwards `X-Watermark-Disabled: true`, the watermark
+# step is skipped. Anything else (missing header, "false",
+# "no") → watermark on. This is the source of truth for the
+# "watermark-removed" unlock — the proxy verifies the owner's
+# HMAC-signed prefs token and only sets the header when the
+# unlock exists.
+WATERMARK_TEXT = os.environ.get(
+    "PHOTO_WATERMARK_TEXT",
+    "Save The Day · savetheday.io",
+)
+# Footer path for the brand font. DejaVu is pre-installed on
+# the NAS (verified 2026-08-02 via `fc-list`). Falling back to
+# Pillow's load_default() if missing so the watermark always
+# renders, even on barebones installs.
+WATERMARK_FONT_PATH = os.environ.get(
+    "PHOTO_WATERMARK_FONT",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+)
 # Filename component guard — eventId and guestId should be short alphanumeric, but
 # accept anything that matches a safe pattern; reject ../, \x00, etc.
 SAFE_ID = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
@@ -95,6 +134,151 @@ try:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 except (OSError, PermissionError):
     pass
+
+
+# 2026-08-02 — Default-on watermark. Applied to every upload
+# that lands on disk UNLESS the Vercel proxy forwards
+# `X-Watermark-Disabled: true` (set only when the owner has the
+# `watermark-removed` unlock AND the HMAC-signed prefs token
+# verifies at the proxy). Returns True on success, False on
+# any failure (logged). The caller treats False as "ship the
+# original" — a broken watermark MUST NOT take down the upload.
+def _apply_watermark(path, content_type):
+    """Render a corner watermark onto the photo at `path`.
+
+    Failure mode: returns False and logs the error. Caller
+    continues with the original file (default-on watermark
+    means the user gets a clean photo IF the watermark code
+    breaks, which is the safer failure mode than failing
+    the upload entirely).
+    """
+    if not _PIL_AVAILABLE:
+        log("watermark: PIL not available, skipping")
+        return False
+    if content_type not in WATERMARK_TYPES:
+        log(f"watermark: skipping {content_type} (not in WATERMARK_TYPES)")
+        return False
+    try:
+        # Lazy import so the module-level _PIL_AVAILABLE check
+        # gates it cleanly.
+        from PIL import Image, ImageDraw, ImageFont
+
+        # Open the freshly-saved file. Pillow is lazy about
+        # decoding the pixels (until we draw on it), so even
+        # 8 MP phone photos open in <100 ms.
+        with Image.open(str(path)) as im:
+            # Auto-orient based on EXIF (most phones set this).
+            # If no EXIF or it's already correct, this is a no-op.
+            im.load()
+            im = ImageOps_compat_autorotate(im)
+
+            # Render the watermark in the BOTTOM-RIGHT corner
+            # with a semi-transparent dark band so it reads on
+            # both light and dark photos.
+            draw = ImageDraw.Draw(im, "RGBA")
+            w, h = im.size
+            # Font size scales with image width — keeps the
+            # watermark readable on phone portraits (3-4 MP
+            # ~ 2000px wide) and large DSLRs (6000+ px).
+            font_size = max(14, int(min(w, h) * 0.025))
+            try:
+                font = ImageFont.truetype(WATERMARK_FONT_PATH, font_size)
+            except (OSError, IOError):
+                font = ImageFont.load_default()
+
+            # Measure the text so we can position the band.
+            # textbbox() is Pillow 8.0+; load_default fonts
+            # still work but may report a 0,0 box.
+            bbox = draw.textbbox((0, 0), WATERMARK_TEXT, font=font)
+            tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
+            # Padding around the text inside the band.
+            pad = max(6, int(font_size * 0.4))
+            band_w = tw + pad * 2
+            band_h = th + pad * 2
+            # Position: bottom-right with a small inset from
+            # the photo edge.
+            inset = max(10, int(min(w, h) * 0.015))
+            band_x = w - band_w - inset
+            band_y = h - band_h - inset
+
+            # Draw a semi-opaque dark band, then the white text
+            # on top. RGBA tuple: (R, G, B, A) — alpha=128 is
+            # 50% transparent, lets the photo show through
+            # dimly so the watermark doesn't dominate.
+            draw.rectangle(
+                [band_x, band_y, band_x + band_w, band_y + band_h],
+                fill=(0, 0, 0, 128),
+            )
+            draw.text(
+                (band_x + pad, band_y + pad - bbox[1]),
+                WATERMARK_TEXT,
+                fill=(255, 255, 255, 230),
+                font=font,
+            )
+
+            # Save back to the same path. Pillow picks the
+            # format from the file extension. JPEG quality
+            # 92 matches what most phone cameras produce
+            # natively, so the file size stays close to the
+            # original (band+text adds <1% size overhead).
+            save_kwargs = {}
+            if content_type == "image/jpeg":
+                save_kwargs["quality"] = 92
+                save_kwargs["optimize"] = True
+                # Preserve EXIF where present. The PIL image
+                # keeps the EXIF blob in im.info['exif'] after
+                # exif_transpose() runs (PIL 9+), so we just
+                # forward it. If absent, we DON'T try to
+                # regenerate — that's an Image.Exif() operation
+                # requiring PIL 10+ and adds complexity for a
+                # cosmetic preservation that the user can
+                # restore from their phone gallery if they care.
+                exif_bytes = im.info.get("exif", b"")
+                if exif_bytes:
+                    save_kwargs["exif"] = exif_bytes
+            elif content_type == "image/png":
+                save_kwargs["optimize"] = True
+            elif content_type == "image/webp":
+                save_kwargs["quality"] = 92
+
+            # Atomic write: same tmp+rename dance as the
+            # upload path so a partial write can't replace a
+            # good photo with garbage. PIL infers the format
+            # from the file extension, so we keep the original
+            # extension on the tmp file (just append ".wm-tmp"
+            # to the stem) and rename after the save succeeds.
+            # The earlier ".tmp" suffix bug raised "unknown file
+            # extension: .tmp" because PIL couldn't pick the
+            # format — keeping the original extension fixes it.
+            tmp = path.with_name(path.stem + ".wm-tmp" + path.suffix)
+            im.save(str(tmp), **save_kwargs)
+            os.replace(tmp, path)
+        return True
+    except Exception as e:
+        log(f"watermark: failed for {path.name}: {type(e).__name__}: {e}")
+        # Clean up any half-written tmp file.
+        try:
+            tmp = path.with_name(path.stem + ".wm-tmp" + path.suffix)
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def ImageOps_compat_autorotate(im):
+    """EXIF-aware auto-rotate. Imported lazily so the import
+    error surfaces only when we actually need to rotate.
+
+    Returns the rotated image. If rotation isn't possible
+    (no EXIF / no PIL.ImageOps), returns the original.
+    """
+    try:
+        from PIL import ImageOps
+        return ImageOps.exif_transpose(im)
+    except Exception:
+        return im
 
 
 def log(msg):
@@ -315,6 +499,28 @@ class PhotoHandler(BaseHTTPRequestHandler):
         except OSError as e:
             log(f"write error: {e}")
             return self._send_error(500, "disk write failed")
+
+        # 2026-08-02 — Default-on watermark. The Vercel
+        # /api/photo-upload proxy verifies the owner's
+        # upload-preferences HMAC token and forwards
+        # `X-Watermark-Disabled: true` only when the owner has
+        # the `watermark-removed` unlock. Anything else →
+        # watermark on. _apply_watermark() returns False on any
+        # failure (PIL missing, corrupt JPEG, etc.) and we still
+        # return 200 — a broken watermark must NOT take down the
+        # upload. The log line is the only signal that something
+        # went wrong.
+        watermark_disabled = self.headers.get("X-Watermark-Disabled", "").lower() == "true"
+        if watermark_disabled:
+            log(f"watermark disabled (premium) for {filename}")
+        else:
+            wm_ok = _apply_watermark(dest, f["content_type"])
+            if wm_ok:
+                log(f"watermarked {filename}")
+            else:
+                # Don't fail the upload — just log so the operator
+                # can investigate. The original file is shipped as-is.
+                log(f"watermark skipped (see prior error) for {filename}")
 
         url = f"{PUBLIC_ORIGIN}/photos/{event_id}/{guest_id}/{filename}"
         log(f"saved {len(f['data'])} bytes -> {dest} ({uploader_name})")
