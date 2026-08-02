@@ -59,6 +59,41 @@ function isAdmin(req: any): boolean {
   return !!req.auth && (req.auth.token as { admin?: boolean })?.admin === true;
 }
 
+// 2026-08-02 — isCouple. Couples are any signed-in user that owns at
+// least one event doc under /artifacts/{appId}/users/{uid}/events/.
+// The check is intentionally a one-shot getCountFromServer() with a
+// 1-item limit (cheaper than fetching the full list) — we only need
+// to know if they have ANY event, not which one.
+//
+// This widens the public-facing "invite a seeded vendor" path so
+// couples can nudge vendors to onboard from the BrowseOnlyNotice
+// surface in VendorModal.jsx. Admin still has full access; the
+// difference is couples can now also mint + email the same invite
+// link. Vendors cannot escalate because we still require req.auth.
+//
+// Cost: ~1 Firestore read per call. activateSeededVendor already
+// reads the vendor doc + writes analytics; adding one read here is
+// in the noise. If this becomes hot, cache `isCouple` for 60s in
+// request context.
+async function isCouple(req: any): Promise<boolean> {
+  if (!req.auth?.uid) return false;
+  const appId = process.env.GCLOUD_PROJECT || 'savetheday-2377a';
+  try {
+    const eventsRef = db
+      .collection('artifacts')
+      .doc(appId)
+      .collection('users')
+      .doc(req.auth.uid)
+      .collection('events')
+      .limit(1);
+    const snap = await eventsRef.count().get();
+    return snap.data().count > 0;
+  } catch (e) {
+    console.warn('[isCouple] check failed (treating as non-couple):', e);
+    return false;
+  }
+}
+
 function genToken(len: number): string {
   // URL-safe base32 (no padding), lowercase. crypto.randomBytes is
   // cryptographically suitable here — these are short-lived, scoped
@@ -118,8 +153,17 @@ export const activateSeededVendor = onCall(
   { cors: true, region: 'us-central1', timeoutSeconds: 30, memory: '256MiB', secrets: [APP_BASE_URL] },
   async (req): Promise<ActivateSeededVendorResult> => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
-    if (!isAdmin(req)) {
-      throw new HttpsError('permission-denied', 'Admin only.');
+    // 2026-08-02 — widen from admin-only to admin OR couple. Couples
+    // are signed-in users that own at least one event doc, and they
+    // can now mint invitation links from VendorModal's
+    // BrowseOnlyNotice surface to nudge a seeded vendor to onboard.
+    // Vendors themselves still cannot call this (no event doc).
+    const allowed = isAdmin(req) || (await isCouple(req));
+    if (!allowed) {
+      throw new HttpsError(
+        'permission-denied',
+        'Admin or wedding couple only — sign in with a 婚禮帳戶.',
+      );
     }
     const { slug, ttlMs } = (req.data || {}) as ActivateSeededVendorInput;
     if (!slug || typeof slug !== 'string') {
@@ -600,8 +644,14 @@ export const sendVendorInviteEmail = onCall(
   },
   async (req): Promise<SendVendorInviteEmailResult> => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
-    if (!isAdmin(req)) {
-      throw new HttpsError('permission-denied', 'Admin only.');
+    // 2026-08-02 — widen from admin-only to admin OR couple (see
+    // activateSeededVendor above for rationale).
+    const allowed = isAdmin(req) || (await isCouple(req));
+    if (!allowed) {
+      throw new HttpsError(
+        'permission-denied',
+        'Admin or wedding couple only — sign in with a 婚禮帳戶.',
+      );
     }
     const { slug, email, signupUrl: signupUrlOverride } = (req.data || {}) as SendVendorInviteEmailInput;
     if (!slug || typeof slug !== 'string') throw new HttpsError('invalid-argument', 'slug is required.');
