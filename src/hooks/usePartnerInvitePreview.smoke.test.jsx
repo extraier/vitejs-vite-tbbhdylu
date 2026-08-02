@@ -8,24 +8,45 @@ const sourcePath = path.resolve(
 );
 
 describe('usePartnerInvitePreview token handoff', () => {
-  it('mirrors the resolved raw token so URL and localStorage resumes can redeem', () => {
+  // 2026-08-02 (round 3) — replaces the old "mirrors the
+  // resolved raw token so URL and localStorage resumes can
+  // redeem" test. The old test asserted the hook wrote the
+  // raw token to sessionStorage at effect-start as a hand-off
+  // for App.jsx's redeem effect. That hand-off was the round-3
+  // race condition we eliminated (the write happened BEFORE
+  // preview validation, so App.jsx could fire a redeem on a
+  // dead token).
+  //
+  // The new design: the hook exposes validatedToken via React
+  // state, set ONLY on preview success. App.jsx reads it from
+  // the return value (no storage hand-off at all). This test
+  // guards the new contract.
+  it('exposes validatedToken via state (no more sessionStorage hand-off)', () => {
     const source = fs.readFileSync(sourcePath, 'utf8');
 
-    expect(source).toContain("sessionStorage.setItem('pendingPartnerToken', token)");
+    // Hook declares the validatedToken state.
+    expect(source).toMatch(/const \[validatedToken/);
+    // Hook stashes the localStorage resume key (this still
+    // happens — it's how the hook finds the token across
+    // tab reopens).
     expect(source).toContain('stashToken(token)');
-    expect(source).not.toContain("JSON.stringify({ token: urlToken");
+    // Hook does NOT stash the raw token to sessionStorage.
+    expect(source).not.toContain(
+      "sessionStorage.setItem('pendingPartnerToken', token)",
+    );
 
-    const mirrorAt = source.indexOf("sessionStorage.setItem('pendingPartnerToken', token)");
+    // sanity: stashToken (localStorage) appears BEFORE the
+    // preview call (it must, so a future mount can resume).
+    const stashAt = source.indexOf('stashToken(token)');
     const previewAt = source.indexOf("callFirebaseFn('previewPartnerInvite'");
-    expect(mirrorAt).toBeGreaterThan(-1);
-    expect(mirrorAt).toBeLessThan(previewAt);
+    expect(stashAt).toBeGreaterThan(-1);
+    expect(stashAt).toBeLessThan(previewAt);
   });
 
   // 2026-08-02 (bad-signature follow-up) — guarantee the dead-token
   // cleanup path stays in place. Without this, a stale localStorage
-  // token replays previewPartnerInvite → 403 on every page load,
-  // AND re-stashes to sessionStorage which makes App.jsx's redeem
-  // effect fire redeemPartnerInviteV2 → 403 too. Console noise forever.
+  // token replays previewPartnerInvite → 403 on every page load.
+  // Console noise forever.
   it('clears the localStorage stash when the preview fails with a dead-token error', () => {
     const source = fs.readFileSync(sourcePath, 'utf8');
 
@@ -46,27 +67,55 @@ describe('usePartnerInvitePreview token handoff', () => {
     expect(clearAt).toBeGreaterThan(classifyAt);
   });
 
-  // 2026-08-02 (round 2) — clear sessionStorage too. The hook
-  // stashes the token to sessionStorage at effect-start so App.jsx's
-  // auto-redeem effect can find it after auth. Without clearing
-  // sessionStorage on dead-token errors, App.jsx still finds the
-  // stale token and fires redeemPartnerInviteV2 → another 403 Bad
-  // signature in the console. localStorage alone is half the fix.
-  it('clears the sessionStorage handoff key when the preview fails with a dead-token error', () => {
+  // 2026-08-02 (round 3) — the hook now exposes a validatedToken
+  // state that App.jsx's redeem effect depends on. It is set ONLY
+  // on preview success. Without this gate, App.jsx's parallel
+  // redeem effect could fire BEFORE the preview validated the
+  // token, producing a parallel 403 Bad signature on every dead
+  // token. validatedToken serialises the flow: preview first,
+  // redeem second. Dead tokens never make it past the gate.
+  it('exposes validatedToken that is null on preview failure and set on success', () => {
     const source = fs.readFileSync(sourcePath, 'utf8');
-    expect(source).toContain(
-      "sessionStorage.removeItem('pendingPartnerToken')",
-    );
-    // The sessionStorage clear must live INSIDE the isDeadToken
-    // branch (not at top-level), so transient errors keep the
-    // handoff intact for App.jsx's redeem path to retry.
-    const isDeadTokenBranch = source.indexOf('if (isDeadToken)');
-    const sessionClear = source.indexOf(
-      "sessionStorage.removeItem('pendingPartnerToken')",
-    );
-    const branchEnd = source.indexOf('}', isDeadTokenBranch);
-    expect(isDeadTokenBranch).toBeGreaterThan(-1);
-    expect(sessionClear).toBeGreaterThan(isDeadTokenBranch);
-    expect(sessionClear).toBeLessThan(branchEnd);
+
+    // Hook declares the state
+    expect(source).toContain('useState(null)');
+    expect(source).toMatch(/const \[validatedToken/);
+
+    // Hook returns it
+    expect(source).toMatch(/return\s*\{[^}]*validatedToken[^}]*\}/);
+
+    // validatedToken is set ONLY on the preview-success branch
+    // (after the data validation), NOT on dead-token errors or
+    // transient errors. Count the SETTER CALLS — the actual
+    // setValidatedToken(value) invocations, NOT the destructure
+    // in useState (which writes `setValidatedToken = useState(...)`
+    // without a `(`. The regex `setValidatedToken\s*\(` matches
+    // only the SET calls, not the destructure.
+    const setterCalls = (source.match(/\bsetValidatedToken\s*\(/g) || [])
+      .length;
+    // Exactly 1 SET call — the success branch.
+    expect(setterCalls).toBe(1);
+
+    // The set call must live inside the success branch (after
+    // partnerEmail is set, before the catch). Use a positional
+    // check: setValidatedToken must appear AFTER `setInvite(` AND
+    // BEFORE the catch block.
+    const setInviteAt = source.indexOf('setInvite({');
+    const setValidatedAt = source.indexOf('setValidatedToken(token);');
+    const catchAt = source.indexOf('} catch (err) {');
+    expect(setInviteAt).toBeGreaterThan(-1);
+    expect(setValidatedAt).toBeGreaterThan(setInviteAt);
+    expect(setValidatedAt).toBeLessThan(catchAt);
+  });
+
+  // 2026-08-02 (round 3) — the sessionStorage hand-off is gone.
+  // Previously the hook wrote the RAW token to sessionStorage at
+  // effect-start so App.jsx's redeem effect could find it after
+  // auth. That write-before-validation was the race condition that
+  // caused dead-token 403s. The hook must NOT write to
+  // sessionStorage anywhere.
+  it('does not write to sessionStorage (round-3 race condition is gone)', () => {
+    const source = fs.readFileSync(sourcePath, 'utf8');
+    expect(source).not.toMatch(/sessionStorage\.setItem/);
   });
 });

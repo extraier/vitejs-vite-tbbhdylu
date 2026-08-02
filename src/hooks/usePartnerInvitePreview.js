@@ -4,17 +4,26 @@
 // welcome message.
 //
 // Returns:
-//   invite        — { partnerEmail, eventName, expiresAt } | null
-//     (eventId intentionally omitted — the previewPartnerInvite
-//     Cloud Function dropped it from its response to fix a
-//     minor info-disclosure leak. The hook is defensive: if a
-//     payload that includes eventId ever arrives, the field is
-//     simply absent from the parsed object.)
-//   loading       — true while the preview CF is in flight
-//   error         — error string if the CF failed (bad token, expired, etc.)
-//   clearInvite   — () => void; call after the user signs up / in to
-//                   remove the token from the URL so refreshes don't
-//                   re-fire the preview
+//   invite           — { partnerEmail, eventName, expiresAt } | null
+//   loading          — true while the preview CF is in flight
+//   error            — error string if the CF failed
+//   clearInvite      — () => void; resets state and clears localStorage
+//   validatedToken   — string | null; set ONLY on preview success.
+//                      Source of truth for App.jsx's auto-redeem
+//                      effect (added 2026-08-02 round 3 — see the
+//                      validatedToken state declaration above for
+//                      why this replaced the old sessionStorage
+//                      hand-off).
+//
+// Why validatedToken is exposed (instead of just invite):
+//   App.jsx needs the RAW token to call redeemPartnerInviteV2.
+//   invite only carries partnerEmail/eventName/expiresAt (the
+//   eventId was intentionally dropped server-side for info-disclosure
+//   hygiene — see eventId comment at the top). The token itself
+//   never crosses the wire from the preview CF; only this hook
+//   knows it (because we resolved it from URL/localStorage). So we
+//   pass it back up through the hook's return value once we've
+//   server-validated it.
 //
 // Why this is a hook (not inline in App.jsx):
 //   • Same useEffect-dependency semantics as useAuth
@@ -89,6 +98,28 @@ export function usePartnerInvitePreview() {
   const [invite, setInvite] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // 2026-08-02 (round 3) — validatedToken. App.jsx's auto-redeem
+  // effect needs the token AFTER auth, but it can't safely read
+  // sessionStorage because:
+  //   - The hook used to write sessionStorage at effect-start so
+  //     App.jsx could find it after auth (race-free handover).
+  //   - That meant App.jsx's parallel redeem effect fired BEFORE
+  //     the preview completed — and if the preview returned 403
+  //     (dead token), App.jsx had already fired its own 403.
+  //     Round 2 cleared sessionStorage AFTER the preview failed,
+  //     but the redeem was already in flight. Race condition.
+  //
+  // Fix: the hook now owns the token state. App.jsx reads
+  // validatedToken from the hook's return value and redeems ONLY
+  // when the hook has validated the token via preview success.
+  // No more parallel redeem-on-mount. No more storage hand-off.
+  // No more 403 noise on dead tokens.
+  //
+  // validatedToken is set ONLY on preview success (token has been
+  // server-validated). On preview failure it stays null, and App.jsx
+  // never tries to redeem — which is exactly what we want for dead
+  // tokens.
+  const [validatedToken, setValidatedToken] = useState(null);
 
   useEffect(() => {
     // Resolve the token from URL (priority) or localStorage (resume).
@@ -96,36 +127,30 @@ export function usePartnerInvitePreview() {
     const token = urlToken || readStashedToken();
     if (!token) return;
 
-    // Stash the resolved token in BOTH localStorage AND sessionStorage so
-    // App.jsx's redeem effect can find it after auth. This intentionally
-    // mirrors localStorage-only resumes too (not just fresh URL arrivals).
-    // Keep the sessionStorage value as the RAW token: App.jsx passes that
-    // value directly to redeem({ token }), so a JSON envelope here would
-    // be sent as the token and fail signature verification.
+    // We only stash to localStorage at effect-start (the hook's
+    // own resume-on-tab-reopen mechanism). sessionStorage is no
+    // longer touched at effect-start — see validatedToken above
+    // for why.
+
+    // Stash the resolved token in localStorage so we can resume
+    // after a tab close/reopen. We do NOT strip the URL token
+    // until preview SUCCEEDS — App.jsx's redeem effect used to
+    // read URL directly too, but now it reads validatedToken
+    // (which only exists on success), so stripping URL here
+    // doesn't break anything; we keep the existing behaviour of
+    // stripping only on success for back-compat.
     //
-    // We do NOT strip the URL token until preview SUCCEEDS — App.jsx's
-    // redeem effect also reads from the URL via extractPartnerTokenFromUrl()
-    // and the two effects run in parallel.
-    //
-    // Previously this hook stripped the URL token immediately at effect
-    // start, which raced with App.jsx's redeem effect: if the user wasn't
-    // signed in yet, the URL token was gone by the time they signed in
-    // and App.jsx's extractPartnerTokenFromUrl() returned null. Combined
-    // with the sessionStorage/localStorage split (this hook wrote
-    // localStorage; App.jsx read sessionStorage), the redeem silently
-    // never fired. Bug seen 2026-07-26 on savetheday-2377a.
-    //
-    // The sessionStorage value is the RAW token (not a JSON envelope):
-    // App.jsx reads it and passes the value directly to redeem({ token }),
-    // so a JSON envelope would be sent as the token and fail signature
-    // verification server-side. localStorage keeps the JSON envelope
-    // (readStashedToken() unwraps it) because that store is only used by
-    // the hook itself on the same tab. The two stores hold different
-    // shapes by design; do not converge them.
+    // Why we DON'T stash the RAW token to sessionStorage at
+    // effect-start (removed 2026-08-02 round 3):
+    // App.jsx's auto-redeem effect used to read sessionStorage
+    // directly and fire redeemPartnerInviteV2 BEFORE the preview
+    // completed. With dead tokens that meant two parallel 403s
+    // (preview + redeem). The race is intrinsic if both effects
+    // can independently decide to call the redeem API. The new
+    // design serialises: hook validates first, then exposes the
+    // token via validatedToken, then App.jsx redeems. Dead tokens
+    // never make it past the validation gate.
     stashToken(token);
-    try {
-      sessionStorage.setItem('pendingPartnerToken', token);
-    } catch { /* sessionStorage blocked — fallback to URL/localStorage */ }
 
     let cancelled = false;
     setLoading(true);
@@ -143,13 +168,20 @@ export function usePartnerInvitePreview() {
         if (cancelled) return;
         const data = res?.data;
         if (data && data.ok && data.partnerEmail) {
-          // Preview succeeded — safe to strip URL now.
+          // Preview succeeded — safe to strip URL now AND expose
+          // the token so App.jsx's auto-redeem effect can fire.
           stripTokenFromUrl();
           setInvite({
             partnerEmail: data.partnerEmail,
             eventName: data.eventName,
             expiresAt: data.expiresAt,
           });
+          // validatedToken is the source of truth for App.jsx's
+          // redeem effect. Setting it here (after server-side
+          // validation) is what eliminates the dead-token 403
+          // noise — App.jsx no longer fires its own redeem until
+          // we've confirmed the token is real.
+          setValidatedToken(token);
         } else {
           setError('invalid-response');
         }
@@ -166,6 +198,10 @@ export function usePartnerInvitePreview() {
         // mounts don't replay it and spam the console with 403s. For
         // transient errors, keep the stash so the user can refresh and
         // try again.
+        //
+        // validatedToken stays null in this branch (the token was
+        // never set), so App.jsx will not fire redeemPartnerInviteV2
+        // — which is the round-3 fix for the dead-token 403 noise.
         const isDeadToken =
           code === 'Bad signature' ||
           code === 'NOT_FOUND' ||
@@ -175,31 +211,9 @@ export function usePartnerInvitePreview() {
           /bad signature/i.test(err?.message || '');
         if (isDeadToken) {
           clearStash();
-          // 2026-08-02 (round 2) — also clear the sessionStorage
-          // handoff key that App.jsx's auto-redeem effect reads.
-          // The sessionStorage write at line ~127 happens BEFORE
-          // the preview fires, so even when we correctly identify
-          // the token as dead and clear localStorage, App.jsx would
-          // still find the token in sessionStorage and fire
-          // redeemPartnerInviteV2 → another 403 Bad signature in
-          // the console. Clearing both stops the noise at the source.
-          //
-          // Use the same try/catch pattern as the existing
-          // sessionStorage write above — sessionStorage can throw
-          // in private-browsing or storage-exceeded modes, and
-          // silent no-op is correct here (the dead-token error
-          // already fired; we just want to stop the replay).
-          try {
-            sessionStorage.removeItem('pendingPartnerToken');
-          } catch {
-            /* sessionStorage blocked — best-effort cleanup */
-          }
         }
         // For transient preview errors (NOT dead-token) DO NOT clearStash()
-        // — the redeem effect (App.jsx) might still succeed via
-        // sessionStorage['pendingPartnerToken']. The redeem path is
-        // independent and shouldn't be blocked by a preview-only
-        // failure (e.g. CORS, network blip).
+        // — a future mount might succeed where this one didn't.
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -216,5 +230,5 @@ export function usePartnerInvitePreview() {
     clearStash();
   }, []);
 
-  return { invite, loading, error, clearInvite };
+  return { invite, loading, error, clearInvite, validatedToken };
 }

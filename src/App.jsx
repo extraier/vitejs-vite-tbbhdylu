@@ -65,7 +65,6 @@ import { useToast } from './hooks/useToast';
 // live at functions/src/partnerInvite.ts.
 import {
   partnerInviteApi,
-  extractPartnerTokenFromUrl,
   clearPartnerTokenFromUrl,
 } from './lib/partnerInvite';
 import { signInAnonymously } from 'firebase/auth';
@@ -145,13 +144,23 @@ export default function App() {
   // calls previewPartnerInvite CF, and exposes the partnerEmail + eventName
   // so the LoginScreen can pre-fill the form and show a welcome message.
   // See src/hooks/usePartnerInvitePreview.js for the full flow.
-  const { invite: partnerInvite } = usePartnerInvitePreview();
+  const { invite: partnerInvite, validatedToken: partnerValidatedToken } = usePartnerInvitePreview();
   // 2026-07-26 — Co-owners (couples / partners) auto-redeem.
   // The partner's magic-link email contains ?t=<token>. When they
   // click it, the front-end detects the token on mount, calls
   // redeemPartnerInvite, and switches to the joined event. The
   // token is then cleared from the URL bar.
   //
+  // 2026-08-02 (round 3) — the redeem source is now partnerValidatedToken
+  // (set by the hook ONLY after server-side preview success) instead of
+  // the old sessionStorage/URL hand-off. The old design had the hook
+  // writing sessionStorage at effect-start so App.jsx's parallel effect
+  // could find the token after auth — but that meant the redeem could
+  // fire BEFORE the preview validated the token, producing a parallel
+  // 403 on dead tokens. validatedToken serialises the flow: preview
+  // validates first, then App.jsx redeems. Dead tokens never make it
+  // past the gate. See src/hooks/usePartnerInvitePreview.js for the
+  // full reasoning.
   // We also handle the "user isn't signed in yet" case: stash the
   // token and replay it after they sign in/up. Without this,
   // the partner would have to keep the email tab open through
@@ -362,30 +371,33 @@ export default function App() {
   // (Putting this useEffect up top with userRole in the deps
   // caused a TDZ crash because the deps array was evaluated
   // before userRole was initialised.)
+  // 2026-08-02 (round 3) — simplified. The hook now owns the token
+  // lifecycle: it resolves the token from URL or localStorage,
+  // fires previewPartnerInvite, and ONLY on server-side success
+  // sets partnerValidatedToken. We wait for that signal here, so
+  // we never redeem a dead token. We do NOT read sessionStorage
+  // or extractPartnerTokenFromUrl() anymore — both used to race
+  // with the preview (the old sessionStorage write happened before
+  // the preview fired, so App.jsx's parallel effect could redeem
+  // a not-yet-validated token).
+  //
+  // Edge case: user signs in BEFORE the preview returns success.
+  // Old design handled this by App.jsx writing URL token to
+  // sessionStorage (line 383) and the hook writing sessionStorage
+  // unconditionally (line 127 of the hook, removed in round 3).
+  // New design: partnerValidatedToken is null until preview
+  // resolves, so the redeem simply waits. The user sees the
+  // LoginScreen with the welcome card for a few hundred ms longer
+  // before being routed to the event page. Acceptable trade-off
+  // for never-firing-a-403-on-a-dead-token.
   useEffect(() => {
-    const token = extractPartnerTokenFromUrl();
-    if (!token) {
-      // First visit might have stashed it. After auth, also check
-      // sessionStorage as a fallback (the URL token might still be
-      // there but we also want belt-and-suspenders to handle the
-      // case where the URL bar was wiped by a SPA navigation).
-      const stashed = (() => {
-        try { return sessionStorage.getItem('pendingPartnerToken'); } catch { return null; }
-      })();
-      if (stashed && user) {
-        return processToken(stashed, user, userRole);
-      }
-      return;
-    }
-    if (!user) {
-      // Stash for after-auth replay
-      try {
-        sessionStorage.setItem('pendingPartnerToken', token);
-      } catch {}
-      return;
-    }
-    return processToken(token, user, userRole);
-  }, [user?.uid]);
+    if (!partnerValidatedToken) return;
+    if (!user) return;
+    return processToken(partnerValidatedToken, user, userRole);
+    // partnerValidatedToken is the trigger. user?.uid is the gate.
+    // userRole is read via the ref (NOT in deps) so role changes
+    // don't re-fire the redeem — see the comment at processToken.
+  }, [partnerValidatedToken, user?.uid]);
   // (NOT [user?.uid, userRole] — that would re-run the redeem on
   // every role change, which is wrong. The body reads userRole
   // from the current closure; the ref keeps it fresh.)
@@ -402,15 +414,21 @@ export default function App() {
         if (cancelled) return;
         clearPartnerTokenFromUrl();
         try { sessionStorage.removeItem('pendingPartnerToken'); } catch {}
-        // 2026-08-02 (bad-signature follow-up) — also clear the
-        // localStorage stash used by usePartnerInvitePreview. Without
-        // this, every subsequent page load replays the (now-dead)
-        // token: previewPartnerInvite → 403 Bad signature, then
-        // usePartnerInvitePreview re-stashes to sessionStorage which
-        // makes this same effect fire redeemPartnerInviteV2 → 403
-        // again. Console noise forever. Clearing here means a fresh
-        // partner-invite link is the only way to re-engage, which
-        // matches the server-side "token is single-use" semantics.
+        // 2026-08-02 (round 3) — sessionStorage was the old
+        // hand-off key written by usePartnerInvitePreview at
+        // effect-start. That write was removed in round 3
+        // (replaced by partnerValidatedToken state), but we keep
+        // this removeItem as defensive cleanup in case any
+        // stale tab still has a leftover key from the old
+        // round-1/2 design — one tab-load and it's gone.
+        //
+        // Also clear the localStorage stash used by the hook.
+        // Without this, every subsequent page load replays the
+        // (now-dead) token via readStashedToken() and the hook
+        // fires previewPartnerInvite → 403 Bad signature again.
+        // Clearing here means a fresh partner-invite link is
+        // the only way to re-engage, which matches the
+        // server-side "token is single-use" semantics.
         try { localStorage.removeItem('__heropartnerinvite_token'); } catch {}
         const eventDocRef = doc(
           db,
