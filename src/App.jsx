@@ -2105,8 +2105,31 @@ export default function App() {
       hasGifted: false,
       giftAmount: 0,
     };
+    // 2026-08-03 — Diagnostic for "unable to add guest" report.
+    // Logs the actual values the rule will see (path-ownerUid,
+    // current-event coOwners, signed-in user uid) so we can tell
+    // whether the rejection is `request.auth.uid != ownerUid` or
+    // `coOwners` missing. Safe to remove after the bug is fixed.
+    // eslint-disable-next-line no-console
+    console.info('[addGuest-debug] path-ownerUid=', dataOwnerUid, 'event.id=', currentEvent.id, 'auth.uid=', user.uid, 'event._ownerUid=', currentEvent._ownerUid, 'event.coOwners=', currentEvent.coOwners, 'payload.eventId=', newGuest.eventId);
     // 2026-07-27 — Migrated to event-scoped path.
-    await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'guests'), newGuest);
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'guests'), newGuest);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[addGuest-debug] FAILED', {
+        code: err && err.code,
+        message: err && err.message,
+        path: `artifacts/${appId}/users/${dataOwnerUid}/events/${currentEvent.id}/guests`,
+        signedInUid: user.uid,
+        pathOwnerUid: dataOwnerUid,
+        eventOwnerUid: currentEvent._ownerUid,
+        eventCoOwners: currentEvent.coOwners,
+        payload: newGuest,
+      });
+      showToast('❌ 新增失敗：' + ((err && err.message) || 'Unknown error') + (err && err.code ? ` (${err.code})` : ''));
+      return;
+    }
     setNewGuestForm({ name: '', group: '男家親戚', headCount: 1, tableNumber: '' });
     showToast('✅ 嘉賓已加入名單，已生成專屬 QR Code！');
   };
