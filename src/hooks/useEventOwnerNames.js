@@ -10,8 +10,20 @@
 //
 // Server-side: updateOwnerNames Cloud Function (see
 // functions/src/userProfile.ts) validates the caller is owner OR
-// co-owner of `eventId` before writing. We pass `eventId` in the
-// payload and trust the server's cleaned response.
+// co-owner of `eventId` before writing. We pass `eventId` + `ownerUid`
+// in the payload and trust the server's cleaned response.
+//
+// Uid semantics:
+//   - The caller (EventSettingsModal / OwnerNamesEditor) passes the
+//     OWNER's uid as the `uid` parameter here. App.jsx overrides
+//     `currentUser.uid = event._ownerUid` when opening the modal so
+//     the read path (subscription) and write path (CF ownerUid) both
+//     resolve to the owner's user doc.
+//   - For single-owner events this is the same as the caller's uid.
+//   - For co-owner editors `uid` is the partner's uid (the event's
+//     _ownerUid), not the caller's uid. The CF's auth.uid is still
+//     the actual logged-in user; we pass `ownerUid` separately so
+//     the CF can locate the doc.
 //
 // Commit-1 fallback: if the event doc has neither boyName nor
 // girlName AND the caller passes an optional `fallbackNames` prop
@@ -73,8 +85,17 @@ export function useEventOwnerNames(eventId, uid, fallbackNames) {
       throw new Error('Not signed in or no event selected');
     }
     const updateOwnerNamesFn = httpsCallable(functions, 'updateOwnerNames');
+    // 2026-08-01 (co-owner fix) — events live under the OWNER's user
+    // doc, not the caller's. The hook's `uid` parameter is the
+    // owner's uid (set by App.jsx modal override). We pass it as
+    // `ownerUid` in the CF payload so the CF can locate the event
+    // at `users/{ownerUid}/events/{eventId}` regardless of whether
+    // the caller is the owner or a co-owner. For single-owner events
+    // this is the same value as the caller's uid. Without this, the
+    // CF would look up at the caller's path and throw not-found.
     const res = await updateOwnerNamesFn({
       eventId,
+      ownerUid: uid,
       boyName: next.boyName || '',
       girlName: next.girlName || '',
     });

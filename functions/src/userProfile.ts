@@ -40,6 +40,13 @@
  *
  * Return value: { ok: true, eventId, boyName, girlName } so the
  * client can refresh its optimistic state without re-subscribing.
+ *
+ * 2026-08-01 (co-owner fix) — events live under the OWNER's user
+ * doc, not the caller's. The CF now accepts an optional `ownerUid`
+ * in the payload and uses it to locate the event. Co-owner callers
+ * pass their event's `_ownerUid` (the one App.jsx stamps on every
+ * event in the events[] merge). Without `ownerUid`, the CF falls
+ * back to `req.auth.uid` (legacy single-user writers).
  */
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
@@ -72,20 +79,36 @@ function eventRef(uid: string, eventId: string) {
  * `eventId`. Reads the event doc once; cheap relative to the
  * Firestore write that follows.
  *
- * Co-owner semantics: `data.coOwners` is `string[]`. We accept the
- * primary owner (`data.userId`) OR any entry in `coOwners`. An
- * event with `coOwners` undefined or non-array is treated as
- * owner-only — defensive against older event docs.
+ * 2026-08-01 — events live under the OWNER's user doc, not the
+ * caller's. If `ownerUid` is provided, look up at the owner's
+ * path; otherwise fall back to the caller's path (legacy per-user
+ * event writers). Co-owner callers pass `ownerUid` so the lookup
+ * finds the event. Co-owner semantics: `data.coOwners` is `string[]`.
+ * We accept the primary owner (`data.userId`) OR any entry in
+ * `coOwners`. An event with `coOwners` undefined or non-array is
+ * treated as owner-only — defensive against older event docs.
  */
-async function assertEventAccess(uid: string, eventId: string): Promise<void> {
-  const snap = await eventRef(uid, eventId).get();
+async function assertEventAccess(
+  uid: string,
+  eventId: string,
+  ownerUid?: string,
+): Promise<void> {
+  // Try the owner path first (the common case in the new
+  // per-event model), then fall back to the caller's path (legacy).
+  // Both reads are tolerated — the access check below decides which
+  // one matters, but we have to read the doc to know the answer.
+  const candidateUid = ownerUid || uid;
+  let snap = await eventRef(candidateUid, eventId).get();
+  if (!snap.exists && ownerUid && ownerUid !== uid) {
+    snap = await eventRef(uid, eventId).get();
+  }
   if (!snap.exists) {
     throw new HttpsError('not-found', `Event ${eventId} not found.`);
   }
   const data = snap.data() || {};
-  const ownerUid: string | undefined = data.userId;
+  const docOwnerUid: string | undefined = data.userId;
   const coOwners: string[] = Array.isArray(data.coOwners) ? data.coOwners : [];
-  if (uid !== ownerUid && !coOwners.includes(uid)) {
+  if (uid !== docOwnerUid && !coOwners.includes(uid)) {
     throw new HttpsError('permission-denied', 'You do not have access to this event.');
   }
 }
@@ -96,15 +119,25 @@ async function assertEventAccess(uid: string, eventId: string): Promise<void> {
  * Admin SDK bypass of Firestore rules means we can write narrowly
  * without exposing the event doc to client-side privilege
  * escalation (e.g. setting `coOwners` or `userId`).
+ *
+ * 2026-08-01 — payload now accepts an optional `ownerUid`. The
+ * client (OwnerNamesEditor → useEventOwnerNames) passes the event
+ * owner's uid so the CF can locate the event at
+ * `users/{ownerUid}/events/{eventId}` regardless of whether the
+ * caller is the owner or a co-owner. Without `ownerUid`, the CF
+ * falls back to `req.auth.uid` (legacy single-user writers).
  */
 export const updateOwnerNames = onCall(
   { cors: true, region: 'us-central1' },
   async (req) => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const uid = req.auth.uid;
-    const { eventId, boyName, girlName } = req.data || {};
+    const { eventId, boyName, girlName, ownerUid } = req.data || {};
     if (typeof eventId !== 'string' || !eventId) {
       throw new HttpsError('invalid-argument', 'eventId is required.');
+    }
+    if (ownerUid !== undefined && typeof ownerUid !== 'string') {
+      throw new HttpsError('invalid-argument', 'ownerUid must be a string when provided.');
     }
 
     const result = cleanEventOwnerNames({ boyName, girlName });
@@ -113,12 +146,14 @@ export const updateOwnerNames = onCall(
     }
     const cleaned = result.cleaned;
 
-    await assertEventAccess(uid, eventId);
+    await assertEventAccess(uid, eventId, ownerUid);
 
-    // narrow setDoc: only the two whitelisted fields + updatedAt.
-    // merge:true so any race with co-owner edits doesn't clobber
-    // other event fields (date, venue, rundown, etc).
-    await eventRef(uid, eventId).set(
+    // 2026-08-01 — write to the owner's path (or caller's path if
+    // ownerUid wasn't provided), matching the assertEventAccess
+    // lookup. Without this, the doc would never receive the new
+    // values when the caller is a co-owner.
+    const writeUid = ownerUid || uid;
+    await eventRef(writeUid, eventId).set(
       {
         boyName: cleaned.boyName,
         girlName: cleaned.girlName,

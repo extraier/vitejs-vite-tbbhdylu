@@ -5,11 +5,14 @@
 //   2. Reads boyName / girlName from event doc snapshot
 //   3. Falls back to user-level names when event has neither
 //      (Commit-1 deprecation window; removed in Commit 2 migration)
-//   4. saveOwnerNames calls updateOwnerNames CF with {eventId, ...}
+//   4. saveOwnerNames calls updateOwnerNames CF with {eventId, ownerUid, ...}
 //   5. Optimistic state updates after save
 //
 // 2026-08-01 — Initial release. Per-event hook subscribes to
 // users/{uid}/events/{eventId} for the couple's display names.
+// 2026-08-01 (co-owner fix) — payload now includes ownerUid so the
+// CF can locate the event at the owner's user doc when the caller
+// is a co-owner.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
@@ -71,7 +74,11 @@ describe('useEventOwnerNames', () => {
     expect(result.current.ownerNames).toEqual({ boyName: '舊名', girlName: '' });
   });
 
-  it('saveOwnerNames calls CF with eventId + names', async () => {
+  it('saveOwnerNames calls CF with eventId + ownerUid + names', async () => {
+    // 2026-08-01 (co-owner fix) — payload now includes ownerUid so
+    // the CF can locate the event at the owner's user doc when the
+    // caller is a co-owner. The hook's `uid` parameter is the
+    // owner's uid (passed by EventSettingsModal via App.jsx override).
     mockCallable.mockResolvedValue({
       data: { ok: true, eventId: 'evt-1', boyName: 'A', girlName: 'B' },
     });
@@ -82,6 +89,7 @@ describe('useEventOwnerNames', () => {
     });
     expect(mockCallable).toHaveBeenCalledWith({
       eventId: 'evt-1',
+      ownerUid: 'uid-1',
       boyName: 'A',
       girlName: 'B',
     });
