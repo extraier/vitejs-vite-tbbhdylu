@@ -221,22 +221,10 @@ export default function App() {
   // (useEventOwnerNames hook call moved — see below.)
 
   // 2026-08-02 — Upload preferences token (Option 1, watermark).
-  // When the owner has the `watermark-removed` unlock, this hook
-  // mints a short-lived HMAC-signed token via the
-  // getUploadPreferencesToken CF and caches it. The token is
-  // attached to every upload from this event (owner's + guests')
-  // so the Vercel proxy can forward `X-Watermark-Disabled: true`
-  // to the NAS, which skips the Pillow watermark step.
-  //
-  // When the owner does NOT have the unlock, prefsToken is null
-  // and uploads land watermarked (default-on).
-  //
-  // The hook is declared here with `userUnlocks`, but the
-  // INSTANCE call (with currentEvent?.id) is deferred to the
-  // block below where `currentEvent` is in scope — same TDZ
-  // dance as useEventOwnerNames. Without the defer we'd hit
-  // "Cannot access 'currentEvent' before initialization" on
-  // first render and the root would blank out.
+  // The hook call is intentionally below the currentEvent/dataOwnerUid
+  // declarations. Keeping this note next to the user-unlocks source
+  // makes the dependency explicit without evaluating a later const
+  // during the first render (which would trigger a TDZ crash).
   const _userUnlocksForUpload = userUnlocks;
 
   // 2026-07-15 — auto-route vendors to their dashboard. When the user
@@ -383,19 +371,6 @@ export default function App() {
     user?.uid,
     legacyOwnerNames,
   );
-
-  // 2026-08-02 — Upload preferences token (Option 1, watermark).
-  // Declared HERE (after currentEvent is in scope) so the hook
-  // call doesn't hit TDZ. See the deferred-call comment near
-  // line 230. dataOwnerUid is the OWNER's UID (not necessarily
-  // the signed-in user when guests upload via PersonalGuestPortal);
-  // the token represents the OWNER's preferences regardless of
-  // who's physically uploading.
-  const { prefsToken: uploadPrefsToken } = useUploadPreferencesToken({
-    ownerUid: dataOwnerUid,
-    eventId: currentEvent?.id,
-    unlocks: _userUnlocksForUpload,
-  });
 
   // 2026-07-26 — Co-owners (couples / partners) auto-redeem. This
   // is split out from the top-of-function declaration so it can
@@ -841,6 +816,19 @@ export default function App() {
     // the signed-in user's uid (the original-owner case).
     return currentEvent._ownerUid || user?.uid;
   }, [currentEvent, user?.uid]);
+
+  // 2026-08-02 — Upload preferences token (Option 1, watermark).
+  // This must stay AFTER dataOwnerUid is initialized. The hook mints
+  // a short-lived token when the owner has `watermark-removed`; the
+  // token is attached to uploads from this event (owner + guests) so
+  // the Vercel proxy can ask the NAS to skip the watermark step.
+  // If minting fails, the hook leaves the token null and uploads keep
+  // the safe default-on watermark behavior.
+  const { prefsToken: uploadPrefsToken } = useUploadPreferencesToken({
+    ownerUid: dataOwnerUid,
+    eventId: currentEvent?.id,
+    unlocks: _userUnlocksForUpload,
+  });
 
 // ---- Firestore subscriptions (skip when in guest mode) ----
   const targetUid = guest.isGuestMode ? guest.qOwner : user?.uid;

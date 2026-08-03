@@ -61,7 +61,10 @@ export class ErrorBoundary extends React.Component {
           <ol style={{ fontSize: '14px', color: '#475569', paddingLeft: '20px' }}>
             <li>截圖呢個畫面</li>
             <li>撳 Cmd/Ctrl+R 強制 reload(可能解決暫時性問題)</li>
-            <li>如果重複出現,請傳截圖到 https://t.me/roooo</li>
+            <li>
+              如果重複出現,請截圖並電郵到{' '}
+              <a href="mailto:cs.savetheday@gmail.com">cs.savetheday@gmail.com</a>
+            </li>
           </ol>
           <details
             style={{
