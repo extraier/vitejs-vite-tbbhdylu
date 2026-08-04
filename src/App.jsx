@@ -809,13 +809,27 @@ export default function App() {
   // reads AND writes should use this value instead of `user.uid`
   // or `targetUid` directly. Defined early (before targetUid) so
   // it can be used in the Firestore subscriptions below.
+  // 2026-08-04 — In guest mode, the URL provides qOwner (the original
+  // owner of the wedding data). Use it directly instead of waiting for
+  // currentEvent._ownerUid, because:
+  //   (a) In guest mode there's no signed-in user, so user?.uid is
+  //       undefined and dataOwnerUid was returning undefined,
+  //   (b) currentEvent only gets set AFTER the events subscription
+  //       populates, but the events subscription is gated on
+  //       !guest.isGuestMode (line 837), so it never fires for guests,
+  //   (c) Result: dataOwnerUid stayed undefined → the allGuests
+  //       subscription at line 1014 never ran → activeGuestPortal never
+  //       resolved → guest was stuck on "正在載入您的專屬電子喜帖..."
+  //       forever. Setting dataOwnerUid from guest.qOwner unblocks the
+  //       subscriptions immediately on guest-mode page load.
   const dataOwnerUid = useMemo(() => {
+    if (guest.isGuestMode && guest.qOwner) return guest.qOwner;
     if (!currentEvent) return user?.uid;
     // currentEvent has _ownerUid if it came from the events list
     // (own or co-owned). If somehow it doesn't, fall back to
     // the signed-in user's uid (the original-owner case).
     return currentEvent._ownerUid || user?.uid;
-  }, [currentEvent, user?.uid]);
+  }, [currentEvent, user?.uid, guest.isGuestMode, guest.qOwner]);
 
   // 2026-08-02 — Upload preferences token (Option 1, watermark).
   // This must stay AFTER dataOwnerUid is initialized. The hook mints
@@ -1556,18 +1570,25 @@ export default function App() {
   );
 
   // Sync current event from URL params when in guest mode
+  // 2026-08-04 — The events subscription above (line 836) is gated on
+  // !guest.isGuestMode so it never fires for guests. The fallback
+  // `events.find(...)` was therefore always undefined, leaving
+  // currentEvent unset. Fetch the single event directly for guests.
+  const { data: guestModeEvent } = useFirestoreDoc(
+    guest.isGuestMode && guest.qOwner && guest.qEvent
+      ? doc(db, 'artifacts', appId, 'users', guest.qOwner, 'events', guest.qEvent)
+      : null,
+    [guest.isGuestMode, guest.qOwner, guest.qEvent],
+  );
   useEffect(() => {
     if (!guest.isGuestMode) return;
-    if (events?.length) {
-      const ev = events.find((e) => e.id === guest.qEvent);
-      if (ev) setCurrentEvent(ev);
-    }
+    if (guestModeEvent) setCurrentEvent(guestModeEvent);
     if (allGuests?.length) {
       const g = allGuests.find((x) => x.guestId === guest.qGuest);
       if (g) setActiveGuestPortal(g);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guest.isGuestMode, events, allGuests]);
+  }, [guest.isGuestMode, guestModeEvent, allGuests]);
 
   // Expose for QrCodeModal fallback
   useEffect(() => {
