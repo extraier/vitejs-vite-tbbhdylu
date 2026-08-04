@@ -109,23 +109,28 @@ export function HelperDashboard({
   );
 
   // Photos subscription (read for the canView case, write for upload).
+  // 2026-08-04 — Migrated to event-scoped path; the legacy
+  // owner-scoped /users/{ownerUid}/photos/ collection is no longer
+  // readable under the deployed rules (block was deleted in the
+  // 2026-07-27 collectionGroup migration), so helpers would see an
+  // empty photo list and photo uploads would 403. The path now
+  // scopes structurally to (owner, event), matching the rules.
   const { data: photos = [] } = useFirestoreCollection(
-    ownerUid && (perms.canViewPhotos || perms.canUploadPhotos)
-      ? query(
-          collection(db, 'artifacts', appId, 'users', ownerUid, 'photos'),
-          where('eventId', '==', helperAssignment?.eventId || '__no_event__'),
-        )
+    ownerUid && helperAssignment?.eventId && (perms.canViewPhotos || perms.canUploadPhotos)
+      ? collection(db, 'artifacts', appId, 'users', ownerUid, 'events', helperAssignment.eventId, 'photos')
       : null,
     [ownerUid, helperAssignment?.eventId, perms.canViewPhotos, perms.canUploadPhotos],
   );
 
   // Guests subscription (read-only display).
+  // 2026-08-04 — Migrated to event-scoped path; same reason as the
+  // photos subscription above. The legacy `where('eventId', '==', X)`
+  // filter was a workaround for the owner-scoped layout; with the
+  // event in the URL path the filter is no longer needed (and the
+  // old collection is now ruled off-limits, so it returned empty).
   const { data: helperGuests = [] } = useFirestoreCollection(
     ownerUid && perms.canViewGuestList && helperAssignment?.eventId
-      ? query(
-          collection(db, 'artifacts', appId, 'users', ownerUid, 'guests'),
-          where('eventId', '==', helperAssignment.eventId),
-        )
+      ? collection(db, 'artifacts', appId, 'users', ownerUid, 'events', helperAssignment.eventId, 'guests')
       : null,
     [ownerUid, perms.canViewGuestList, helperAssignment?.eventId],
   );

@@ -2204,11 +2204,45 @@ export default function App() {
     }
   };
 
-  // Restore 2026-07-02: edit/delete single-row guest via EditGuestModal
+  // 2026-07-02 — edit/delete single-row guest via EditGuestModal
+  // 2026-08-04 — Migrated all four guest writers below to the
+  // event-scoped path /users/{ownerUid}/events/{eventId}/guests. The
+  // reads at line ~1011, the add at ~2117, and the addFamily at ~2159
+  // were already on the event-scoped path; the writes below were the
+  // remaining stragglers still using the legacy owner-scoped path,
+  // which is no longer readable/writable under the deployed rules
+  // (the rules block was deleted in the 2026-07-27 collectionGroup
+  // migration). Symptoms: EditGuestModal "儲存" → 403; red-packet
+  // update → 403; reception scan → 403. eventId resolution: prefer
+  // the doc body's own eventId field (set by Firestore when the row
+  // was written under the new path); fall back to currentEvent.id
+  // for the typical owner-flow case; fall back to guest.qEvent when
+  // acting on behalf of a guest-mode viewer.
+  const resolveGuestDocOwner = (row) => {
+    if (row?.isGuestMode && row.qOwner) return row.qOwner;
+    return dataOwnerUid || user?.uid;
+  };
+  const resolveGuestEventId = (row) => {
+    if (row?.eventId) return row.eventId;
+    if (guest.isGuestMode && guest.qEvent) return guest.qEvent;
+    return currentEvent?.id;
+  };
+
   const handleSaveGuest = async (formData) => {
     if (!user || !editingGuest) return;
-    const ownerUid = editingGuest.isGuestMode ? editingGuest.qOwner : user.uid;
-    const ref = doc(db, 'artifacts', appId, 'users', ownerUid, 'guests', editingGuest.id);
+    const ownerUid = resolveGuestDocOwner(editingGuest);
+    const eventId = resolveGuestEventId(editingGuest);
+    if (!ownerUid || !eventId) {
+      showToast('✗ 儲存失敗：搵唔到所屬活動');
+      return;
+    }
+    const ref = doc(
+      db,
+      'artifacts', appId,
+      'users', ownerUid,
+      'events', eventId,
+      'guests', editingGuest.id,
+    );
     await updateDoc(ref, {
       name: formData.name,
       email: formData.email || '',
@@ -2221,44 +2255,78 @@ export default function App() {
   };
 
   const handleDeleteGuest = async (guestRow) => {
-    if (!user) return;
-    const ownerUid = guestRow.isGuestMode ? guestRow.qOwner : user.uid;
-    await deleteDoc(doc(db, 'artifacts', appId, 'users', ownerUid, 'guests', guestRow.id));
+    if (!user || !guestRow) return;
+    const ownerUid = resolveGuestDocOwner(guestRow);
+    const eventId = resolveGuestEventId(guestRow);
+    if (!ownerUid || !eventId) {
+      showToast('✗ 刪除失敗：搵唔到所屬活動');
+      return;
+    }
+    await deleteDoc(
+      doc(db, 'artifacts', appId, 'users', ownerUid, 'events', eventId, 'guests', guestRow.id),
+    );
     setEditingGuest(null);
     showToast('🗑️ 嘉賓已刪除');
   };
 
   const handleGiveRedPacket = async (amount) => {
     if (!user || !activeGuestPortal) return;
-    const ownerUid = guest.isGuestMode ? guest.qOwner : user.uid;
-    const guestRef = doc(db, 'artifacts', appId, 'users', ownerUid, 'guests', activeGuestPortal.id);
+    const ownerUid = resolveGuestDocOwner(activeGuestPortal);
+    const eventId = resolveGuestEventId(activeGuestPortal);
+    if (!ownerUid || !eventId) {
+      showToast('✗ 發送失敗：搵唔到所屬活動');
+      return;
+    }
+    const guestRef = doc(
+      db, 'artifacts', appId,
+      'users', ownerUid,
+      'events', eventId,
+      'guests', activeGuestPortal.id,
+    );
     await updateDoc(guestRef, { hasGifted: true, giftAmount: amount });
     setShowPaymentModal(false);
     showToast(`🧧 成功發送 $${amount} 電子人情，感謝！`);
   };
 
   const handleSimulateReceptionScan = async (guestRow) => {
-    if (!user) return;
-    const ownerUid = guest.isGuestMode ? guest.qOwner : user.uid;
-    const guestRef = doc(db, 'artifacts', appId, 'users', ownerUid, 'guests', guestRow.id);
+    if (!user || !guestRow) return;
+    const ownerUid = resolveGuestDocOwner(guestRow);
+    const eventId = resolveGuestEventId(guestRow);
+    if (!ownerUid || !eventId) {
+      showToast('✗ 掃描失敗：搵唔到所屬活動');
+      return;
+    }
+    const guestRef = doc(
+      db, 'artifacts', appId,
+      'users', ownerUid,
+      'events', eventId,
+      'guests', guestRow.id,
+    );
     const now = Date.now();
 
     // Two writes: (1) flip hasAttended + stamp audit fields on guest row,
     // (2) append an immutable entry to scanLog. We do them in a batch so
     // either both land or neither does.
+    // 2026-08-04 — scanLog also moved to event-scoped path; the
+    // owner-scoped /scanLog/ rule was deleted in the 2026-07-27
+    // migration. Without this fix, the batch.commit() throws 403 on
+    // the logRef.set() and the guest's hasAttended is silently NOT
+    // applied.
     const batch = writeBatch(db);
     batch.update(guestRef, {
       hasAttended: true,
       lastScannedBy: user.uid,
       lastScannedAt: now,
     });
-    const logRef = doc(collection(db, 'artifacts', appId, 'users', ownerUid, 'scanLog'));
+    const logRef = doc(
+      collection(db, 'artifacts', appId, 'users', ownerUid, 'events', eventId, 'scanLog'),
+    );
     batch.set(logRef, {
       guestId: guestRow.guestId || guestRow.id,
       guestName: guestRow.name || '',
       helperUid: user.uid,
       helperName: user.displayName || user.email || 'Anonymous',
-      eventId: currentEvent?.id || '',
+      eventId,
       scannedAt: now,
     });
     await batch.commit();
