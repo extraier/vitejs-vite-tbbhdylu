@@ -239,15 +239,22 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
       console.warn('[sendInvitations] could not load owner profile:', e);
     }
 
+    // 2026-07-27 — Moved to event-scoped path: /users/{ownerUid}/events/{eventId}/guests.
+    // The owner-scoped /guests/ collection no longer exists (the rules block
+    // was deleted in the 2026-07-27 collectionGroup migration; see
+    // firestore.rules). Without this fix, the function returns an empty
+    // `sent: []` and the client renders "已寄出 0 封" with no error — silent
+    // failure because `guestById[id]` is `undefined` for every requested
+    // guest and the loop at the bottom of this block skips them all
+    // (`if (!guest) continue`).
+    const guestsCol = db
+      .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
+      .collection('events').doc(eventId).collection('guests');
     // Chunked guest fetch (Firestore 'in' limit = 30)
     const guestById: Record<string, FirebaseFirestore.QueryDocumentSnapshot> = {};
     for (let i = 0; i < guestIds.length; i += 30) {
       const chunk = guestIds.slice(i, i + 30);
-      const snap = await db
-        .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
-        .collection('guests')
-        .where('guestId', 'in', chunk)
-        .get();
+      const snap = await guestsCol.where('guestId', 'in', chunk).get();
       snap.docs.forEach((d) => {
         const g = d.data();
         if (g.guestId) guestById[g.guestId] = d as unknown as FirebaseFirestore.QueryDocumentSnapshot;
