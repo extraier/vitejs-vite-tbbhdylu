@@ -358,6 +358,33 @@ export default function App() {
       window.__currentEventId || guest.qEvent || '';
   }
 
+  // 2026-08-05 — One-shot self-heal for the partner-invite banner
+  // bug. If the user has a stale `__heropartnerinvite_token`
+  // sitting in localStorage from a previously-failed redeem, the
+  // hook will replay it on every page load (via readStashedToken)
+  // and the 💍 婚禮共同籌備邀請 banner will keep popping up.
+  //
+  // Safe heuristic: a REAL invite always has ?t=<token> in the
+  // URL on first receipt (usePartnerInvitePreview reads URL first,
+  // localStorage only as resume). If the user lands on the page
+  // WITHOUT ?t= in the URL AND a stash exists, it's a leftover
+  // from a dead/failed/cleared flow → safe to clear.
+  //
+  // Guarded by a window flag so we run exactly once per page load.
+  // After this runs once, future failures can't create a new
+  // orphan (processToken clears the stash unconditionally now).
+  if (
+    typeof window !== 'undefined' &&
+    !window.__partnerInviteSelfHealApplied
+  ) {
+    try {
+      if (!window.location.search.includes('t=')) {
+        window.localStorage.removeItem('__heropartnerinvite_token');
+      }
+    } catch {}
+    window.__partnerInviteSelfHealApplied = true;
+  }
+
   // Toast
   const { toast, showToast } = useToast();
 
@@ -433,6 +460,21 @@ export default function App() {
     // Signed in — redeem now
     let cancelled = false;
     (async () => {
+      // 2026-08-05 — Always clear the stashed token up front,
+      // regardless of whether the redeem succeeds or fails.
+      // Previously the clear only happened on the success path
+      // (after `redeemPartnerInviteV2` returned), so a failed
+      // redeem (wrong signed-in account, network blip, server
+      // 5xx, expired token, etc.) would leave the token in
+      // localStorage. Then every future page load replayed it
+      // via readStashedToken() → preview succeeded → the
+      // 💍 婚禮共同籌備邀請 banner came back on every visit.
+      //
+      // Now we clear unconditionally: if the redeem genuinely
+      // succeeded, great; if it failed, the user gets a clean
+      // state and can re-engage only with a fresh invite link
+      // (matching the server's single-use semantics).
+      try { localStorage.removeItem('__heropartnerinvite_token'); } catch {}
       try {
         const result = await partnerInviteApi.redeem({ token });
         if (cancelled) return;
@@ -446,14 +488,8 @@ export default function App() {
         // stale tab still has a leftover key from the old
         // round-1/2 design — one tab-load and it's gone.
         //
-        // Also clear the localStorage stash used by the hook.
-        // Without this, every subsequent page load replays the
-        // (now-dead) token via readStashedToken() and the hook
-        // fires previewPartnerInvite → 403 Bad signature again.
-        // Clearing here means a fresh partner-invite link is
-        // the only way to re-engage, which matches the
-        // server-side "token is single-use" semantics.
-        try { localStorage.removeItem('__heropartnerinvite_token'); } catch {}
+        // (localStorage stash cleared above, before the await,
+        // so we don't repeat it here.)
         const eventDocRef = doc(
           db,
           'artifacts',
@@ -482,6 +518,18 @@ export default function App() {
         clearPartnerTokenFromUrl();
         const msg = (err && err.message) || String(err);
         showToast?.('❌ 接受邀請失敗：' + msg);
+        // 2026-08-05 — Also clear the hook's invite state so the
+        // 💍 banner on the LoginScreen goes away immediately, not
+        // on the next page load. The hook reads from localStorage
+        // only on mount, but `invite` is held in React state and
+        // would otherwise survive until a hard reload. We can't
+        // call clearInvite directly here (it's a hook return
+        // value, not in this scope), so we dispatch a
+        // window-level event the hook listens to. See
+        // usePartnerInvitePreview.js for the listener.
+        try {
+          window.dispatchEvent(new CustomEvent('partner-invite-clear'));
+        } catch {}
       }
     })();
     return () => { cancelled = true; };

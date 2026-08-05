@@ -222,6 +222,25 @@ export function usePartnerInvitePreview() {
     return () => {
       cancelled = true;
     };
+    // 2026-08-05 — listen for App.jsx's "redeem failed, drop
+    // the banner" signal. App.jsx can't call clearInvite() directly
+    // (it's in scope here, not there), so we use a window-level
+    // CustomEvent. Fires only on redeem failure, when the user is
+    // signed in but the redeemPartnerInviteV2 CF threw — clearing
+    // the React state here means the 💍 banner on the LoginScreen
+    // goes away immediately instead of surviving until a hard
+    // reload.
+  }, []);
+
+  useEffect(() => {
+    function onClear() {
+      setInvite(null);
+      setValidatedToken(null);
+      setError(null);
+      clearStash();
+    }
+    window.addEventListener('partner-invite-clear', onClear);
+    return () => window.removeEventListener('partner-invite-clear', onClear);
   }, []);
 
   const clearInvite = useCallback(() => {
