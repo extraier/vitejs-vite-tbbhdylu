@@ -1,0 +1,64 @@
+# Cloudflare tunnel ingress config for cdn.savetheday.io
+#
+# This file is the source of truth for the Cloudflare tunnel that
+# exposes the NAS photo server. Hand-edited on the NAS at
+# ~/.cloudflared/config.yml — must be kept in sync with this file.
+#
+# 2026-08-05 — moved into source control after the photo-delete
+# incident where the /delete rule was missing and the user got a
+# CF 404 with no CORS headers for an entire feature. CI now runs
+# scripts/test-cloudflared-ingress.mjs to assert every cdn.savetheday.io
+# URL used by api/*.js has a matching ingress rule below.
+#
+# To deploy changes:
+#   rsync deploy/cloudflared/config.yml openclaw@nas:~/.cloudflared/config.yml
+#   ssh openclaw@nas 'pkill -f "cloudflared tunnel" && sleep 5'
+#   # The /tmp/ts-autostart.watchdog.log script restarts cloudflared
+#   # within ~60s.
+#
+# Verify after deploy:
+#   for path in /upload /photos /delete; do
+#     curl -sS -o /dev/null -w "%{http_code}" \
+#       -X OPTIONS -H "Origin: https://savetheday.io" \
+#       "https://cdn.savetheday.io${path}/test/test/test"
+#     echo " $path"
+#   done
+#   # All should print "204 $path".
+
+tunnel: 1a40aafa-6a7e-433d-9ba5-884bf2885c3d
+# credentials-file is intentionally omitted — the NAS-local path
+# differs per host. The path on the NAS is
+# /home/openclaw/.cloudflared/1a40aafa-6a7e-433d-9ba5-884bf2885c3d.json
+# and is in .gitignore.
+
+ingress:
+  - hostname: cdn.savetheday.io
+    path: /upload
+    service: http://127.0.0.1:9879
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 5s
+      tlsTimeout: 5s
+  - hostname: cdn.savetheday.io
+    path: /photos
+    service: http://127.0.0.1:9879
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 5s
+      tlsTimeout: 5s
+  - hostname: cdn.savetheday.io
+    path: /delete
+    service: http://127.0.0.1:9879
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 5s
+      tlsTimeout: 5s
+  # Catch-all 404 for cdn.savetheday.io paths we haven't routed.
+  # If you see traffic hitting this rule, you forgot to add a path
+  # rule above. CI's scripts/test-cloudflared-ingress.mjs will tell
+  # you before the user does.
+  - hostname: cdn.savetheday.io
+    service: http_status:404
+  # Final 404 for any other hostname (shouldn't ever be hit, but
+  # cloudflared refuses to start without a catch-all).
+  - service: http_status:404
