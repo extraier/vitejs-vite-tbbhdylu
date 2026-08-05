@@ -85,6 +85,12 @@ WATERMARK_FONT_PATH = os.environ.get(
 # Filename component guard — eventId and guestId should be short alphanumeric, but
 # accept anything that matches a safe pattern; reject ../, \x00, etc.
 SAFE_ID = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+# 2026-08-05 — Filename regex for the delete path. Photo
+# filenames look like <ts>_<nonce>.<ext> where <ext> is one of
+# jpg/jpeg/png/heic/webp. The dot before the extension is
+# required (the photo viewer needs the extension hint), and
+# SAFE_ID rejects dots so we need a separate pattern.
+SAFE_FILENAME = re.compile(r"^[A-Za-z0-9_\-]{1,80}(\.[A-Za-z0-9]{1,8})?$")
 # 2026-07-27 — HMAC verification. The shared secret is mirrored at
 # /home/openclaw/.config/photo-upload/server_secret on the NAS itself
 # (NOT in the public client bundle). The Vercel /api/photo-upload
@@ -600,17 +606,23 @@ class PhotoHandler(BaseHTTPRequestHandler):
         # path traversal attempt BEFORE applying SAFE_ID.
         if ".." in rel or rel.startswith("/"):
             return self._send_error(400, "bad path")
-        # Path layout: <eventId>/<guestId>/<​filename>
+        # Path layout: <eventId>/<guestId>/<filename>
         parts = rel.split("/")
         if len(parts) != 3:
             return self._send_error(
                 400,
-                f"expected <eventId>/<guestId>/<​filename>, got {rel[:80]!r}",
+                f"expected <eventId>/<guestId>/<filename>, got {rel[:80]!r}",
             )
         event_id, guest_id, filename = parts
         if not (SAFE_ID.match(event_id) and SAFE_ID.match(guest_id)):
             return self._send_error(400, "bad eventId/guestId")
-        if not SAFE_ID.match(filename):
+        # 2026-08-05 — Filename pattern is <ts>_<nonce>.<ext>
+        # (e.g. 1700000000_abc.jpg). The base SAFE_ID rejects
+        # `.` so it would refuse real photo filenames. The
+        # extension period is safe (we've already rejected `..`
+        # above and split into exactly 3 segments), so accept
+        # a single dot in the middle/end of the filename.
+        if not SAFE_FILENAME.match(filename):
             return self._send_error(400, "bad filename")
 
         # HMAC token + expiry come from the Vercel proxy.

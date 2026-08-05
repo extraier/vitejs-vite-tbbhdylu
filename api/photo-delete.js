@@ -141,11 +141,17 @@ async function _handler(req, res) {
 
   // Defense in depth: validate id shape so we don't sign for
   // arbitrary strings. Same SAFE_ID the upload proxy uses.
-  const SAFE_ID = /^[A-Za-z0-9_\-]{1,64}$/;
-  if (!SAFE_ID.test(eventId) || !SAFE_ID.test(photoDocId)) {
-    res.status(400).json({ error: 'bad eventId or photoDocId' });
-    return;
-  }
+    const SAFE_ID = /^[A-Za-z0-9_\-]{1,64}$/;
+    // 2026-08-05 — Filenames look like <ts>_<nonce>.<ext>
+    // (e.g. 1700000000_abc.jpg). Match the NAS-side
+    // SAFE_FILENAME pattern so the proxy's path parses don't
+    // diverge from the receiver's validation. Allows an
+    // optional trailing extension.
+    const SAFE_FILENAME = /^[A-Za-z0-9_\-]{1,80}(\.[A-Za-z0-9]{1,8})?$/;
+    if (!SAFE_ID.test(eventId) || !SAFE_ID.test(photoDocId)) {
+      res.status(400).json({ error: 'bad eventId or photoDocId' });
+      return;
+    }
 
   // (3) Verify the deleteToken minted by the CF. The token
   // payload is { ownerUid, photoDocId, eventId, issuerUid,
@@ -215,7 +221,7 @@ async function _handler(req, res) {
     });
     return;
   }
-  if (!SAFE_ID.test(urlParts.guestId) || !SAFE_ID.test(urlParts.filename)) {
+  if (!SAFE_ID.test(urlParts.guestId) || !SAFE_FILENAME.test(urlParts.filename)) {
     res.status(400).json({ error: 'photoUrl guestId or filename failed SAFE_ID' });
     return;
   }
