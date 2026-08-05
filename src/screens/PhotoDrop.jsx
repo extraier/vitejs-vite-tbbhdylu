@@ -277,7 +277,20 @@ export function PhotoDrop({
           editingCaption={editingCaption}
           isSavingCaption={isSavingCaption}
           currentUserUid={currentUserUid}
-          isOwner={currentUserUid && expandedPhoto.uploaderId === currentUserUid}
+          // 2026-08-05 — Owner-tier visibility for the Trash button.
+// PhotoDrop is rendered only when userRole === 'owner' (see
+// App.jsx render gate), so the current viewer is always the
+// wedding owner. The old comparison was
+//   isOwner = currentUserUid && expandedPhoto.uploaderId === currentUserUid
+// but `uploaderId` is the GUEST'S id (e.g. 'abc123'), not the
+// Firebase Auth UID — so the check was always false and the
+// Trash button was never shown. Fix: the ExpandedPhotoModal
+// receives `isOwner` to mean "viewer can delete this photo".
+// Since this screen is owner-only, that means "always" while
+// we're here. The firestore.rules `isOwnerOrAnyCoOwner(ownerUid)`
+// tier permits the delete at the rule layer; the CF
+// mintPhotoDeleteToken also gates on the same tier.
+isOwner={Boolean(currentUserUid)}
           onClose={closePhoto}
           onCaptionChange={setEditingCaption}
           onSaveCaption={handleSaveCaption}

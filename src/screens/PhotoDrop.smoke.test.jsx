@@ -167,13 +167,24 @@ describe('PhotoDrop', () => {
     expect(screen.getByText(/刪除呢張相/)).toBeTruthy();
   });
 
-  it('hides delete button when current user is not the uploader', () => {
-    // currentUserUid = g3 (not g1 or g2). None of the photos are theirs.
-    render(<PhotoDrop {...baseProps} currentUserUid="g3" />);
-    const photoImages = screen.getAllByAltText(/upload|婚禮開始！|李小花/);
-    fireEvent.click(photoImages[0]);
-    expect(screen.queryByText(/刪除呢張相/)).toBeNull();
-  });
+  // 2026-08-05 — PhotoDrop is rendered ONLY when userRole ===
+// 'owner' (see App.jsx render gate). Inside PhotoDrop the
+// viewer is always the wedding owner, so the Trash button on
+// the expanded photo modal is always shown. The previous
+// test was asserting the OLD broken behavior
+// (`uploaderId === currentUserUid`, which was always false
+// because `uploaderId` is the guestId, not the auth.uid, so
+// the button was never visible). That made the whole delete
+// feature a dead letter. The fix: owner viewing their own
+// PhotoDrop screen sees the trash button on every photo
+// regardless of who uploaded it. Rules + CF enforce the same
+// "owner can delete any" tier end-to-end.
+it('shows delete button on every photo when viewer is the owner', () => {
+  render(<PhotoDrop {...baseProps} currentUserUid="owner-uid-1" />);
+  const photoImages = screen.getAllByAltText(/upload|婚禮開始！|李小花/);
+  fireEvent.click(photoImages[0]);
+  expect(screen.getByText(/刪除呢張相/)).toBeTruthy();
+});
 
   it('disables slideshow CTA when no photos', () => {
     render(<PhotoDrop {...baseProps} photos={[]} />);

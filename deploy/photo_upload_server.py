@@ -285,11 +285,21 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
-def verify_hmac(secret, event_id, guest_id, expires_ms_str, provided_sig_hex):
+def verify_hmac(secret, event_id, guest_id, expires_ms_str, provided_sig_hex,
+                filename=None):
     """Constant-time HMAC verification. Returns True on match.
 
     The token format matches the client's earlier mint:
       hex(HMAC_SHA256(secret, f"{event_id}|{guest_id}|{expires_ms}"))
+
+    2026-08-05 — extended for the photo-delete flow. When
+    `filename` is provided, the message becomes:
+      hex(HMAC_SHA256(secret, f"{event_id}|{guest_id}|{filename}|{expires_ms}"))
+    Binds the token to a specific file so a delete token can't be
+    reused against a different photo. The upload path still passes
+    `filename=None` (the legacy 3-component message); the delete
+    path passes the actual filename.
+
     Expiration is enforced in `do_POST` (we compare expires_ms to
     current wall-clock), here we only check the signature.
     """
@@ -299,7 +309,10 @@ def verify_hmac(secret, event_id, guest_id, expires_ms_str, provided_sig_hex):
         expires_ms_int = int(expires_ms_str)
     except (TypeError, ValueError):
         return False
-    msg = f"{event_id}|{guest_id}|{expires_ms_int}".encode("utf-8")
+    if filename is None:
+        msg = f"{event_id}|{guest_id}|{expires_ms_int}".encode("utf-8")
+    else:
+        msg = f"{event_id}|{guest_id}|{filename}|{expires_ms_int}".encode("utf-8")
     expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
     if len(expected) != len(provided_sig_hex):
         return False
@@ -345,8 +358,46 @@ class PhotoHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Allow-Headers", "Content-Type, X-Guest-Token"
         )
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        # 2026-08-05 — DELETE added for the photo-moderation flow.
+        # Both owner (delete-any) and guest (delete-own) ride
+        # through /api/photo-delete on the Vercel proxy, which
+        # forwards here as a DELETE.
+        self.send_header(
+            "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"
+        )
         self.end_headers()
+
+    # 2026-08-05 — DELETE handler. Both the owner (delete-any)
+    # and guest (delete-own) photo-moderation flows ride on
+    # this endpoint. Authorization is delegated to the Vercel
+    # /api/photo-delete proxy, which mints a fresh HMAC token
+    # AFTER verifying the caller's Firestore Auth UID against
+    # the photo doc's owner / uploader identity. The NAS only
+    # verifies the token + deletes the file — it never sees
+    # the caller's auth.uid.
+    #
+    # Token format mirrors the upload token but binds the
+    # specific file: hex(HMAC-SHA256(secret, eventId|guestId|
+    # filename|expiresMs)). The filename is the same
+    # <ts>_<nonce>.<ext> string the upload minted. The photo
+    # bytes live at STORAGE_ROOT/<eventId>/<guestId>/<​filename>.
+    #
+    # Path comes through as /delete/<eventId>/<guestId>/<​filename>
+    # when the cloudflared tunnel preserves the prefix, or as
+    # /<eventId>/<guestId>/<​filename> when the funnel strips
+    # the --set-path. We accept both.
+    def do_DELETE(self):
+        path = self.path
+        if path.startswith("/delete/"):
+            rel = path[len("/delete/"):]
+        elif path.startswith("/photos/"):
+            # Some Tunnel/Cloudflare setups routed the
+            # original /photos/* URL to the same backend —
+            # accept that shape too for consistency.
+            rel = path[len("/photos/"):]
+        else:
+            return self._send_error(404, f"unknown DELETE route {self.path}")
+        return self._handle_delete_path(rel)
 
     def do_GET(self):
         if self.path == "/health" or self.path == "/upload/health":
@@ -525,6 +576,91 @@ class PhotoHandler(BaseHTTPRequestHandler):
         url = f"{PUBLIC_ORIGIN}/photos/{event_id}/{guest_id}/{filename}"
         log(f"saved {len(f['data'])} bytes -> {dest} ({uploader_name})")
         return self._send_json(200, {"url": url, "bytes": len(f["data"])})
+
+    # 2026-08-05 — Delete a single uploaded photo. Authorization
+    # is delegated to the Vercel proxy (see module comment in
+    # do_DELETE). The proxy forwards a signed DELETE with these
+    # standardised headers:
+    #   X-Upload-Token   hex(HMAC-SHA256(secret, eventId|guestId|filename|expiresMs))
+    #   X-Upload-Expires expiresMs as integer string
+    #   X-Upload-Op      "delete" — belt-and-suspenders marker so
+    #                    a token minted for upload can't be replayed
+    #                    against the delete endpoint (defense in
+    #                    depth; the token's TTL is short enough
+    #                    that replay windows are small, but explicit
+    #                    is better).
+    #
+    # Idempotent: returns 204 even if the file is already gone
+    # (matches Firestore deleteDoc semantics). Logs the delete
+    # so the operator can audit photo removals.
+    def _handle_delete_path(self, rel):
+        # Strip query string if present (some proxies carry it)
+        rel = rel.split("?", 1)[0].split("#", 1)[0].lstrip("/")
+        # Defense in depth: reject anything that smells like a
+        # path traversal attempt BEFORE applying SAFE_ID.
+        if ".." in rel or rel.startswith("/"):
+            return self._send_error(400, "bad path")
+        # Path layout: <eventId>/<guestId>/<​filename>
+        parts = rel.split("/")
+        if len(parts) != 3:
+            return self._send_error(
+                400,
+                f"expected <eventId>/<guestId>/<​filename>, got {rel[:80]!r}",
+            )
+        event_id, guest_id, filename = parts
+        if not (SAFE_ID.match(event_id) and SAFE_ID.match(guest_id)):
+            return self._send_error(400, "bad eventId/guestId")
+        if not SAFE_ID.match(filename):
+            return self._send_error(400, "bad filename")
+
+        # HMAC token + expiry come from the Vercel proxy.
+        # The proxy has already verified the caller is allowed
+        # to delete this photo (owner, co-owner, or uploader),
+        # so by the time we see these headers the request is
+        # authorized. We only re-verify the token here.
+        token = self.headers.get("X-Upload-Token", "")
+        expires = self.headers.get("X-Upload-Expires", "")
+        op = self.headers.get("X-Upload-Op", "")
+        if not token or not expires:
+            return self._send_error(401, "missing X-Upload-Token / X-Upload-Expires")
+        if op != "delete":
+            return self._send_error(401, "wrong X-Upload-Op (want 'delete')")
+        try:
+            if int(expires) < int(time.time() * 1000):
+                return self._send_error(401, "delete token expired (TTL exceeded)")
+        except (TypeError, ValueError):
+            return self._send_error(401, "malformed X-Upload-Expires header")
+
+        if not verify_hmac(
+            PHOTO_HMAC_SECRET, event_id, guest_id, filename, expires, token
+        ):
+            log(
+                f"delete HMAC verify failed for event_id={event_id[:8]}... "
+                f"guest_id={guest_id[:8]}... filename={filename!r}"
+            )
+            return self._send_error(401, "unauthorized (token mismatch)")
+
+        # All checks passed — perform the unlink.
+        target = STORAGE_ROOT / event_id / guest_id / filename
+        try:
+            target.relative_to(STORAGE_ROOT.resolve())
+        except ValueError:
+            # The path doesn't resolve under STORAGE_ROOT, which
+            # means SAFE_ID didn't catch the traversal (would be
+            # a bug). Refuse to delete.
+            return self._send_error(400, "escapes storage root")
+        if target.is_file():
+            try:
+                target.unlink()
+            except OSError as e:
+                log(f"delete error: {e} for {target}")
+                return self._send_error(500, "disk delete failed")
+            log(f"deleted {target}")
+        else:
+            # Idempotent: file already gone — return 204 so the
+            # client can delete the Firestore doc cleanly.
+            log(f"delete: file already gone, ignoring {target}")
+        return self._send_json(204, {"ok": True, "deleted": str(target)})
 
 
 # ---- Minimal multipart/form-data parser (stdlib-only) ----

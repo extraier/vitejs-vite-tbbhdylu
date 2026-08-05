@@ -10,6 +10,7 @@ import {
   X,
   Copy,
   Check,
+  Trash2,
 } from 'lucide-react';
 
 export function PersonalGuestPortal({
@@ -25,6 +26,12 @@ export function PersonalGuestPortal({
   // they've shared. Sorted desc by createdAt by App.jsx's
   // eventPhotos useMemo.
   myPhotos = [],
+  // 2026-08-05 — Guest self-delete. (photoId) => Promise<void>.
+  // Wired from App.jsx; the portal calls it when the guest taps
+  // the Trash icon on a thumbnail in MyUploadsGallery. App.jsx
+  // uses the same handleDeletePhoto the PhotoDrop screen uses,
+  // so the rule tier + CF tier match across owner + guest views.
+  onDeletePhoto,
   onUpload,
   onRequestRedPacket,
   onCopyQrLink,
@@ -188,7 +195,10 @@ export function PersonalGuestPortal({
                 portal doesn't grow a stub card before the first
                 upload lands. */}
             {myPhotos.length > 0 && (
-              <MyUploadsGallery photos={myPhotos} />
+              <MyUploadsGallery
+                photos={myPhotos}
+                onDeletePhoto={onDeletePhoto}
+              />
             )}
 
             <RedPacketCard guest={guest} onRequestRedPacket={onRequestRedPacket} />
@@ -458,8 +468,19 @@ function EntryPassCard({
 //
 // Hidden when photos is empty (handled by the call site), so
 // there's no empty-state placeholder to maintain.
-function MyUploadsGallery({ photos }) {
+//
+// 2026-08-05 — Added a delete button (Trash2) on the enlarged
+// view. The button calls onDeletePhoto(photo.id), which is
+// wired from App.jsx to handleDeletePhoto. The CF
+// mintPhotoDeleteToken gates on the uploader tier for guests
+// (photo.uploadAuthUid === auth.currentUser.uid), so the
+// rule + CF will both allow this delete. The button is
+// hidden when onDeletePhoto isn't provided (defense — the
+// call site always provides it but the gallery is
+// standalone-importable in tests).
+function MyUploadsGallery({ photos, onDeletePhoto }) {
   const [enlargedIdx, setEnlargedIdx] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   return (
     <div className="p-4 rounded-2xl border-2 border-slate-200 bg-white">
       <h4 className="font-bold text-slate-800 flex items-center gap-2 mb-3">
@@ -487,7 +508,9 @@ function MyUploadsGallery({ photos }) {
       {enlargedIdx !== null && (
         <div
           className="fixed inset-0 bg-slate-900/95 z-[60] flex flex-col items-center justify-center p-6 animate-in fade-in duration-200"
-          onClick={() => setEnlargedIdx(null)}
+          onClick={() => {
+            if (!isDeleting) setEnlargedIdx(null);
+          }}
           role="dialog"
           aria-modal="true"
         >
@@ -497,6 +520,7 @@ function MyUploadsGallery({ photos }) {
             className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white rounded-full p-2"
             title="關閉"
             aria-label="關閉相片"
+            disabled={isDeleting}
           >
             <X className="w-6 h-6" />
           </button>
@@ -512,6 +536,48 @@ function MyUploadsGallery({ photos }) {
             <p className="text-xs text-slate-500 text-center mt-3">
               分享於 {new Date(photos[enlargedIdx]?.createdAt || Date.now()).toLocaleString('zh-HK')}
             </p>
+            {/* 2026-08-05 — Guest self-delete. Trash2 button
+                fires onDeletePhoto(photo.id). The CF
+                mintPhotoDeleteToken + firestore.rules will
+                both allow this because myPhotos is filtered
+                by uploaderId === activeGuestPortal.guestId
+                in App.jsx, AND photo.uploadAuthUid ===
+                auth.currentUser.uid (recorded at upload).
+                Same handler as the owner-side PhotoDrop
+                screen, so the rule + CF paths match. */}
+            {onDeletePhoto && photos[enlargedIdx]?.id && (
+              <div className="mt-4 flex justify-center">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const photoId = photos[enlargedIdx].id;
+                    if (isDeleting) return;
+                    setIsDeleting(true);
+                    try {
+                      await onDeletePhoto(photoId);
+                      // Close the modal — the onSnapshot in
+                      // App.jsx will remove the row from
+                      // myPhotos via the filter, and
+                      // enlargedIdx no longer points to a
+                      // valid photo.
+                      setEnlargedIdx(null);
+                    } catch (err) {
+                      // eslint-disable-next-line no-alert
+                      alert(`刪除失敗：${err?.message || '未知錯誤'}`);
+                    } finally {
+                      setIsDeleting(false);
+                    }
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 rounded-full bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+                  disabled={isDeleting}
+                  title="刪除這張相片"
+                  aria-label="刪除這張相片"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {isDeleting ? '刪除中…' : '刪除這張相片'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

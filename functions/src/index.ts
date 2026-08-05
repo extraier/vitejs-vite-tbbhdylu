@@ -988,3 +988,15 @@ export { sendBrandedVerificationV2 } from './brandedEmail';
 // promise actually true end-to-end — the watermark is applied
 // on the NAS during the upload itself, not in Firebase.
 export { getUploadPreferencesToken } from './uploadPreferencesToken';
+
+// 2026-08-05 — Photo-delete authorization token. Mirrors the
+// getUploadPreferencesToken shape: the client calls this CF,
+// the CF verifies the caller is allowed to delete the photo
+// (owner / co-owner / uploader), and returns an HMAC-signed
+// token bound to that specific photo. The Vercel
+// /api/photo-delete proxy verifies the token (using the
+// mirrored HMAC_KEY env) and forwards a signed DELETE to the
+// NAS, which deletes the file. See functions/src/photoDeleteToken.ts
+// for the auth rules; see deploy/photo_upload_server.py
+// _handle_delete_path for the NAS receiver.
+export { mintPhotoDeleteToken } from './photoDeleteToken';

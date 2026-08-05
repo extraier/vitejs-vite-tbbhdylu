@@ -2587,6 +2587,17 @@ export default function App() {
       // create photos (was only guests + helpers before). Photo upload
       // from the owner's own session was failing on addDoc.
       // 2026-07-27 — Migrated to event-scoped path.
+      // 2026-08-05 — Persist `uploadAuthUid` (the Firebase Auth UID
+      // at upload time) on the photo doc so the rule can verify
+      // guest self-delete later. We use `auth.currentUser?.uid`
+      // because for guest sessions this is the anonymous UID, and
+      // for the owner's session this is the owner's auth.uid —
+      // either way it's the auth.uid we need to compare against
+      // `request.auth.uid` in the rule. For owner-uploaded photos
+      // both owner + co-owner tiers still apply, so this field is
+      // effectively unused there, but recording it consistently
+      // simplifies the rule path. (Owner delete goes through the
+      // `isOwnerOrAnyCoOwner` tier, which never reads this field.)
       await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'photos'), {
         eventId: currentEvent.id,
         url,
@@ -2594,6 +2605,7 @@ export default function App() {
         uploaderId: activeGuestPortal.guestId,
         uploaderName: activeGuestPortal.name,
         createdAt: Date.now(),
+        uploadAuthUid: auth.currentUser?.uid ?? null,
       });
       showToast('📸 相片已成功上載至大螢幕！');
     } catch (err) {
@@ -2662,31 +2674,117 @@ export default function App() {
   // reactions and delete their own photos. firestore.rules already
   // permits update+delete by isOwner(ownerUid) so we can write
   // directly from the client (no Cloud Function needed).
+  //
+  // 2026-08-05 — handleUpdatePhoto path was on the legacy
+  // `users/{ownerUid}/photos/{photoId}` collection (pre the
+  // 2026-07-27 collectionGroup migration). Photos now live at
+  // `users/{ownerUid}/events/{eventId}/photos/{photoId}`.
+  // Without eventId in the path the doc doesn't exist and
+  // updateDoc / deleteDoc silently 404. Fixed here for both
+  // update + delete — the previous handleDeletePhoto was
+  // doubly broken (wrong path AND the Trash button never
+  // showed because the isOwner prop was mislabeled).
   const handleUpdatePhoto = async (photoId, patch) => {
     if (!user?.uid) throw new Error('請先登入');
+    if (!currentEvent?.id) throw new Error('No active event');
     const photoRef = doc(
       db,
       'artifacts',
       appId,
       'users',
       dataOwnerUid,
+      'events',
+      currentEvent.id,
       'photos',
       photoId,
     );
     await updateDoc(photoRef, patch);
   };
 
+  // 2026-08-05 — Photo-delete end-to-end. Two deletes must
+  // happen, in this order:
+  //
+  //   1. Delete the file on the NAS (cdn.savetheday.io). The
+  //      Firestore doc is just metadata; without step 1 the
+  //      bytes sit in /volume1/flight-scanner/wedding-photos/
+  //      forever. We call the CF mintPhotoDeleteToken to mint
+  //      a server-verified HMAC token (CF checks the caller
+  //      is allowed to delete — owner/co-owner/uploader),
+  //      then POST to /api/photo-delete which mints a fresh
+  //      NAS-bound token and forwards the actual DELETE.
+  //
+  //   2. Delete the Firestore doc. firestore.rules permits
+  //      delete for the same three tiers as the CF; this is
+  //      the last write so the UI sees the row disappear.
+  //
+  // If step 1 fails, we abort and DON'T delete the Firestore
+  // doc — otherwise we end up with a doc pointing at a 404'd
+  // file (orphan). The UI shows the row with the trash
+  // button enabled and the user can retry.
+  //
+  // Idempotency: both deletes are safe to retry (NAS returns
+  // 204 even if the file is already gone; Firestore deleteDoc
+  // is a no-op on a missing doc).
   const handleDeletePhoto = async (photoId) => {
     if (!user?.uid) throw new Error('請先登入');
+    if (!currentEvent?.id) throw new Error('No active event');
+
+    // (a) Look up the photo doc so we have the photoUrl for
+    // the NAS-side delete. Reads the same path the rules use.
     const photoRef = doc(
       db,
       'artifacts',
       appId,
       'users',
       dataOwnerUid,
+      'events',
+      currentEvent.id,
       'photos',
       photoId,
     );
+    const photoSnap = await getDoc(photoRef);
+    if (!photoSnap.exists()) {
+      // Already gone — treat as success so the UI can clear.
+      return;
+    }
+    const photoData = photoSnap.data() || {};
+    const photoUrl = photoData.url;
+
+    // (b) Mint the CF delete token. The CF verifies the caller
+    // against the photo's ownerUid / coOwnerUIDs /
+    // uploadAuthUid (see functions/src/photoDeleteToken.ts).
+    const mintFn = httpsCallable(functions, 'mintPhotoDeleteToken');
+    const mintRes = await mintFn({
+      ownerUid: dataOwnerUid,
+      eventId: currentEvent.id,
+      photoDocId: photoId,
+    });
+    const { token: deleteToken } = mintRes.data || {};
+    if (!deleteToken) {
+      throw new Error('Delete token mint returned no token');
+    }
+
+    // (c) Call the Vercel proxy. The proxy re-verifies the
+    // token, mints an NAS-bound HMAC token, and forwards the
+    // DELETE to cdn.savetheday.io.
+    const proxyRes = await fetch('/api/photo-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        eventId: currentEvent.id,
+        photoUrl,
+        photoDocId: photoId,
+        deleteToken,
+      }),
+    });
+    if (!proxyRes.ok) {
+      const errBody = await proxyRes.text();
+      console.error('[handleDeletePhoto] proxy failed:', proxyRes.status, errBody);
+      throw new Error(`Delete failed (${proxyRes.status}): ${errBody.slice(0, 120)}`);
+    }
+
+    // (d) NAS file is gone. Now remove the Firestore doc —
+    // rules permit delete for owner/co-owner/uploader.
     await deleteDoc(photoRef);
   };
 
@@ -2906,6 +3004,14 @@ export default function App() {
           myPhotos={activeGuestPortal
             ? eventPhotos.filter((p) => p.uploaderId === activeGuestPortal.guestId)
             : []}
+          // 2026-08-05 — Pass the same handleDeletePhoto the
+          // owner-side PhotoDrop screen uses. The CF
+          // mintPhotoDeleteToken gates on the three tiers
+          // (owner / co-owner / uploader); a guest deleting
+          // their own upload takes the uploader tier because
+          // photo.uploadAuthUid === auth.currentUser.uid
+          // (written at upload time, see App.jsx:2606).
+          onDeletePhoto={handleDeletePhoto}
           onUpload={handleRealUpload}
           onRequestRedPacket={() => setShowPaymentModal(true)}
           // 2026-07-18 — Owner preview-as-guest path now has an exit

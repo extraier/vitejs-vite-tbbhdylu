@@ -476,6 +476,27 @@ match /{path=**}/events/{eventId} {
           // Photos — same shape as old /photos/ rule. eventId is in
           // path; resource.data.eventId == eventId still required for
           // guest/helper uploads to bind the doc to this event.
+          //
+          // 2026-08-05 — DELETE permission extended for guest
+          // self-delete. The owner / co-owner tiers were already
+          // there; the new branch lets the guest who originally
+          // uploaded a photo delete just that one. We verify by
+          // matching `uploadAuthUid == request.auth.uid` — the
+          // photo doc carries the Firebase Auth UID of the
+          // uploader, written at upload time. (We can't reuse
+          // `uploaderId` here because for guests that's a
+          // human-readable id like 'abc123', NOT the Firebase
+          // Auth UID.) Guest-tier delete ONLY works while the
+          // guest's anonymous Firebase Auth session is alive —
+          // re-opening the share link in a different browser
+          // produces a fresh anon UID and the rule fails closed
+          // (the delete button is hidden). The owner / co-owner
+          // tiers work regardless because they're tied to
+          // ownerUid, not the guest's session.
+          //
+          // Legacy photos uploaded before today don't carry
+          // `uploadAuthUid` — for those, only the owner/co-owner
+          // tier applies, which is the safe failure mode.
           match /photos/{photoId} {
             allow read: if isOwnerOrAnyCoOwner(ownerUid)
               || hasValidGuestLink(ownerUid, eventId)
@@ -492,7 +513,13 @@ match /{path=**}/events/{eventId} {
                   && request.resource.data.url is string
                   && request.resource.data.createdAt is number)
               );
-            allow update, delete: if isOwnerOrAnyCoOwner(ownerUid);
+            allow update: if isOwnerOrAnyCoOwner(ownerUid);
+            allow delete: if isOwnerOrAnyCoOwner(ownerUid)
+              // Guest self-delete tier — original uploader can
+              // delete only their own. Requires `uploadAuthUid`
+              // to be set on the photo doc (added 2026-08-05).
+              || (hasValidGuestLink(ownerUid, eventId)
+                  && resource.data.uploadAuthUid == request.auth.uid);
           }
 
           // scanLog — immutable. Only helpers with canScan can
