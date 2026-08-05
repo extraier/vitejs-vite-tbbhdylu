@@ -342,6 +342,22 @@ export default function App() {
     typeof window !== 'undefined' ? window.location.search : '',
   );
 
+  // 2026-08-05 — Stash URL-derived owner/event ids on window
+  // SYNCHRONOUSLY (before any useEffect fires) so the
+  // PersonalGuestPortal's EntryPassCard can build the entry-pass
+  // URL on the first render. The useEffect below (line 1598)
+  // also re-syncs these once currentEvent resolves from
+  // Firestore, but the sync assignment here is what makes the
+  // card render correctly during the brief window between
+  // guest-mode sign-in and the event doc subscription.
+  // QrCodeModal also reads window.__ownerUid / __currentEventId
+  // the same way.
+  if (typeof window !== 'undefined') {
+    window.__ownerUid = window.__ownerUid || guest.qOwner || '';
+    window.__currentEventId =
+      window.__currentEventId || guest.qEvent || '';
+  }
+
   // Toast
   const { toast, showToast } = useToast();
 
@@ -1590,11 +1606,20 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [guest.isGuestMode, guestModeEvent, allGuests]);
 
-  // Expose for QrCodeModal fallback
+  // Expose for QrCodeModal fallback (and PersonalGuestPortal's
+  // EntryPassCard).
+  //
+  // 2026-08-05 — In guest mode the user is NOT signed in
+  // (`user` is null), so `user?.uid` is empty. Fall back to the
+  // URL params (`guest.qOwner` / `guest.qEvent`) so the entry-pass
+  // QR card in PersonalGuestPortal can build its link on first
+  // render, before the Firestore subscription resolves.
   useEffect(() => {
-    window.__ownerUid = user?.uid || '';
-    window.__currentEventId = currentEvent?.id || '';
-  }, [user?.uid, currentEvent?.id]);
+    window.__ownerUid =
+      user?.uid || guest.qOwner || '';
+    window.__currentEventId =
+      currentEvent?.id || guest.qEvent || '';
+  }, [user?.uid, currentEvent?.id, guest.qOwner, guest.qEvent]);
 
   // ---- Derived data ----
   const eventTasks = useMemo(
