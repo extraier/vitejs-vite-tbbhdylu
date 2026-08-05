@@ -84,17 +84,25 @@ describe('usePartnerInvitePreview token handoff', () => {
     // Hook returns it
     expect(source).toMatch(/return\s*\{[^}]*validatedToken[^}]*\}/);
 
-    // validatedToken is set ONLY on the preview-success branch
-    // (after the data validation), NOT on dead-token errors or
-    // transient errors. Count the SETTER CALLS — the actual
-    // setValidatedToken(value) invocations, NOT the destructure
-    // in useState (which writes `setValidatedToken = useState(...)`
-    // without a `(`. The regex `setValidatedToken\s*\(` matches
-    // only the SET calls, not the destructure.
-    const setterCalls = (source.match(/\bsetValidatedToken\s*\(/g) || [])
+    // 2026-08-05 — split the count between success-branch SETs
+    // (setValidatedToken(token)) and the partner-invite-clear
+    // event handler (setValidatedToken(null)). The latter was
+    // added in commit 7bbb237 so App.jsx can clear the 💍
+    // banner on redeem failure. Both are legitimate and
+    // necessary; the original assertion of `setterCalls === 1`
+    // silently broke when 7bbb237 shipped.
+    const successSets = (source.match(/setValidatedToken\(token\)/g) || [])
       .length;
-    // Exactly 1 SET call — the success branch.
-    expect(setterCalls).toBe(1);
+    const nullSets = (source.match(/setValidatedToken\(null\)/g) || [])
+      .length;
+    // Exactly 1 success-branch SET call (the one that arms
+    // App.jsx's redeem effect).
+    expect(successSets).toBe(1);
+    // Exactly 1 null-reset (the clear-event handler in
+    // commit 7bbb237). Anything more would mean multiple
+    // places are resetting validatedToken outside the success
+    // branch, which would race with App.jsx's redeem effect.
+    expect(nullSets).toBe(1);
 
     // The set call must live inside the success branch (after
     // partnerEmail is set, before the catch). Use a positional
