@@ -18,6 +18,13 @@ export function PersonalGuestPortal({
   isUploading,
   uploadProgress,
   isStorageFull,
+  // 2026-08-05 — The guest's own uploaded photos, filtered by
+  // uploaderId in App.jsx. Empty array until the photos
+  // subscription fires. Renders as a 3-column scrollable
+  // gallery below the upload card so guests can see what
+  // they've shared. Sorted desc by createdAt by App.jsx's
+  // eventPhotos useMemo.
+  myPhotos = [],
   onUpload,
   onRequestRedPacket,
   onCopyQrLink,
@@ -174,6 +181,15 @@ export function PersonalGuestPortal({
               fileInputRef={fileInputRef}
               onUpload={onUpload}
             />
+
+            {/* 2026-08-05 — Show the guest their own uploaded
+                photos so they get immediate visual confirmation
+                that the share worked. Hidden when empty so the
+                portal doesn't grow a stub card before the first
+                upload lands. */}
+            {myPhotos.length > 0 && (
+              <MyUploadsGallery photos={myPhotos} />
+            )}
 
             <RedPacketCard guest={guest} onRequestRedPacket={onRequestRedPacket} />
           </div>
@@ -431,5 +447,74 @@ function EntryPassCard({
         </div>
       )}
     </>
+  );
+}
+
+// 2026-08-05 — MyUploadsGallery. Small 3-column thumbnail grid
+// showing the guest's own uploaded photos so they get immediate
+// visual confirmation that the share worked. Tap a thumbnail
+// to enlarge it (same Maximize2 + fullscreen pattern as
+// EntryPassCard).
+//
+// Hidden when photos is empty (handled by the call site), so
+// there's no empty-state placeholder to maintain.
+function MyUploadsGallery({ photos }) {
+  const [enlargedIdx, setEnlargedIdx] = useState(null);
+  return (
+    <div className="p-4 rounded-2xl border-2 border-slate-200 bg-white">
+      <h4 className="font-bold text-slate-800 flex items-center gap-2 mb-3">
+        <Camera className="w-4 h-4 text-slate-600" /> 我分享的相片
+        <span className="text-xs text-slate-500 font-normal">（{photos.length}）</span>
+      </h4>
+      <div className="grid grid-cols-3 gap-2">
+        {photos.map((p, i) => (
+          <button
+            key={p.id || i}
+            type="button"
+            onClick={() => setEnlargedIdx(i)}
+            className="aspect-square rounded-lg overflow-hidden bg-slate-100 hover:opacity-90 transition-opacity"
+            title={`分享於 ${new Date(p.createdAt || Date.now()).toLocaleString('zh-HK')}`}
+          >
+            <img
+              src={p.thumbnailUrl || p.url}
+              alt={`我分享的相片 ${i + 1}`}
+              className="w-full h-full object-cover"
+              loading="lazy"
+            />
+          </button>
+        ))}
+      </div>
+      {enlargedIdx !== null && (
+        <div
+          className="fixed inset-0 bg-slate-900/95 z-[60] flex flex-col items-center justify-center p-6 animate-in fade-in duration-200"
+          onClick={() => setEnlargedIdx(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <button
+            type="button"
+            onClick={() => setEnlargedIdx(null)}
+            className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white rounded-full p-2"
+            title="關閉"
+            aria-label="關閉相片"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <div
+            className="bg-white rounded-3xl p-4 shadow-2xl max-w-lg w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={photos[enlargedIdx]?.url || photos[enlargedIdx]?.thumbnailUrl}
+              alt={`我分享的相片 ${enlargedIdx + 1} 放大版`}
+              className="w-full h-auto max-h-[80vh] object-contain rounded-2xl"
+            />
+            <p className="text-xs text-slate-500 text-center mt-3">
+              分享於 {new Date(photos[enlargedIdx]?.createdAt || Date.now()).toLocaleString('zh-HK')}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

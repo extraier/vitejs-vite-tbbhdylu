@@ -272,11 +272,29 @@ match /{path=**}/events/{eventId} {
         // `ownerUid` is undefined in the rule expression and
         // `request.auth.uid == ownerUid` always returns false —
         // which broke event CREATE/UPDATE/DELETE for owners.
+        // READ access here is owner + co-owners + guests with a
+        // valid link to this specific event. Guests need read
+        // access so useFirestoreDoc can resolve the event for
+        // the PersonalGuestPortal (display name + table lookup
+        // AND — critically — the photo-upload handler needs
+        // currentEvent.id, otherwise handleRealUpload's silent
+        // guard (`if (!currentEvent) return`) drops the upload
+        // and the guest sees nothing happen).
         //
-        // READ access here is strict (owner + co-owners only).
-        // CollectionGroup enumeration is still permissive (line 56).
+        // 2026-08-05 — added hasValidGuestLink. Without this,
+        // guests got a 403 on the event doc and currentEvent
+        // stayed null, which made the photo upload silently
+        // bail (no toast, no error in console beyond the
+        // onSnapshot permission-denied which only logs to
+        // useFirestoreCollection's error branch).
+        //
+        // CollectionGroup enumeration is still permissive
+        // (line 56) — that's a separate rule for listing ALL
+        // events the owner owns (used by co-owner cross-event
+        // lookup), unaffected by this change.
         match /events/{eventId} {
-          allow read: if isOwnerOrAnyCoOwner(ownerUid);
+          allow read: if isOwnerOrAnyCoOwner(ownerUid)
+            || hasValidGuestLink(ownerUid, eventId);
           allow create, update, delete: if isOwner(ownerUid);
 
           // 2026-07-27 — 電子人情 QR codes (moved from owner-scoped

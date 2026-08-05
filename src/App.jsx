@@ -2511,11 +2511,39 @@ export default function App() {
   // Storage to avoid Firebase egress/storage charges). After the upload
   // succeeds, we record the photo URL in Firestore so the owner's PhotoDrop
   // gallery picks it up via onSnapshot.
+  //
+  // 2026-08-05 — replaced silent returns with toast errors.
+  // Previously the guard `if (!file || !user || !currentEvent ||
+  // !activeGuestPortal) return;` would silently drop the upload
+  // when currentEvent was null (which happens when the guest-mode
+  // event-doc read fails on the rules), and the user saw nothing.
+  // Now we toast which guard fired so future bugs are visible.
   const handleRealUpload = async (e) => {
     const file = e?.target?.files?.[0];
-    if (!file || !user || !currentEvent || !activeGuestPortal) return;
+    if (!file) {
+      // (no toast — usually means the user opened the picker and
+      // cancelled, which is normal and shouldn't spam toasts)
+      if (e?.target) e.target.value = '';
+      return;
+    }
+    if (!activeGuestPortal) {
+      showToast('❌ 上載失敗：尚未載入嘉賓資料，請稍後再試');
+      if (e?.target) e.target.value = '';
+      return;
+    }
+    if (!currentEvent) {
+      showToast('❌ 上載失敗：尚未載入婚禮資料，請稍後再試');
+      if (e?.target) e.target.value = '';
+      return;
+    }
+    if (!user) {
+      showToast('❌ 上載失敗：登入狀態已過期，請重新整理頁面');
+      if (e?.target) e.target.value = '';
+      return;
+    }
     if (isStorageFull) {
       setShowUpgradeModal(true);
+      if (e?.target) e.target.value = '';
       return;
     }
 
@@ -2857,6 +2885,14 @@ export default function App() {
           isUploading={isUploading}
           uploadProgress={uploadProgress}
           isStorageFull={isStorageFull}
+          // 2026-08-05 — Pass the guest's own uploaded photos
+          // so they can see what they've shared. Filtered by
+          // uploaderId == activeGuestPortal.guestId from
+          // eventPhotos (already filtered by eventId). Empty
+          // array until the photos subscription fires.
+          myPhotos={activeGuestPortal
+            ? eventPhotos.filter((p) => p.uploaderId === activeGuestPortal.guestId)
+            : []}
           onUpload={handleRealUpload}
           onRequestRedPacket={() => setShowPaymentModal(true)}
           // 2026-07-18 — Owner preview-as-guest path now has an exit
