@@ -44,4 +44,5 @@ functions/src/   Cloud Functions
 
 - PRs go to `main` (the project is single-branch; merge fast-forward).
 - Vercel auto-deploys on push to `main`.
-- Cloud Functions deploy manually via `npx firebase deploy --only functions:<name> --project savetheday-2377a --force` after a `touch` on the function file (forces re-upload).
+- **Read [`DEPLOY_CHECKLIST.md`](./DEPLOY_CHECKLIST.md) before deploying anything cross-runtime** — silent gaps in CF/rules/ingress/env/NAS can stack and break a feature end-to-end with no single error to grep for.
+- Cloud Functions deploy manually via `npx firebase deploy --only functions:<name> --project savetheday-2377a --force` after a `touch` on the function file (forces re-upload). Use `./scripts/deploy-functions.sh <fn>` instead — it has half-state auto-recovery built in.
