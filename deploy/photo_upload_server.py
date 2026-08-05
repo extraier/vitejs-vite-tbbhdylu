@@ -644,7 +644,7 @@ class PhotoHandler(BaseHTTPRequestHandler):
             return self._send_error(401, "malformed X-Upload-Expires header")
 
         if not verify_hmac(
-            PHOTO_HMAC_SECRET, event_id, guest_id, filename, expires, token
+            PHOTO_HMAC_SECRET, event_id, guest_id, expires, token, filename
         ):
             log(
                 f"delete HMAC verify failed for event_id={event_id[:8]}... "
