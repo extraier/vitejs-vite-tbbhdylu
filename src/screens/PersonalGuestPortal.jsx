@@ -145,19 +145,26 @@ export function PersonalGuestPortal({
               QrCodeModal generates (src/components/modals/QrCodeModal.jsx).
               Placed at the top of the action list so guests see
               it immediately and can enlarge it for the venue
-              staff. */}
-          {entryQrImgUrl && (
-            <EntryPassCard
-              qrImgUrl={entryQrImgUrl}
-              entryUrl={computedEntryUrl}
-              alreadyAttended={!!guest.hasAttended}
-              enlarged={enlarged}
-              onEnlarge={() => setEnlarged(true)}
-              onClose={() => setEnlarged(false)}
-              linkCopied={linkCopied}
-              onCopy={handleCopyEntryLink}
-            />
-          )}
+              staff. Always renders (even if URL is empty) so the
+              section is visible; shows a debug hint if any of
+              the three params are missing. */}
+          <EntryPassCard
+            qrImgUrl={entryQrImgUrl}
+            entryUrl={computedEntryUrl}
+            debugReason={(() => {
+              if (entryQrImgUrl) return null;
+              if (!guest.qOwner) return 'missing qOwner';
+              if (!guest.qEvent) return 'missing qEvent';
+              if (!guest.guestId && !guest.id) return 'missing guestId';
+              return 'unknown';
+            })()}
+            alreadyAttended={!!guest.hasAttended}
+            enlarged={enlarged}
+            onEnlarge={() => setEnlarged(true)}
+            onClose={() => setEnlarged(false)}
+            linkCopied={linkCopied}
+            onCopy={handleCopyEntryLink}
+          />
 
           <div className="space-y-4">
             <PhotoUploadCard
@@ -261,6 +268,7 @@ function RedPacketCard({ guest, onRequestRedPacket }) {
 function EntryPassCard({
   qrImgUrl,
   entryUrl,
+  debugReason,
   alreadyAttended,
   enlarged,
   onEnlarge,
@@ -294,32 +302,47 @@ function EntryPassCard({
               the card stays compact on the welcome screen. */}
           <button
             type="button"
-            onClick={onEnlarge}
-            className="relative w-24 h-24 bg-white rounded-xl border-2 border-emerald-200 shadow-sm overflow-hidden flex-shrink-0 group hover:border-emerald-400 transition-colors"
-            title="點擊放大 QR Code"
+            onClick={qrImgUrl ? onEnlarge : undefined}
+            disabled={!qrImgUrl}
+            className={`relative w-24 h-24 rounded-xl border-2 shadow-sm overflow-hidden flex-shrink-0 group transition-colors ${
+              qrImgUrl
+                ? 'bg-white border-emerald-200 hover:border-emerald-400 cursor-pointer'
+                : 'bg-slate-100 border-slate-200 border-dashed cursor-default'
+            }`}
+            title={qrImgUrl ? '點擊放大 QR Code' : 'QR 尚未準備好'}
             aria-label="放大入場 QR Code"
           >
-            <img
-              src={qrImgUrl}
-              alt="入場 QR Code"
-              className="w-full h-full object-contain p-1"
-            />
-            <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/20 transition-colors flex items-center justify-center">
-              <Maximize2 className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-            </div>
+            {qrImgUrl ? (
+              <>
+                <img
+                  src={qrImgUrl}
+                  alt="入場 QR Code"
+                  className="w-full h-full object-contain p-1"
+                />
+                <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/20 transition-colors flex items-center justify-center">
+                  <Maximize2 className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+              </>
+            ) : (
+              <div className="w-full h-full flex items-center justify-center">
+                <QrCode className="w-8 h-8 text-slate-300" />
+              </div>
+            )}
           </button>
           <div className="flex-1 min-w-0">
             <button
               type="button"
               onClick={onEnlarge}
-              className="w-full mb-2 bg-emerald-600 text-white font-bold py-2 rounded-xl hover:bg-emerald-700 shadow-sm flex items-center justify-center gap-2 text-sm"
+              disabled={!qrImgUrl}
+              className="w-full mb-2 bg-emerald-600 text-white font-bold py-2 rounded-xl hover:bg-emerald-700 shadow-sm flex items-center justify-center gap-2 text-sm disabled:bg-slate-300 disabled:cursor-not-allowed"
             >
               <Maximize2 className="w-4 h-4" /> 打開 QR 給接待處掃描
             </button>
             <button
               type="button"
               onClick={onCopy}
-              className="w-full bg-white border border-slate-200 text-slate-700 text-xs font-bold py-2 rounded-xl hover:bg-slate-50 flex items-center justify-center gap-2"
+              disabled={!entryUrl}
+              className="w-full bg-white border border-slate-200 text-slate-700 text-xs font-bold py-2 rounded-xl hover:bg-slate-50 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {linkCopied ? (
                 <>
@@ -331,14 +354,26 @@ function EntryPassCard({
                 </>
               )}
             </button>
+            {/* Debug hint — only shown when the QR can't be built.
+                2026-08-05: lets us see which param is missing on
+                the user's screen without them opening devtools. */}
+            {debugReason && (
+              <p className="text-[10px] text-rose-500 mt-2 font-mono break-all">
+                ⚠ {debugReason} — owner={String(window.__ownerUid || '').slice(0, 6)}…,
+                event={String(window.__currentEventId || '').slice(0, 6)}…,
+                guest={String((entryUrl || '').split('g=')[1] || '').slice(0, 6) || '—'}…
+              </p>
+            )}
           </div>
         </div>
       </div>
 
       {/* Fullscreen overlay so reception staff can scan the
           guest's phone without the welcome cards crowding the
-          view. Tap anywhere outside the card (or the X) to close. */}
-      {enlarged && (
+          view. Tap anywhere outside the card (or the X) to close.
+          2026-08-05: only mount when a real QR is available —
+          otherwise tapping the placeholder button does nothing. */}
+      {enlarged && qrImgUrl && (
         <div
           className="fixed inset-0 bg-slate-900/95 z-[60] flex flex-col items-center justify-center p-6 animate-in fade-in duration-200"
           onClick={onClose}
