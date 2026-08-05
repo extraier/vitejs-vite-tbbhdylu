@@ -54,6 +54,30 @@ PUBLIC_ORIGIN = os.environ.get(
 )
 # Cap each upload at 20 MB to keep phone-videos-of-the-aisle from blowing the disk.
 MAX_BYTES = int(os.environ.get("PHOTO_MAX_BYTES", str(20 * 1024 * 1024)))
+
+# 2026-08-06 — Test isolation guard. When PHOTO_TEST_PREFIX is set
+# (e.g. "e2e-" for an end-to-end test run), the server ONLY accepts
+# uploads and deletes where the eventId or guestId starts with that
+# prefix. Production deploys leave PHOTO_TEST_PREFIX unset, so the
+# guard is a no-op and real user data flows as before.
+#
+# Why this exists: on 2026-08-05 an e2e test of the photo-delete
+# flow picked a real user-uploaded filename off the NAS
+# (1785943573994_yvIIjw.jpg, 73423 bytes) and called the public
+# delete endpoint against it. The file was deleted. The user can
+# never get it back. The fix: the e2e harness must be unable to
+# touch a path that doesn't start with the test prefix. The NAS
+# refuses with 403 if the prefix is set and the path doesn't
+# match, so a misconfigured e2e test fails loud instead of
+# destroying real user data.
+TEST_PREFIX = os.environ.get("PHOTO_TEST_PREFIX", "").strip()
+
+
+def _in_test_scope(event_id: str, guest_id: str) -> bool:
+    """True when the request is allowed under the current TEST_PREFIX."""
+    if not TEST_PREFIX:
+        return True
+    return event_id.startswith(TEST_PREFIX) or guest_id.startswith(TEST_PREFIX)
 # Allowed mime types
 ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
 # 2026-08-02 — File types we ACTUALLY watermark. HEIC/HEIF are
@@ -291,6 +315,12 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
+# 2026-08-06 — Log TEST_PREFIX now that `log` is defined. Done at
+# module import so the test-mode banner shows up in every startup.
+if TEST_PREFIX:
+    log(f"TEST_MODE: prefix={TEST_PREFIX!r} — only {TEST_PREFIX}* paths accepted")
+
+
 def verify_hmac(secret, event_id, guest_id, expires_ms_str, provided_sig_hex,
                 filename=None):
     """Constant-time HMAC verification. Returns True on match.
@@ -504,6 +534,22 @@ class PhotoHandler(BaseHTTPRequestHandler):
             return self._send_error(400, "missing eventId or guestId")
         uploader_name = fields.get("uploaderName", "Anonymous")
 
+        # 2026-08-06 — Test isolation. When TEST_PREFIX is set,
+        # refuse uploads targeting paths outside the test scope.
+        # This stops a misconfigured e2e test from writing into
+        # production data (the 2026-08-05 incident: test deleted
+        # a real 73423-byte user photo).
+        if not _in_test_scope(event_id, guest_id):
+            log(
+                f"REFUSED upload: event_id={event_id[:8]}... guest_id={guest_id[:8]}... "
+                f"outside TEST_PREFIX={TEST_PREFIX!r}"
+            )
+            return self._send_error(
+                403,
+                f"test mode active — only {TEST_PREFIX}* paths accepted (this "
+                f"eventId/guestId is out of scope)",
+            )
+
         # Validate id shape (defense in depth — the URL params already filter)
         if not (SAFE_ID.match(event_id) and SAFE_ID.match(guest_id)):
             return self._send_error(400, "bad eventId/guestId")
@@ -624,6 +670,22 @@ class PhotoHandler(BaseHTTPRequestHandler):
         # a single dot in the middle/end of the filename.
         if not SAFE_FILENAME.match(filename):
             return self._send_error(400, "bad filename")
+
+        # 2026-08-06 — Test isolation. Same guard as the upload
+        # path: refuse delete attempts targeting paths outside
+        # the test scope. Catches the misconfigured-e2e case
+        # BEFORE the HMAC verify, so even a successful token
+        # can't slip through to a real photo.
+        if not _in_test_scope(event_id, guest_id):
+            log(
+                f"REFUSED delete: event_id={event_id[:8]}... "
+                f"guest_id={guest_id[:8]}... filename={filename!r} "
+                f"outside TEST_PREFIX={TEST_PREFIX!r}"
+            )
+            return self._send_error(
+                403,
+                f"test mode active — only {TEST_PREFIX}* paths accepted",
+            )
 
         # HMAC token + expiry come from the Vercel proxy.
         # The proxy has already verified the caller is allowed
