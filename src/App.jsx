@@ -1555,13 +1555,22 @@ export default function App() {
 
 
   // 2026-07-27 — Migrated to event-scoped path: /users/{ownerUid}/events/{eventId}/photos.
-   const { data: allPhotos } = useFirestoreCollection(
-     dataOwnerUid && (guest.isGuestMode ? guest.qEvent : currentEvent)
-       ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events',
-                    guest.isGuestMode ? guest.qEvent : currentEvent.id, 'photos')
-       : null,
-     [dataOwnerUid, guest.isGuestMode, guest.qEvent, currentEvent?.id],
-   );
+  // 2026-08-05 — Added guestDataReady to the guard. Without it, the
+  // subscription fires the moment dataOwnerUid + guest.qEvent are
+  // populated (synchronous), but verifyShareToken hasn't written
+  // guestLinks/{auth.uid} yet. hasValidGuestLink in firestore.rules
+  // returns false (the doc doesn't exist), the read throws
+  // "Missing or insufficient permissions", and the user sees a
+  // permissions error in the console before the token is redeemed.
+  // allGuests had the same fix applied earlier; this catches the
+  // photos subscription which was missed.
+  const { data: allPhotos } = useFirestoreCollection(
+    guestDataReady && dataOwnerUid && (guest.isGuestMode ? guest.qEvent : currentEvent)
+      ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events',
+                   guest.isGuestMode ? guest.qEvent : currentEvent.id, 'photos')
+      : null,
+    [dataOwnerUid, guestDataReady, guest.isGuestMode, guest.qEvent, currentEvent?.id],
+  );
 
   // 2026-07-27 — Migrated to event-scoped path: /users/{ownerUid}/events/{eventId}/tasks.
   // Old owner-scoped path leaked tasks from sibling events.
