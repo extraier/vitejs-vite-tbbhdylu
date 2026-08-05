@@ -140,16 +140,68 @@ ANY_NOT_ACTIVE=0
 for fn in "${VERIFY_TARGETS[@]}"; do
   echo "==> Verifying $fn ACTIVE ..."
   STATE="PENDING"
-  for i in 1 2 3 4 5; do
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
     STATE=$(gcloud functions describe "$fn" --region=us-central1 --gen2 \
               --project="$PROJECT" --format='value(state)' 2>/dev/null || echo "PENDING")
     echo "  attempt $i: state=$STATE"
     [[ "$STATE" == "ACTIVE" ]] && break
-    sleep 5
+    sleep 10
   done
+
+  # Half-state detection (2026-08-05): when a prior deploy
+  # failed partway, gcloud describes the function as ACTIVE but
+  # with no buildConfig.runtime field. The next `firebase deploy`
+  # then returns 409 "Resource already exists" because the name
+  # is already taken. Detect this and auto-recover by calling
+  # gcloud functions delete --gen2, then redeploying.
+  if [[ "$STATE" == "ACTIVE" ]]; then
+    RUNTIME=$(gcloud functions describe "$fn" --region=us-central1 --gen2 \
+                --project="$PROJECT" --format='value(buildConfig.runtime)' 2>/dev/null || echo "")
+    if [[ -z "$RUNTIME" ]]; then
+      echo "  ⚠ $fn is ACTIVE but buildConfig.runtime is empty (half-state from failed prior deploy)"
+      echo "  → 2026-08-05 recovery: gcloud functions delete --gen2 + redeploy"
+      STATE="HALF_STATE"
+    fi
+  fi
+
   if [[ "$STATE" != "ACTIVE" ]]; then
-    echo "  ⚠ $fn is not ACTIVE — investigate before declaring deploy successful."
-    ANY_NOT_ACTIVE=$((ANY_NOT_ACTIVE + 1))
+    if [[ "$STATE" == "HALF_STATE" ]]; then
+      echo "  → Auto-recovering $fn from half-state ..."
+      # 2026-08-05 — gcloud CLI v15+ refuses Python 3.9 (the macOS
+      # system default) and exits silently. The Homebrew Python
+      # 3.14 is at /opt/homebrew/bin/python3.14. Set
+      # CLOUDSDK_PYTHON before calling gcloud.
+      export CLOUDSDK_PYTHON="${CLOUDSDK_PYTHON:-/opt/homebrew/bin/python3.14}"
+      export GOOGLE_APPLICATION_CREDENTIALS="$SA"
+      gcloud functions delete "$fn" --gen2 --region=us-central1 \
+        --project="$PROJECT" --quiet 2>&1 | tail -3
+
+      # Redeploy just this function. Reuse the same FIREBASE_TOKEN.
+      echo "  → Redeploying $fn ..."
+      FIREBASE_TOKEN="$FIREBASE_TOKEN" \
+        npx --yes firebase-tools@latest deploy \
+          --only "functions:${fn}" \
+          --project "$PROJECT" --force 2>&1 | tail -5
+
+      # Wait for ACTIVE again.
+      RECOVERED_STATE="PENDING"
+      for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        RECOVERED_STATE=$(gcloud functions describe "$fn" --region=us-central1 --gen2 \
+                    --project="$PROJECT" --format='value(state)' 2>/dev/null || echo "PENDING")
+        echo "  recovery attempt $i: state=$RECOVERED_STATE"
+        [[ "$RECOVERED_STATE" == "ACTIVE" ]] && break
+        sleep 10
+      done
+      if [[ "$RECOVERED_STATE" != "ACTIVE" ]]; then
+        echo "  ❌ $fn still not ACTIVE after auto-recovery."
+        ANY_NOT_ACTIVE=$((ANY_NOT_ACTIVE + 1))
+      else
+        echo "  ✓ $fn recovered and ACTIVE"
+      fi
+    else
+      echo "  ⚠ $fn is not ACTIVE — investigate before declaring deploy successful."
+      ANY_NOT_ACTIVE=$((ANY_NOT_ACTIVE + 1))
+    fi
   fi
 done
 
