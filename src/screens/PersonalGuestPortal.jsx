@@ -1,5 +1,16 @@
-import { useRef } from 'react';
-import { Heart, Camera, Upload, AlertCircle, CreditCard, QrCode } from 'lucide-react';
+import { useRef, useState } from 'react';
+import {
+  Heart,
+  Camera,
+  Upload,
+  AlertCircle,
+  CreditCard,
+  QrCode,
+  Maximize2,
+  X,
+  Copy,
+  Check,
+} from 'lucide-react';
 
 export function PersonalGuestPortal({
   guest,
@@ -10,6 +21,12 @@ export function PersonalGuestPortal({
   onUpload,
   onRequestRedPacket,
   onCopyQrLink,
+  // 2026-08-05 — Entry-pass QR wiring. The portal was missing its
+  // own 入場 QR (the same token ReceptionScanner reads). The card
+  // builds the link from guest.{qOwner,qEvent,guestId} in real
+  // guest mode, or falls back to window.__ownerUid/__currentEventId
+  // in owner-preview mode (mirrors QrCodeModal's fallback chain).
+  entryUrl,
   // 2026-07-18 — When the owner clicks "preview as guest" on a row in
   // the 嘉賓列表, they need a way to come back. In real guest mode
   // (URL ?o=&e=&g=&token=) this prop is undefined and the helper
@@ -17,6 +34,49 @@ export function PersonalGuestPortal({
   onExitPreview,
 }) {
   const fileInputRef = useRef(null);
+  const [enlarged, setEnlarged] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  // 2026-08-05 — Compute the 入場 entry-pass URL the same way
+  // QrCodeModal does (see src/components/modals/QrCodeModal.jsx:24):
+  //   {origin}/?o={ownerUid}&e={eventId}&g={guestId}
+  // In real guest mode, every value comes off the guest object.
+  // In owner-preview mode (activeGuestPortal set from the
+  // 嘉賓列表 "preview as guest" button), currentEvent is the owner's
+  // event and the guest's qOwner/qEvent are undefined — fall back
+  // to window.__ownerUid / window.__currentEventId, matching
+  // QrCodeModal's pattern.
+  const computedEntryUrl =
+    entryUrl ||
+    (() => {
+      if (!guest) return '';
+      const origin =
+        typeof window !== 'undefined'
+          ? `${window.location.protocol}//${window.location.host}`
+          : '';
+      const ownerUid = guest.qOwner || window.__ownerUid || '';
+      const eventId = guest.qEvent || window.__currentEventId || '';
+      const guestId = guest.guestId || guest.id || '';
+      if (!ownerUid || !eventId || !guestId) return '';
+      return `${origin}/?o=${ownerUid}&e=${eventId}&g=${guestId}`;
+    })();
+  const entryQrImgUrl = computedEntryUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(computedEntryUrl)}&color=0f172a`
+    : '';
+
+  const handleCopyEntryLink = async () => {
+    if (!computedEntryUrl) return;
+    try {
+      await navigator.clipboard.writeText(computedEntryUrl);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      // Fallback: show the URL in a prompt so the user can copy
+      // manually on iOS Safari, where clipboard.writeText can
+      // throw NotAllowedError outside a user gesture chain.
+      window.prompt('請複製您的入場連結：', computedEntryUrl);
+    }
+  };
 
   if (!guest) {
     return (
@@ -77,6 +137,27 @@ export function PersonalGuestPortal({
               <p className="text-3xl font-black text-indigo-700">{guest.tableNumber}</p>
             </div>
           </div>
+
+          {/* 2026-08-05 — Entry-pass QR. Reception scans this
+              at the door to mark the guest attended. The same
+              token scheme as ReceptionScanner reads
+              (src/screens/ReceptionScanner.jsx top comment) and
+              QrCodeModal generates (src/components/modals/QrCodeModal.jsx).
+              Placed at the top of the action list so guests see
+              it immediately and can enlarge it for the venue
+              staff. */}
+          {entryQrImgUrl && (
+            <EntryPassCard
+              qrImgUrl={entryQrImgUrl}
+              entryUrl={computedEntryUrl}
+              alreadyAttended={!!guest.hasAttended}
+              enlarged={enlarged}
+              onEnlarge={() => setEnlarged(true)}
+              onClose={() => setEnlarged(false)}
+              linkCopied={linkCopied}
+              onCopy={handleCopyEntryLink}
+            />
+          )}
 
           <div className="space-y-4">
             <PhotoUploadCard
@@ -166,5 +247,154 @@ function RedPacketCard({ guest, onRequestRedPacket }) {
         </button>
       )}
     </div>
+  );
+}
+
+// 2026-08-05 — Entry-pass QR card. Reception scans this at the
+// venue door to mark the guest attended (calls
+// handleSimulateReceptionScan in App.jsx). Same ?o=&e=&g= token
+// that QrCodeModal writes for the owner's send-invite path.
+//
+// Renders a compact preview inline + a fullscreen enlarged view
+// for staff scanning on phone screens (reception desks often use
+// the guest's own phone screen as the scanner target).
+function EntryPassCard({
+  qrImgUrl,
+  entryUrl,
+  alreadyAttended,
+  enlarged,
+  onEnlarge,
+  onClose,
+  linkCopied,
+  onCopy,
+}) {
+  return (
+    <>
+      <div className="p-5 rounded-2xl border-2 border-emerald-200 bg-emerald-50">
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <h4 className="font-bold text-slate-800 flex items-center gap-2">
+              <QrCode className="w-5 h-5 text-emerald-600" /> 您的入場 QR
+            </h4>
+            <p className="text-xs text-slate-500 mt-1">
+              {alreadyAttended
+                ? '✅ 您已報到 — 請向接待處出示此 QR 或直接入座'
+                : '到場時請向接待處出示此 QR Code 核對'}
+            </p>
+          </div>
+          {alreadyAttended && (
+            <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-1 rounded-full">
+              已報到
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {/* Thumbnail — tap to enlarge. The full QR renders at
+              400x400 via api.qrserver.com; we downscale here so
+              the card stays compact on the welcome screen. */}
+          <button
+            type="button"
+            onClick={onEnlarge}
+            className="relative w-24 h-24 bg-white rounded-xl border-2 border-emerald-200 shadow-sm overflow-hidden flex-shrink-0 group hover:border-emerald-400 transition-colors"
+            title="點擊放大 QR Code"
+            aria-label="放大入場 QR Code"
+          >
+            <img
+              src={qrImgUrl}
+              alt="入場 QR Code"
+              className="w-full h-full object-contain p-1"
+            />
+            <div className="absolute inset-0 bg-slate-900/0 group-hover:bg-slate-900/20 transition-colors flex items-center justify-center">
+              <Maximize2 className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+          </button>
+          <div className="flex-1 min-w-0">
+            <button
+              type="button"
+              onClick={onEnlarge}
+              className="w-full mb-2 bg-emerald-600 text-white font-bold py-2 rounded-xl hover:bg-emerald-700 shadow-sm flex items-center justify-center gap-2 text-sm"
+            >
+              <Maximize2 className="w-4 h-4" /> 打開 QR 給接待處掃描
+            </button>
+            <button
+              type="button"
+              onClick={onCopy}
+              className="w-full bg-white border border-slate-200 text-slate-700 text-xs font-bold py-2 rounded-xl hover:bg-slate-50 flex items-center justify-center gap-2"
+            >
+              {linkCopied ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-600" /> 已複製連結
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" /> 複製入場連結
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Fullscreen overlay so reception staff can scan the
+          guest's phone without the welcome cards crowding the
+          view. Tap anywhere outside the card (or the X) to close. */}
+      {enlarged && (
+        <div
+          className="fixed inset-0 bg-slate-900/95 z-[60] flex flex-col items-center justify-center p-6 animate-in fade-in duration-200"
+          onClick={onClose}
+          role="dialog"
+          aria-modal="true"
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white rounded-full p-2"
+            title="關閉"
+            aria-label="關閉 QR Code"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <div
+            className="bg-white rounded-3xl p-6 shadow-2xl max-w-sm w-full text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-rose-600 font-black tracking-widest text-xs mb-1">
+              ENTRY PASS
+            </h3>
+            <h2 className="text-xl font-bold text-slate-800 mb-4">
+              入場 QR Code
+            </h2>
+            <div className="bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 inline-block">
+              <img
+                src={qrImgUrl}
+                alt="入場 QR Code 放大版"
+                className="w-72 h-72 mx-auto"
+              />
+            </div>
+            <p className="text-slate-600 text-sm mt-4">
+              請向接待處出示此畫面
+            </p>
+            <p className="text-[10px] text-slate-400 break-all mt-2 bg-slate-50 p-2 rounded">
+              {entryUrl}
+            </p>
+            <button
+              type="button"
+              onClick={onCopy}
+              className="mt-4 w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 flex items-center justify-center gap-2"
+            >
+              {linkCopied ? (
+                <>
+                  <Check className="w-4 h-4" /> 已複製連結
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4" /> 複製入場連結
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
