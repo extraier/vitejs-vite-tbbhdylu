@@ -140,6 +140,13 @@ export default function App() {
     continueAsGuest,
     linkAnonymousWithEmail,
     logout,
+    // 2026-08-05 — opt the anonymous session in after the share
+    // redeem in lines 880-905 signs in anonymously. Without this,
+    // useAuth.onAuthStateChanged sees currentUser.isAnonymous &&
+    // !allowAnonymous and STORES the user as null, so the upload
+    // handler at App.jsx 2507 sees `!user` and fails with
+    // "登入狀態已過期" — exactly what the previous screenshot showed.
+    acceptAnonymousSession,
   } = useAuth();
   // 2026-07-26 — Partner-invite pre-fill. Detects ?t=<token> in URL,
   // calls previewPartnerInvite CF, and exposes the partnerEmail + eventName
@@ -848,6 +855,12 @@ export default function App() {
         if (!auth.currentUser) {
           await signInAnonymously(auth);
         }
+        // 2026-08-05 — opt the anonymous session in via useAuth so
+        // onAuthStateChanged keeps `user` populated. Without this,
+        // the upload handler at App.jsx 2507 sees `!user` and fails
+        // with "登入狀態已過期". (Previous symptom: defensive toast
+        // visible on every photo upload attempt from guest mode.)
+        acceptAnonymousSession();
         if (cancelled) return;
         const verify = httpsCallable(functions, 'verifyShareToken');
         await verify({ token });

@@ -419,6 +419,19 @@ export function useAuth() {
     await signOut(auth);
   };
 
+  // 2026-08-05 — acceptAnonymousSession. Called by the partner-share
+  // / guest redeem flow in App.jsx right after signInAnonymously
+  // completes. Without this, onAuthStateChanged sees
+  // currentUser.isAnonymous && !allowAnonymous and STORES null as
+  // the user (useAuth.js:273) — so callers that read `user` see
+  // "no user" and the upload handler refuses to fire with
+  // "登入狀態已過期".
+  //
+  // Idempotent. Pair with `logout` (or a page refresh) to revoke.
+  const acceptAnonymousSession = () => {
+    setAllowAnonymous(true);
+  };
+
   // 2026-07-31 — send a Firebase Auth verification email to the current
   // user. Routes through the `sendBrandedVerificationV2` Cloud Function
   // (functions/src/brandedEmail.ts) which builds the link via the
@@ -468,5 +481,9 @@ export function useAuth() {
     hasPasswordProvider,
     sendEmailVerification,
     logout,
+    // 2026-08-05 — guest share-redemption needs to opt the anonymous
+    // session in so useAuth.onAuthStateChanged doesn't strip it.
+    // See App.jsx share-redeem effect.
+    acceptAnonymousSession,
   };
 }
