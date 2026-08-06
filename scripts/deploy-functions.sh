@@ -132,7 +132,7 @@ else
   echo "==> Listing deployed functions for ACTIVE verification ..."
   while IFS= read -r fn; do
     [[ -n "$fn" ]] && VERIFY_TARGETS+=("$fn")
-  done < <(gcloud functions list --regions=us-central1 --gen2 \
+  done < <(gcloud functions list --regions=us-central1 --v2 \
               --project="$PROJECT" --format='value(name)' | awk -F/ '{print $NF}')
 fi
 
@@ -209,6 +209,86 @@ if [[ $ANY_NOT_ACTIVE -gt 0 ]]; then
   echo "==> ❌ $ANY_NOT_ACTIVE function(s) did not reach ACTIVE state."
   echo "    Re-run with --force, or apply 'gcloud functions delete' + redeploy."
   exit 1
+fi
+
+# ----------------------------------------------------------------------------
+# Post-deploy IAM audit (2026-08-06, savetheday-2377a photo-delete incident).
+#
+# Symptom: CORS preflight OPTIONS to an HTTPS callable returns 403 with no
+# Access-Control-Allow-Origin header, and the browser logs
+#   "blocked by CORS policy: No 'Access-Control-Allow-Origin' header"
+# even though `cors: true` is set in the onCall() handler in source.
+#
+# Cause: Cloud Functions v2 deploys each function as a Cloud Run service.
+# The CORS preflight is rejected at the Cloud Run IAM layer (not by
+# the function code) if no identity has roles/run.invoker for that
+# service. Firebase CLI normally adds an `allUsers → roles/run.invoker`
+# binding for HTTPS callables, but certain deploy paths (raw `gcloud
+# functions deploy`, env-var-only updates, redeploy-via-`--gen2` flag)
+# skip that step. The result is a deployed function with `cors: true`
+# in source but no way for the browser's preflight to reach it.
+#
+# Self-heal: after every deploy, enumerate all HTTPS (callable) functions
+# and re-add the allUsers invoker binding if missing. Event/Eventarc
+# triggers are excluded — they MUST NOT have allUsers invoker (they
+# are invoked by the Eventarc service account, and exposing them
+# publicly would create a security hole).
+#
+# Set SKIP_IAM_AUDIT=1 to opt out (e.g. for dry-run or test deploys).
+# ----------------------------------------------------------------------------
+if [[ "${SKIP_IAM_AUDIT:-0}" != "1" ]]; then
+  echo "==> Post-deploy IAM audit: checking allUsers invoker on HTTPS callables ..."
+  export CLOUDSDK_PYTHON="${CLOUDSDK_PYTHON:-/opt/homebrew/bin/python3.14}"
+
+  IAM_FIXED=0
+  IAM_SKIPPED=0
+  IAM_ERRORS=0
+
+  # Enumerate all v2 functions; skip event triggers (Firestore, Eventarc, etc.)
+  while IFS= read -r fn_json; do
+    [[ -z "$fn_json" ]] && continue
+    # Parse: name (last segment), trigger type (has eventTrigger? → event : https)
+    fn_name=$(echo "$fn_json" | jq -r '.name | split("/") | last')
+    is_event_trigger=$(echo "$fn_json" | jq -r 'if .eventTrigger then "event" else "https" end')
+
+    # Skip Eventarc/Firestore triggers — they MUST NOT have allUsers invoker
+    if [[ "$is_event_trigger" == "event" ]]; then
+      IAM_SKIPPED=$((IAM_SKIPPED + 1))
+      continue
+    fi
+
+    # Cloud Run service name: same as function name but with hyphens for
+    # any underscores, all lowercase. e.g.
+    #   admin_deleteVendor  → admin-deletevendor
+    #   submitSocialProof  → submitsocialproof
+    #   admin_setDisabled  → admin-setdisabled
+    cr_name=$(echo "$fn_name" | tr '_' '-' | tr '[:upper:]' '[:lower:]')
+
+    # Check existing IAM for allUsers invoker
+    HAS_ALL_USERS=$(gcloud run services get-iam-policy "$cr_name" \
+      --region=us-central1 --project="$PROJECT" --format=json 2>/dev/null \
+      | jq -r '[.bindings[]? | select(.role == "roles/run.invoker") | .members[]] | any(. == "allUsers")')
+
+    if [[ "$HAS_ALL_USERS" == "true" ]]; then
+      continue
+    fi
+
+    # Missing — self-heal
+    echo "  🔧 $fn_name (CR: $cr_name) missing allUsers invoker — adding ..."
+    if gcloud run services add-iam-policy-binding "$cr_name" \
+        --region=us-central1 --project="$PROJECT" \
+        --member=allUsers --role=roles/run.invoker >/dev/null 2>&1; then
+      IAM_FIXED=$((IAM_FIXED + 1))
+      echo "    ✓ fixed"
+    else
+      IAM_ERRORS=$((IAM_ERRORS + 1))
+      echo "    ✗ failed (function may not exist yet — skip if just-deployed revision is still propagating)"
+    fi
+  done < <(gcloud functions list --v2 --regions=us-central1 \
+              --project="$PROJECT" --format=json 2>/dev/null \
+            | jq -c '.[]?')
+
+  echo "==> IAM audit: $IAM_FIXED fixed, $IAM_SKIPPED event triggers (correctly skipped), $IAM_ERRORS errors"
 fi
 
 echo "==> Done."
