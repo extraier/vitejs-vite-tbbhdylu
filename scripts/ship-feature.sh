@@ -62,11 +62,12 @@ SKIP_FUNCTIONS=0
 SKIP_TUNNEL=0
 SKIP_NAS=0
 SKIP_POSTDEPLOY=0
+INCLUDE_RULES=0
 
 usage() {
   cat <<EOF
 Usage:
-  $0 [--dry-run] [--only <phase>] [--skip-functions] [--skip-tunnel] [--skip-nas] [--skip-postdeploy]
+  $0 [--dry-run] [--only <phase>] [--skip-functions] [--skip-tunnel] [--skip-nas] [--skip-postdeploy] [--include-rules]
 
 Phases: preflight, deploy, postdeploy (comma-separated for --only)
 
@@ -76,6 +77,7 @@ Examples:
   $0 --only preflight             # pre-flight only
   $0 --only preflight,postdeploy  # pre-flight + curl checks, skip deploys
   $0 --skip-nas                   # everything except NAS Python sync
+  $0 --include-rules              # also run firestore rules tests locally (boots emulator)
 EOF
 }
 
@@ -87,6 +89,7 @@ while [[ $# -gt 0 ]]; do
     --skip-tunnel)        SKIP_TUNNEL=1; shift ;;
     --skip-nas)           SKIP_NAS=1; shift ;;
     --skip-postdeploy)    SKIP_POSTDEPLOY=1; shift ;;
+    --include-rules)      INCLUDE_RULES=1; shift ;;
     -h|--help)            usage; exit 0 ;;
     *)                    echo "❌ Unknown arg: $1" >&2; usage; exit 1 ;;
   esac
@@ -168,12 +171,29 @@ if [[ -z "$ONLY" || ",$ONLY," == *",preflight,"* ]]; then
   run_step "1d. Vitest unit tests" \
     npx vitest run
 
-  # ---- 1e. Firestore rules tests (security gate) ----
-  if [[ -x scripts/test-firestore-rules.cjs ]]; then
-    warn_step "1e. Firestore rules tests" \
-      node scripts/test-firestore-rules.cjs
+  # ---- 1e. Firestore rules tests (security gate — opt-in only) ----
+  #
+  # Off by default because it requires `firebase emulators:exec` which
+  # boots the Firestore emulator (~2 GB download, slow first run). The
+  # CI workflow already runs this on every push (ci.yml → firestore
+  # rules job). For local pre-flight, opt in with --include-rules.
+  #
+  # When opted in: we run it via `firebase emulators:exec` so the
+  # emulator is started, the test runs, and the emulator tears down.
+  # That's the same shape as CI.
+  if [[ $INCLUDE_RULES -eq 1 ]]; then
+    if [[ ! -f scripts/test-firestore-rules.cjs ]]; then
+      echo "❌ --include-rules requested but scripts/test-firestore-rules.cjs missing" >&2
+      exit 1
+    fi
+    if ! command -v firebase >/dev/null 2>&1; then
+      echo "❌ --include-rules needs firebase CLI on PATH (npm i -g firebase-tools)" >&2
+      exit 1
+    fi
+    warn_step "1e. Firestore rules tests (emulator boot — may take 1-2 min)" \
+      firebase emulators:exec --only firestore "node scripts/test-firestore-rules.cjs"
   else
-    echo "⏭️  1e. Firestore rules tests — SKIPPED (script not found)"
+    echo "⏭️  1e. Firestore rules tests — SKIPPED (off by default; --include-rules to run locally)"
   fi
 fi
 
