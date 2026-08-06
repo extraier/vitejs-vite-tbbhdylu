@@ -1,0 +1,135 @@
+# Weekly env-drift check
+# =====================
+# Catches the case where a new `process.env.X` reference is added to
+# api/*.js but the matching Vercel env var isn't set. The
+# 2026-08-05 photo-delete incident was exactly this drift pattern
+# (HMAC_KEY on the Vercel side missing) and it went undetected for
+# weeks because there was no automated check.
+#
+# Runs weekly on Mondays. If drift is detected, opens a GitHub issue
+# so it lands in the work queue instead of silently breaking prod.
+
+name: Env drift check
+
+on:
+  schedule:
+    # Every Monday at 09:00 UTC = 17:00 HKT (after-hours check).
+    - cron: '0 9 * * 1'
+  workflow_dispatch:  # allow manual trigger
+
+# Cancel in-progress runs so a manual trigger doesn't pile up on the cron.
+concurrency:
+  group: env-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: Check Vercel env drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Install the vercel CLI. The drift check needs it to list
+      # production env vars.
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      # Required secrets (configured in repo Settings → Secrets):
+      #   VERCEL_TOKEN — Personal token from vercel.com/account/tokens
+      #                  with read access to the project's env vars.
+      #   VERCEL_ORG_ID — Vercel team/org ID
+      #   VERCEL_PROJECT_ID — Vercel project ID
+      - name: Run drift check
+        id: drift
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          # --report-only so the script prints drift without exiting 1
+          # (we want the issue to be opened with a useful diff, not a
+          # red ✗ that obscures the actual drift report).
+          set +e
+          bash scripts/check-env-drift.sh --report-only > /tmp/drift.txt 2>&1
+          EXIT=$?
+          set -e
+          echo "Drift report:"
+          cat /tmp/drift.txt
+          if [[ $EXIT -ne 0 ]]; then
+            echo "drift_detected=true" >> "$GITHUB_OUTPUT"
+            # Save the report so the issue step can quote it.
+            cp /tmp/drift.txt drift-report.txt
+          else
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open issue on drift
+        if: steps.drift.outputs.drift_detected == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('drift-report.txt', 'utf8');
+            const title = '🔴 Vercel env drift detected (weekly check)';
+            const body = [
+              'The weekly env-drift check found env vars referenced by Vercel',
+              'proxies that are NOT set in production. This is the same drift',
+              'pattern that caused the 2026-08-05 photo-delete incident.',
+              '',
+              '## Drift report',
+              '',
+              '```',
+              report,
+              '```',
+              '',
+              '## Fix',
+              '',
+              'For each MISSING var, set it on Vercel:',
+              '',
+              '```bash',
+              './scripts/vercel-env-sync.sh <NAME> <value>',
+              '# or read from keychain:',
+              "security find-generic-password -ws '<keychain-name>' | ./scripts/vercel-env-sync.sh <NAME> -",
+              '```',
+              '',
+              'After syncing, this workflow will re-run on its next cron tick',
+              'and the issue will auto-close.',
+              '',
+              '## Auto-close',
+              '',
+              'This issue auto-closes when the next workflow run finds zero drift.',
+            ].join('\n');
+            // Avoid spamming: search for an existing open issue with the
+            // same title and update it instead of opening a new one.
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'env-drift',
+              per_page: 5,
+            });
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Drift still detected on ${new Date().toISOString()}:\n\n\`\`\`\n${report}\n\`\`\``,
+              });
+              core.info(`Updated existing issue #${existing.number}`);
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['env-drift', 'bug'],
+              });
+              core.info('Opened new drift issue');
+            }
