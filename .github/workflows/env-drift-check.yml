@@ -22,6 +22,15 @@ concurrency:
   group: env-drift-${{ github.ref }}
   cancel-in-progress: true
 
+# Grant the minimum permissions needed:
+#   contents: read — checkout the repo
+#   issues: write — open issues on drift detection
+# Default GITHUB_TOKEN is read-only for issues; without explicit grant
+# the "Open issue" step fails with "Resource not accessible by integration".
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   drift:
     name: Check Vercel env drift
