@@ -10,6 +10,14 @@
 # scripts/test-cloudflared-ingress.mjs to assert every cdn.savetheday.io
 # URL used by api/*.js has a matching ingress rule below.
 #
+# 2026-08-07 — added /deals/* rule for the flight-deals-app
+# (CompareTiger). flight-deals-app's Vercel route fetches
+# https://cdn.savetheday.io/deals/all_dates.json (hardcoded in
+# flight-deals-app/src/app/api/deals/route.ts as CDN_BASE).
+# Without this rule, Vercel falls back to static JSON shipped in
+# the build and "今日跌咗" alerts show stale/garbage data.
+# CI test extended to scan flight-deals-app's src/app/api/*.ts too.
+#
 # To deploy changes:
 #   rsync deploy/cloudflared/config.yml openclaw@nas:~/.cloudflared/config.yml
 #   ssh openclaw@nas 'pkill -f "cloudflared tunnel" && sleep 5'
@@ -24,6 +32,8 @@
 #     echo " $path"
 #   done
 #   # All should print "204 $path".
+#   curl -sI https://cdn.savetheday.io/deals/all_dates.json | head -1
+#   # Should print "HTTP/2 200".
 
 tunnel: 1a40aafa-6a7e-433d-9ba5-884bf2885c3d
 # credentials-file is intentionally omitted — the NAS-local path
@@ -49,6 +59,21 @@ ingress:
   - hostname: cdn.savetheday.io
     path: /delete
     service: http://127.0.0.1:9879
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 5s
+      tlsTimeout: 5s
+  # 2026-08-07 — flight-deals-app (CompareTiger) reads its JSON from
+  # the same tunnel. The Vercel route fetches
+  # https://cdn.savetheday.io/deals/all_dates.json (and _szx.json).
+  # Targets fli-data-server.py on port 9877 (different process from
+  # the photo server). Keep this rule in the cdn.savetheday.io
+  # ingress block, NOT a separate tunnel — the flight-deals-app
+  # piggybacks on the same Cloudflare Tunnel + Tailscale Funnel pair
+  # set up 2026-06-29 for savetheday photo uploads.
+  - hostname: cdn.savetheday.io
+    path: /deals
+    service: http://127.0.0.1:9877
     originRequest:
       noTLSVerify: true
       connectTimeout: 5s
