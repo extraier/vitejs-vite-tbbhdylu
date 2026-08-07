@@ -114,7 +114,7 @@ const STRINGS = {
 //   readOnlyEmail     — when true, the email input is read-only
 //                       (prevents typos from creating a wrong account)
 
-export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, defaultEmail, defaultMode, inviteMessage, readOnlyEmail }) {
+export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup, defaultEmail, defaultMode, inviteMessage, readOnlyEmail }) {
   const [lang, setLang] = useState('zh'); // 'zh' | 'en'
   const t = STRINGS[lang];
 
