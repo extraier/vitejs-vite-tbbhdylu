@@ -120,6 +120,29 @@ service firebase.storage {
       allow delete: if false;
     }
 
+    // 2026-08-07 — Platform-wide payment settings QR images. Used
+    // by <PurchaseModal> when couples pay for Premium. Public
+    // read so any signed-in couple can see the QR they pay to
+    // (mirrors the public-read on /red-packets above). Writes
+    // are admin-only — only the platform owner can replace the
+    // QR (via the AdminPaymentSettings screen). The admin client
+    // uploads with the admin's UID but storage doesn't require
+    // the UID to match a path component here (path is global),
+    // so isAdmin() is the right gate.
+    //
+    // Filenames are constrained to {payme|fps}.{ext} — admins
+    // can't accidentally shadow them with arbitrary names. We
+    // keep the size cap at 2MB because QR PNGs are usually
+    // <100KB; a generous cap.
+    match /platform/payment-settings/{fileName} {
+      allow read: if true;
+      allow write: if isAdmin()
+        && fileName.matches('(payme|fps)\\.(png|jpg|jpeg|webp|svg)')
+        && request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*|image/svg\\+xml');
+      allow delete: if isAdmin();
+    }
+
     // Default deny everything else (photos, vendor assets, etc. live
     // under their own owner-scoped paths in a future iteration).
     match /{path=**} {

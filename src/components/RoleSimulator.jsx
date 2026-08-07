@@ -1,4 +1,4 @@
-import { Users, Shield, BarChart3, Store, Inbox } from 'lucide-react';
+import { Users, Shield, BarChart3, Store, Inbox, CreditCard } from 'lucide-react';
 
 /**
  * RoleSimulator — dark "developer-mode" pill bar at the top of the screen.
@@ -14,6 +14,14 @@ import { Users, Shield, BarChart3, Store, Inbox } from 'lucide-react';
  * As of 2026-07-02 a third admin pill was added:
  *
  *   - 🛍️ 商戶控制台 → currentView = 'admin-vendors'
+ *
+ * As of 2026-07-29 a fourth admin pill:
+ *
+ *   - 📋 審批管理 → currentView = 'admin-queue'
+ *
+ * As of 2026-08-07 a fifth admin pill:
+ *
+ *   - 💳 收款設定 → currentView = 'admin-payment-settings'
  *
  * Active state mirrors the corresponding role chip pattern (color-coded).
  * Admin pills are considered active when currentView matches one of those two.
@@ -153,6 +161,24 @@ export function RoleSimulator({
           >
             <Inbox className="w-3.5 h-3.5" />
             📋 審批管理
+          </button>
+          {/* 2026-08-07 — Admin payment settings pill. Configure
+              the PayMe QR + FPS banking details that <PurchaseModal>
+              renders to couples paying for Premium. Storing QR
+              images in Firebase Storage + banking text in
+              /artifacts/{appId}/platform/paymentSettings; both
+              gated to admin-only writes via security rules. */}
+          <button
+            onClick={() => onSwitch('admin-payment-settings')}
+            title="收款設定 (PayMe QR + FPS 銀行資料)"
+            className={`px-3 py-1 rounded-full flex items-center gap-1 ${
+              currentView === 'admin-payment-settings'
+                ? 'bg-emerald-500 font-bold'
+                : 'bg-slate-800 hover:bg-slate-700'
+            }`}
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            💳 收款設定
           </button>
         </>
       )}

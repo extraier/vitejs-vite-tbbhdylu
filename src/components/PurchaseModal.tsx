@@ -9,12 +9,37 @@
  * 2026-07-21 — initial release.
  */
 
-import { useState } from 'react';
-import { X, CreditCard, Upload, Smartphone, Building2, Check, AlertCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { httpsCallable } from 'firebase/functions';
-import { storage, functions } from '../lib/firebase';
+import { storage, functions, db, appId } from '../lib/firebase';
+import { X, CreditCard, Upload, Smartphone, Building2, Check, AlertCircle } from 'lucide-react';
 import type { UnlockType } from '../screens/EventsDashboard';
+
+// 2026-08-07 — Platform payment settings live in Firestore at
+// /artifacts/{appId}/platform/paymentSettings. Admin-only writes
+// (see firestore.rules), public-for-signed-in reads. PurchaseModal
+// reads on open and renders the QR + banking text. Fallback values
+// below are only used when the admin hasn't configured yet (so
+// the modal still renders something legible instead of an empty
+// placeholder).
+//
+// Admin screen: src/screens/AdminPaymentSettings.jsx (reached via
+// RoleSimulator 💳 收款設定 pill).
+const PAYMENT_SETTINGS_DOC = `artifacts/${appId}/platform/paymentSettings`;
+
+// Fallback when admin hasn't configured yet. Bank-of-last-resort
+// so couples can still see SOMETHING — never quote live details
+// from this default; once an admin fills in the real values,
+// this constant is shadowed by Firestore data.
+const PAYMENT_DEFAULTS = {
+  paymeQrUrl: null, // No QR by default — couples will see a "尚未設定" placeholder
+  fpsBankName: 'HSBC 香港上海匯豐銀行',
+  fpsAccountName: 'Save The Day Limited',
+  fpsId: '168888888',
+  fpsQrUrl: null,
+};
 
 const UNLOCK_LABELS: Record<UnlockType, string> = {
   'custom-template': '上傳自訂電子喜帖設計',
@@ -79,6 +104,43 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
   const [success, setSuccess] = useState<null | { estimatedTime: string }>(null);
   const [error, setError] = useState<string | null>(null);
   const [reference, setReference] = useState('');
+  // 2026-08-07 — Platform payment settings (PayMe QR + FPS banking).
+  // Loaded on open from /artifacts/{appId}/platform/paymentSettings.
+  // Falls back to PAYMENT_DEFAULTS if the doc doesn't exist or the
+  // admin hasn't configured yet — better than an empty placeholder
+  // for couples who land on the modal before the admin's first save.
+  const [paymeQrUrl, setPaymeQrUrl] = useState<string | null>(PAYMENT_DEFAULTS.paymeQrUrl);
+  const [fpsQrUrl, setFpsQrUrl] = useState<string | null>(PAYMENT_DEFAULTS.fpsQrUrl);
+  const [fpsBankName, setFpsBankName] = useState(PAYMENT_DEFAULTS.fpsBankName);
+  const [fpsAccountName, setFpsAccountName] = useState(PAYMENT_DEFAULTS.fpsAccountName);
+  const [fpsId, setFpsId] = useState(PAYMENT_DEFAULTS.fpsId);
+
+  // 2026-08-07 — Lazy-fetch the platform payment settings when the
+  // modal opens. Cheap single doc read; if it fails (network,
+  // permissions), we silently fall back to PAYMENT_DEFAULTS rather
+  // than blocking the modal with a scary error — couples can still
+  // submit a receipt, admin can re-verify banking text in the
+  // AdminPaymentSettings screen anyway.
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, PAYMENT_SETTINGS_DOC));
+        if (cancelled || !snap.exists()) return;
+        const d = snap.data();
+        if (d.paymeQrUrl !== undefined) setPaymeQrUrl(d.paymeQrUrl || null);
+        if (d.fpsQrUrl !== undefined) setFpsQrUrl(d.fpsQrUrl || null);
+        if (typeof d.fpsBankName === 'string') setFpsBankName(d.fpsBankName);
+        if (typeof d.fpsAccountName === 'string') setFpsAccountName(d.fpsAccountName);
+        if (typeof d.fpsId === 'string') setFpsId(d.fpsId);
+      } catch {
+        // Silent — defaults stay in place. Couples don't need an
+        // error toast for a config-loading failure.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -280,10 +342,26 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
                     <li>過數 <strong>HK${price}</strong> 到我們嘅 PayMe</li>
                     <li>上傳付款截圖畀我哋確認</li>
                   </ol>
+                  {/* 2026-08-07 — PayMe QR is now sourced from
+                      /platform/paymentSettings.paymeQrUrl (admin uploads
+                      it via AdminPaymentSettings). Falls back to a
+                      placeholder when the admin hasn't configured yet
+                      so the modal still renders. */}
                   <div className="bg-white rounded-lg p-3 mb-3 flex items-center justify-center">
                     <div className="text-center">
-                      <div className="w-32 h-32 bg-slate-100 border-2 border-slate-300 rounded-lg flex items-center justify-center mx-auto mb-1">
-                        <span className="text-xs text-slate-500">[PayMe QR]</span>
+                      <div className="w-32 h-32 bg-slate-100 border-2 border-slate-300 rounded-lg flex items-center justify-center mx-auto mb-1 overflow-hidden">
+                        {paymeQrUrl ? (
+                          <img
+                            src={paymeQrUrl}
+                            alt="PayMe QR"
+                            className="w-full h-full object-contain"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <span className="text-xs text-slate-500 px-2 text-center">
+                            PayMe QR 尚未設定<br/>(請聯絡管理員)
+                          </span>
+                        )}
                       </div>
                       <p className="text-xs text-slate-500">HK${price} · Save The Day</p>
                     </div>
@@ -300,12 +378,28 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
               {method === 'fps' && (
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4">
                   <p className="text-sm font-bold text-slate-700 mb-2">FPS 銀行轉帳：</p>
+                  {/* 2026-08-07 — FPS banking details sourced from
+                      /platform/paymentSettings.{fpsBankName,fpsAccountName,fpsId}.
+                      Falls back to PAYMENT_DEFAULTS so couples can
+                      always see something legible. */}
                   <div className="bg-white rounded-lg p-3 mb-3 text-sm space-y-1">
-                    <p><strong>銀行：</strong> HSBC 香港上海匯豐銀行</p>
-                    <p><strong>戶口名稱：</strong> Save The Day Limited</p>
-                    <p><strong>FPS ID：</strong> 168888888</p>
+                    <p><strong>銀行：</strong> {fpsBankName}</p>
+                    <p><strong>戶口名稱：</strong> {fpsAccountName}</p>
+                    <p><strong>FPS ID：</strong> {fpsId}</p>
                     <p><strong>金額：</strong> HK${price}</p>
                   </div>
+                  {/* FPS QR (optional — admin may configure it but
+                      doesn't have to). Renders inline if set. */}
+                  {fpsQrUrl && (
+                    <div className="bg-white rounded-lg p-3 mb-3 flex items-center justify-center">
+                      <img
+                        src={fpsQrUrl}
+                        alt="FPS QR"
+                        className="w-32 h-32 object-contain"
+                        loading="lazy"
+                      />
+                    </div>
+                  )}
                   <p className="text-xs text-slate-600 mb-3">
                     ⚠️ 過數完成後請上傳收據截圖
                   </p>

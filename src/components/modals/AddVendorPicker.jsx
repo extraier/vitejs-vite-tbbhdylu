@@ -28,6 +28,9 @@ export function AddVendorPicker({
   user,
   currentEvent,
   onOpenChat,
+  // 2026-08-07 — forwarded to PickExistingVendor → TrendingVendors
+  // so the 邀請查詢 CTA opens NotOnboardedEmailModal (parent state).
+  onVendorNotOnboarded,
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
 
@@ -128,6 +131,7 @@ export function AddVendorPicker({
           user={user}
           currentEvent={currentEvent}
           onOpenChat={onOpenChat}
+          onVendorNotOnboarded={onVendorNotOnboarded}
           onPick={(vendor) => {
             setSearchOpen(false);
             onPickExisting(vendor);

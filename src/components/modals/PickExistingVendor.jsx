@@ -45,6 +45,12 @@ export function PickExistingVendor({
   user,
   currentEvent,
   onOpenChat,
+  // 2026-08-07 — Couple-side "invite not-yet-onboarded vendor"
+  // callback. Forwarded to <TrendingVendors> so the 邀請查詢
+  // button opens NotOnboardedEmailModal (parent owns modal state).
+  // Without this the trending strip silently fell back to the
+  // broken openInquiry path which created empty inquiry docs.
+  onVendorNotOnboarded,
 }) {
   const [loading, setLoading] = useState(true);
   const [vendors, setVendors] = useState([]);
@@ -170,6 +176,7 @@ export function PickExistingVendor({
               user={user}
               currentEvent={currentEvent}
               onOpenChat={onOpenChat}
+              onVendorNotOnboarded={onVendorNotOnboarded}
             />
           </div>
         )}

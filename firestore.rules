@@ -64,6 +64,17 @@ match /{path=**}/events/{eventId} {
           allow create, update, delete: if isSignedIn() && request.auth.uid == ownerUid;
         }
 
+        // 2026-08-07 — collectionGroup FIX for vendorContacts.
+        // contactLink.tryAutoLinkContacts runs a collectionGroup query
+        // to find contacts across all owners; without this top-level
+        // rule the query fails with "Missing or insufficient permissions"
+        // even for signed-in users (the nested rule at line 645 only
+        // applies to per-doc get(), not collectionGroup). READ-only —
+        // per-doc write stays owner-scoped at the nested rule.
+        match /{path=**}/vendorContacts/{contactId} {
+          allow read: if isSignedIn();
+        }
+
 
     // ---- Helpers ---------------------------------------------------------
 
@@ -222,6 +233,25 @@ match /{path=**}/events/{eventId} {
     }
 
     match /artifacts/{appId} {
+
+      // 2026-08-07 — Platform-wide payment settings. Single doc at
+      // /platform/paymentSettings holds the PayMe QR URL + FPS bank
+      // details used by <PurchaseModal> when couples pay for
+      // Premium. Read is allowed for any signed-in user (couples
+      // need to see the QR they pay to). Write is admin-only.
+      //
+      // QR images themselves live in Firebase Storage at
+      // /platform/payment-settings/{payme|fps}.{ext} — see
+      // storage.rules for the read/write model there.
+      match /platform/paymentSettings {
+        allow read: if isSignedIn();
+        // Admin-only writes. We deliberately don't shape-validate
+        // field-by-field here because the admin client UI
+        // (AdminPaymentSettings) handles validation, and adding a
+        // 200-line allow expression for fields that won't change
+        // often is more brittle than the simple isAdmin() gate.
+        allow write: if isAdmin();
+      }
 
       // ---- Owner-scoped data --------------------------------------------
 

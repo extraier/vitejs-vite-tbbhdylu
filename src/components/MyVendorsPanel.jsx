@@ -51,6 +51,13 @@ export function MyVendorsPanel({
   user,
   currentEvent,
   onOpenChat,
+  // 2026-08-07 — Couple-side "invite not-yet-onboarded vendor"
+  // callback. Forwarded to AddVendorPicker → PickExistingVendor →
+  // TrendingVendors so the 邀請查詢 CTA opens NotOnboardedEmailModal.
+  // Lives at the panel level because that's the closest owner
+  // we have without lifting state further up; CoupleChecklist
+  // owns the modal state and passes a setter down through here.
+  onVendorNotOnboarded,
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
@@ -175,6 +182,7 @@ export function MyVendorsPanel({
           user={user}
           currentEvent={currentEvent}
           onOpenChat={onOpenChat}
+          onVendorNotOnboarded={onVendorNotOnboarded}
           onPickExisting={handlePickExisting}
           onAddCustom={handleAddCustom}
           onClose={() => setPickerOpen(false)}

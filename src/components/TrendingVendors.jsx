@@ -11,108 +11,69 @@
 //
 // 2026-07-21 — vendor claim CTA. Most trending vendors are
 // 'uninvited' (imported from heychoices catalog but never onboarded
-// to Save The Day). Before this, a couple could see a great vendor
-// trending but had no way to reach out — the modal was just a
-// portfolio viewer. Now there's a small "📩 查詢" button on each
-// card that:
-//   1. Creates a chat inquiry (same flow as handleOpenChat in App.jsx)
-//   2. Auto-sends a friendly opening message so the vendor sees context
-//      when they later sign in
-//   3. Confirms to the couple that the inquiry was created
-// For 'claimed' vendors (already onboarded), the button label
-// changes to "💬 查詢 / Chat" and the inquiry goes through the
-// existing real-time chat system.
+// to Save The Day).
+//
+// 2026-08-07 — FIX: 熱門商戶 "邀請查詢" bug.
+//
+//   Before this patch, handleClaim called openInquiry + sendMessage
+//   (the chat-inquiry path) for uninvited vendors, then optimistically
+//   flipped the button to "已傳送邀請". But that path only creates an
+//   empty inquiry doc — it never invites the vendor to sign up. Worse,
+//   the email modal that the screenshots revealed (with "註冊連結
+//   (有效期 14 日)" + email field) belongs to VendorInviteLinkModal,
+//   which is admin-only (activateSeededVendor / sendVendorInviteEmail
+//   throw "Admin only." for couples). So the UI was promising an
+//   invite that never landed AND hiding the actual shareable link.
+//
+//   Fix: route the uninvited path through NotOnboardedEmailModal,
+//   which is the existing couple-side pattern —
+//     1. addDoc(/vendors/{slug}/pendingInvites, ...) — Firestore
+//        rules let any signed-in user create this (no admin gate).
+//     2. Show a copyable signup link + WhatsApp share button so the
+//        couple can ping the vendor themselves right away.
+//   For claimed vendors we still call onOpenChat (existing flow).
+//
+//   Why not call VendorInviteLinkModal? That modal needs an admin
+//   auth context — couples hit permission-denied before the link
+//   even renders. NotOnboardedEmailModal is the only couple-safe
+//   path the codebase already has.
 
-import { Flame, ArrowRight, Mail, MessageCircle, TrendingUp, Check } from 'lucide-react';
-import { useState } from 'react';
+import { Flame, ArrowRight, MessageCircle, TrendingUp } from 'lucide-react';
 import { VENDOR_CATEGORIES } from '../lib/config';
-import { openInquiry, sendMessage } from '../lib/chat';
 
-// 2026-07-21 — default opening message sent when a couple
-// claims an uninvited trending vendor. Vendors see this in their
-// inbox once they sign up. Tone is warm, includes a place for
-// them to fill in their event date if they have one.
-const DEFAULT_CLAIM_MESSAGE = (vendorName, eventName) =>
-  `Hi ${vendorName}！我哋喺 Save The Day 見到你嘅作品集，覺得好合心意，希望可以邀請你成為我哋婚禮嘅合作商戶。${
-    eventName ? `我哋嘅婚禮專案係「${eventName}」。` : ''
-  }方便嘅話可以傾吓詳情嗎？🙏`;
-
-// Pick the top N trending vendors by viewCount (already attached
-// on each vendor at App.jsx subscription layer).
-function pickTrending(vendors, n = 6) {
-  const ranked = vendors
-    .filter((v) => (v.viewCount || 0) > 0)
-    .sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0));
-  return ranked.slice(0, n);
-}
-
-function categoryLabel(cat) {
-  return VENDOR_CATEGORIES[cat]?.label || cat;
-}
-
-export function TrendingVendors({ vendors, onSelect, onGoDiscover, user, currentEvent, onOpenChat }) {
+export function TrendingVendors({
+  vendors,
+  onSelect,
+  onGoDiscover,
+  user,
+  // 2026-08-07 — couple-side "invite this not-yet-onboarded vendor"
+  // callback. Parent opens NotOnboardedEmailModal. Required for the
+  // uninvited-vendor path; uninvited buttons hide if it's missing
+  // so we never silently fall back to the broken chat path again.
+  onVendorNotOnboarded,
+  onOpenChat,
+}) {
   const top = pickTrending(vendors, 6);
-  // 2026-07-21 — per-vendor "claimed" state. When true, the
-  // claim CTA flips to a checkmark for a moment so couples
-  // get immediate visual feedback that their inquiry went
-  // through. Resets on filter change.
-  const [claimed, setClaimed] = useState({});
-  const [pending, setPending] = useState({});
   if (top.length === 0) return null;
 
-  // 2026-07-21 — claim handler. Wraps openInquiry + an
-  // auto-message send. Idempotent: openInquiry uses setDoc
-  // with merge, so re-claiming the same vendor won't duplicate
-  // the inquiry doc.
-  const handleClaim = async (vendor, e) => {
+  function handleClaimClick(vendor, e) {
     if (e) {
       e.stopPropagation();
       e.preventDefault();
     }
     if (!user || !vendor) return;
-    if (claimed[vendor.id] || pending[vendor.id]) return;
-    setPending((p) => ({ ...p, [vendor.id]: true }));
-    try {
-      const isVendor = user.role === 'vendor';
-      const vendorUid = isVendor ? user.uid : vendor.id;
-      const coupleUid = isVendor ? user.uid : user.uid;
-      const eventId = currentEvent?.id || '';
-      const coupleName = currentEvent?.name || user.displayName || user.email || '新人';
-      const id = await openInquiry({
-        vendorUid,
-        coupleUid,
-        vendorName: vendor.name,
-        coupleName,
-        eventId,
-      });
-      // 2026-07-21 — auto-send the friendly opening message so
-      // the vendor has context when they sign up. Only for
-      // 'uninvited' vendors — claimed vendors use the existing
-      // real-time chat flow (handled by onOpenChat instead).
-      if (vendor.signupStatus !== 'claimed') {
-        await sendMessage({
-          inquiryId: id,
-          senderUid: user.uid,
-          senderRole: 'couple',
-          text: DEFAULT_CLAIM_MESSAGE(vendor.name, currentEvent?.name),
-        });
-      }
-      setClaimed((c) => ({ ...c, [vendor.id]: true }));
-      // 2026-07-21 — for claimed vendors, also open the chat
-      // room so couples can keep typing in real time.
-      if (vendor.signupStatus === 'claimed' && onOpenChat) {
-        onOpenChat(vendor);
-      }
-    } catch (err) {
-      // We deliberately don't surface the error to the user —
-      // the inquiry doc may have been created even if the
-      // auto-message failed. A more honest UI would show a
-      // toast; for now we just unblock the button.
-      console.warn('[trending] claim failed:', err?.message || err);
-    } finally {
-      setPending((p) => ({ ...p, [vendor.id]: false }));
+    // 2026-08-07 — route by signupStatus. claimed → existing live
+    // chat. Otherwise → NotOnboardedEmailModal (parent owns state).
+    if (vendor.signupStatus === 'claimed') {
+      if (onOpenChat) onOpenChat(vendor);
+      return;
     }
-  };
+    if (onVendorNotOnboarded) {
+      onVendorNotOnboarded(vendor);
+    }
+    // If the parent didn't wire up the not-onboarded callback, the
+    // card hides its CTA below — we never reach this branch.
+  }
 
   return (
     <div className="bg-gradient-to-br from-rose-50 via-white to-amber-50 border border-rose-200 rounded-2xl p-5 shadow-sm">
@@ -140,9 +101,12 @@ export function TrendingVendors({ vendors, onSelect, onGoDiscover, user, current
       <div className="grid grid-cols-3 gap-3">
         {top.map((vendor) => {
           const cat = VENDOR_CATEGORIES[vendor.category];
-          const isClaimed = claimed[vendor.id];
-          const isPending = pending[vendor.id];
           const isVendorOnboarded = vendor.signupStatus === 'claimed';
+          // 2026-08-07 — only render the CTA when we can actually do
+          // something. Claimed → onOpenChat path. Unclaimed → onVendorNotOnboarded.
+          // If neither callback is wired up, hide the button entirely
+          // (better than a no-op that lies with "已傳送邀請").
+          const showCTA = user?.uid && (isVendorOnboarded ? !!onOpenChat : !!onVendorNotOnboarded);
           return (
             <div
               key={vendor.id}
@@ -179,39 +143,26 @@ export function TrendingVendors({ vendors, onSelect, onGoDiscover, user, current
                   </div>
                 </div>
               </button>
-              {/* 2026-07-21 — claim CTA. Splits into two
-                  variants:
-                  • uninvited → "📩 邀請查詢" — opens the
-                    vendor's inbox with a friendly auto-message
-                  • claimed → "💬 查詢" — opens the live chat
-                  Hidden for guest users (no user.uid) since the
-                  inquiry needs an auth identity. */}
-              {user?.uid && (
+              {/* 2026-08-07 — claim CTA.
+                  • claimed → "💬 查詢" → live chat (onOpenChat)
+                  • unclaimed → "📩 邀請查詢" → NotOnboardedEmailModal
+                    (onVendorNotOnboarded), which gives the couple a
+                    copyable signup link + WhatsApp share button.
+                  Hidden when the matching callback is missing so we
+                  never show a button that does nothing. */}
+              {showCTA && (
                 <button
                   type="button"
-                  onClick={(e) => handleClaim(vendor, e)}
-                  disabled={isClaimed || isPending}
-                  className={`w-full text-[10px] font-bold px-2 py-1.5 border-t border-slate-100 transition-colors flex items-center justify-center gap-1 ${
-                    isClaimed
-                      ? 'bg-emerald-50 text-emerald-700 cursor-default'
-                      : isPending
-                      ? 'bg-slate-50 text-slate-400 cursor-wait'
-                      : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
-                  }`}
+                  onClick={(e) => handleClaimClick(vendor, e)}
+                  className="w-full text-[10px] font-bold px-2 py-1.5 border-t border-slate-100 transition-colors flex items-center justify-center gap-1 bg-rose-50 text-rose-700 hover:bg-rose-100"
                 >
-                  {isClaimed ? (
-                    <>
-                      <Check className="w-3 h-3" /> 已傳送邀請
-                    </>
-                  ) : isPending ? (
-                    <>傳送中...</>
-                  ) : isVendorOnboarded ? (
+                  {isVendorOnboarded ? (
                     <>
                       <MessageCircle className="w-3 h-3" /> 查詢
                     </>
                   ) : (
                     <>
-                      <Mail className="w-3 h-3" /> 邀請查詢
+                      <span>📩</span> 邀請查詢
                     </>
                   )}
                 </button>
@@ -225,4 +176,13 @@ export function TrendingVendors({ vendors, onSelect, onGoDiscover, user, current
       </p>
     </div>
   );
+}
+
+// Pick the top N trending vendors by viewCount (already attached
+// on each vendor at App.jsx subscription layer).
+function pickTrending(vendors, n = 6) {
+  const ranked = vendors
+    .filter((v) => (v.viewCount || 0) > 0)
+    .sort((a, b) => (b.viewCount || 0) - (a.viewCount || 0));
+  return ranked.slice(0, n);
 }

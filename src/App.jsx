@@ -87,6 +87,7 @@ import { AdminUsers } from './screens/AdminUsers';
 import { AdminQueue } from './screens/AdminQueue';
 import { AdminVendors } from './screens/AdminVendors';
 import { AdminImportVendors } from './screens/AdminImportVendors';
+import { AdminPaymentSettings } from './screens/AdminPaymentSettings';
 import { VendorOnboarding } from './screens/VendorOnboarding';
 import { VendorDashboard } from './screens/VendorDashboard';
 import { VendorProfileEdit } from './screens/VendorProfileEdit';
@@ -118,6 +119,7 @@ import { MyVendorsPanel } from './components/MyVendorsPanel';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { InviteModal } from './components/modals/InviteModal';
 import { HelperManager } from './components/modals/HelperManager';
+import { NotOnboardedEmailModal } from './components/modals/NotOnboardedEmailModal';
 import { HelperWaitingScreen } from './screens/HelperWaitingScreen';
 import { ScanResultModal } from './components/modals/ScanResultModal';
 import { FullscreenSlideshow } from './components/modals/FullscreenSlideshow';
@@ -789,6 +791,15 @@ export default function App() {
   // clear (onboarding nudge, not re-invite).
   const [coupleInvitingVendor, setCoupleInvitingVendor] = useState(null);
   const [viewingQrCode, setViewingQrCode] = useState(null);
+  // 2026-08-07 — Couple-side "invite not-yet-onboarded vendor" state.
+  // TrendingVendors strips mounted inside MyVendorsPanel → AddVendorPicker
+  // → PickExistingVendor call onVendorNotOnboarded(vendor) when a couple
+  // taps 邀請查詢 on an unclaimed trending card. App.jsx owns the
+  // state so the same modal can be opened from multiple surfaces
+  // (catalog picker on the checklist, plus the EventsDashboard which
+  // owns its own copy). Lifting here means the catalog-picker path
+  // doesn't need to thread state through 3 nested components.
+  const [notOnboardedVendor, setNotOnboardedVendor] = useState(null);
   // 2026-08-01 (pivot) — event-level settings modal. Stores the
   // selected event so the modal can mount with the right scope.
   // null = closed. The CF (updateOwnerNames) accepts both the
@@ -2512,13 +2523,15 @@ export default function App() {
     });
   };
 
-  const upgradeToPremium = async () => {
-    if (!user || !currentEvent) return;
-    const eventRef = doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id);
-    await updateDoc(eventRef, { tier: 'premium' });
-    setShowUpgradeModal(false);
-    showToast('👑 已成功升級至 Premium！無限容量已開啟。');
-  };
+  // 2026-08-07 — DELETED upgradeToPremium. It used to write
+  // tier:'premium' directly to Firestore when the couple tapped
+  // 立即付款 HK$99 解鎖 in UpgradeModal — no payment, just an
+  // immediate "已成功升級至 Premium" toast. Couples got premium
+  // for free. UpgradeModal's onConfirm now opens <PurchaseModal>
+  // instead, which goes through the real payment path
+  // (PayMe/FPS receipt → submitPaymentReceipt → adminVerifyPayment
+  // → grantUnlock). See src/App.jsx around line 3322 (the
+  // <UpgradeModal> mount) for the new wiring.
 
   // Photo upload — uploads to NAS via Tailscale Funnel (replaces Firebase
   // Storage to avoid Firebase egress/storage charges). After the upload
@@ -2951,7 +2964,8 @@ export default function App() {
             target === 'vendor-analytics' ||
             target === 'admin-users' ||
             target === 'admin-vendors' ||
-            target === 'admin-queue'
+            target === 'admin-queue' ||
+            target === 'admin-payment-settings'
           ) {
             // Stay in owner role; just swap the view. Clear any guest-portal
             // overlay so the admin screen has the full header / tab area.
@@ -3358,6 +3372,15 @@ export default function App() {
                         otherName: vendor.name,
                       })
                     }
+                    // 2026-08-07 — Couple-side "invite not-yet-onboarded
+                    // vendor" callback. Forwards through
+                    // MyVendorsPanel → AddVendorPicker →
+                    // PickExistingVendor → TrendingVendors so the
+                    // 邀請查詢 CTA inside the catalog picker opens
+                    // NotOnboardedEmailModal. App.jsx owns the
+                    // modal state since the modal can also be
+                    // opened from elsewhere on the screen.
+                    onVendorNotOnboarded={setNotOnboardedVendor}
                   />
                 }
                 vendorContacts={vendorContacts}
@@ -3431,6 +3454,14 @@ export default function App() {
                 isAdmin={isAdmin}
                 onBack={() => setCurrentView('admin-vendors')}
               />
+            )}
+
+            {/* 2026-08-07 — Admin payment settings (PayMe QR + FPS
+                banking). Mounted as a top-level admin screen so it
+                gets the full header / tab area. Reached via the
+                RoleSimulator "💳 收款設定" pill. */}
+            {isAdmin && currentView === 'admin-payment-settings' && (
+              <AdminPaymentSettings user={user} isAdmin={isAdmin} />
             )}
 
             {(userRole === 'owner' || userRole === 'reception') &&
@@ -3692,7 +3723,28 @@ export default function App() {
       <UpgradeModal
         isOpen={showUpgradeModal}
         onClose={() => setShowUpgradeModal(false)}
-        onConfirm={upgradeToPremium}
+        // 2026-08-07 — 立即付款 HK$99 解鎖 used to call
+        // upgradeToPremium() which wrote tier:'premium' to
+        // Firestore DIRECTLY without any payment. That's why
+        // tapping it closed the modal and immediately toasted
+        // "已成功升級至 Premium！無限容量已開啟。". Couples
+        // got premium without paying anything.
+        //
+        // Fix: the same "升級 Premium" entry point now opens
+        // <PurchaseModal>, which is the fully-built payment
+        // surface (Stripe / PayMe / FPS + receipt screenshot →
+        // submitPaymentReceipt CF → adminVerifyPayment →
+        // grantUnlock). The receipt starts as 'pending' and is
+        // granted only after admin reviews the PayMe/FPS
+        // screenshot — matching the existing unlocks flow.
+        //
+        // Locked types aren't passed (undefined → defaults to
+        // []), which makes PurchaseModal default to the 'premium'
+        // option at $99 — exactly what UpgradeModal promised.
+        onConfirm={() => {
+          setShowUpgradeModal(false);
+          setPurchaseModalOpen(true);
+        }}
       />
       <PurchaseModal
         isOpen={purchaseModalOpen}
@@ -3831,6 +3883,21 @@ export default function App() {
           }}
           onClose={() => setCoupleInvitingVendor(null)}
           title={`邀請 ${coupleInvitingVendor.name || coupleInvitingVendor.id} 上線`}
+        />
+      )}
+      {/* 2026-08-07 — "invite not-yet-onboarded vendor" modal. Opened
+          by TrendingVendors strips inside MyVendorsPanel →
+          AddVendorPicker → PickExistingVendor when the couple taps
+          邀請查詢 on an unclaimed card. NotOnboardedEmailModal
+          writes /vendors/{slug}/pendingInvites via Firestore rules
+          (no admin gate) and gives the couple a copyable signup
+          link + WhatsApp share button so they can ping the vendor
+          themselves right away. The EventsDashboard owns its own
+          copy of this state (same modal pattern, different surface). */}
+      {notOnboardedVendor && (
+        <NotOnboardedEmailModal
+          vendor={notOnboardedVendor}
+          onClose={() => setNotOnboardedVendor(null)}
         />
       )}
       {/* 2026-07-24 — only mount FullscreenSlideshow when isFullscreen

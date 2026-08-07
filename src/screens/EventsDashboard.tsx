@@ -6,6 +6,7 @@ import { ReferralModal } from '../components/modals/ReferralModal';
 import { SocialProofModal } from '../components/modals/SocialProofModal';
 import { EventRenameModal } from '../components/modals/EventRenameModal';
 import { EventDeleteModal } from '../components/modals/EventDeleteModal';
+import { NotOnboardedEmailModal } from '../components/modals/NotOnboardedEmailModal';
 import { useUserProfile } from '../hooks/useUserProfile';
 import { useState, useEffect, useRef } from 'react';
 
@@ -90,6 +91,12 @@ export function EventsDashboard({
   // with a stable snapshot of the event including its name.
   const [renameTarget, setRenameTarget] = useState<any | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  // 2026-08-07 — TrendingVendors "邀請查詢" handler. Owned at the
+  // dashboard level so the existing NotOnboardedEmailModal (which
+  // writes /vendors/{slug}/pendingInvites via Firestore rules — no
+  // admin gate) can open over the trending strip. Same pattern as
+  // CoupleChecklist.jsx:441.
+  const [notOnboardedVendor, setNotOnboardedVendor] = useState<any | null>(null);
 
 
 
@@ -194,6 +201,7 @@ export function EventsDashboard({
           user={user}
           currentEvent={currentEvent}
           onOpenChat={onOpenChat}
+          onVendorNotOnboarded={setNotOnboardedVendor}
         />
       </div>
 
@@ -285,6 +293,18 @@ export function EventsDashboard({
                 : '🗑️ 婚禮專案已移到垃圾桶。',
             );
           }}
+        />
+      )}
+
+      {/* 2026-08-07 — Couple-side "invite not-onboarded vendor" modal.
+          Mounted at dashboard root so the trending strip's 邀請查詢
+          button can open it. Mirrors CoupleChecklist's pattern at
+          src/screens/CoupleChecklist.jsx:756. State lives at
+          line 92 (notOnboardedVendor / setNotOnboardedVendor). */}
+      {notOnboardedVendor && (
+        <NotOnboardedEmailModal
+          vendor={notOnboardedVendor}
+          onClose={() => setNotOnboardedVendor(null)}
         />
       )}
     </div>
