@@ -99,6 +99,39 @@ match /{path=**}/events/{eventId} {
           );
         }
 
+        // 2026-08-09 — collectionGroup FIX for task comments. The
+        // useNotifications hook in the header bell aggregates EVERY
+        // helper/vendor comment across EVERY event into a single
+        // bell feed. Without this top-level rule the collectionGroup
+        // query fails with "Missing or insufficient permissions" even
+        // for the owner (the nested rule at line 447 only applies to
+        // per-doc get(), not collectionGroup). Mirrors the tasks/
+        // pattern above. We can't enumerate "all owners" from a
+        // collectionGroup rule, so the safe read pattern is to gate
+        // on authorRole == 'vendor' (and assignedVendorUid matches),
+        // OR authorRole == 'helper' (and assignedHelperUid matches).
+        // The owner's own per-event subscription covers her own reads.
+        match /{path=**}/comments/{commentId} {
+          allow read: if isSignedIn() && (
+            (resource.data.authorRole == 'vendor' &&
+              resource.data.assignedVendorUid == request.auth.uid)
+            || (resource.data.authorRole == 'helper' &&
+              resource.data.assignedHelperUid == request.auth.uid)
+          );
+        }
+
+        // 2026-08-09 — collectionGroup FIX for task status updates.
+        // Same rationale as the comments rule above. statusUpdates is
+        // a sibling subcollection to comments under each task.
+        match /{path=**}/statusUpdates/{updateId} {
+          allow read: if isSignedIn() && (
+            (resource.data.authorRole == 'vendor' &&
+              resource.data.assignedVendorUid == request.auth.uid)
+            || (resource.data.authorRole == 'helper' &&
+              resource.data.assignedHelperUid == request.auth.uid)
+          );
+        }
+
 
     // ---- Helpers ---------------------------------------------------------
 

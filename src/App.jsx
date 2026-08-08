@@ -815,6 +815,12 @@ export default function App() {
   const [eventSettingsTarget, setEventSettingsTarget] = useState(null);
   const [viewingProposals, setViewingProposals] = useState(null);
 
+  // 2026-08-09 — bell notification deep-link. When the owner clicks
+  // a comment/status notification, we set this so the checklist view
+  // can scroll to the right task and open its comments panel. Cleared
+  // by the checklist view on mount (or by the next click).
+  const [focusedTaskId, setFocusedTaskId] = useState(null);
+
   // 2026-08-01 — sync the new 'event-settings' tab to the modal state.
   // When the owner clicks the ⚙️ 婚禮設定 tab (added in tabs.ts), we
   // mirror currentView into eventSettingsTarget so the existing
@@ -3161,11 +3167,30 @@ export default function App() {
                         couple sees "you have new stuff" at a glance. */}
                     {userRole === 'owner' && (
                       <BellNotifications
-                        jobs={liveJobRequests || []}
                         ownerUid={dataOwnerUid}
                         coupleUid={user?.uid}
+                        selfUid={user?.uid}
                         onOpenProposal={(jobId) => setViewingProposals(jobId)}
-                        onOpenBoard={() => setCurrentView('couple-jobboard')}
+                        onOpenComment={(meta) => {
+                          // 2026-08-09 — bell notification click: scroll
+                          // to the comment's task. Sets the focused task
+                          // so the checklist view + TaskComments component
+                          // both open at the right row.
+                          if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                            setCurrentEvent({ id: meta.eventId });
+                          }
+                          setFocusedTaskId(meta?.taskId || null);
+                          setCurrentView('couple-checklist');
+                        }}
+                        onOpenStatus={(meta) => {
+                          if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                            setCurrentEvent({ id: meta.eventId });
+                          }
+                          setFocusedTaskId(meta?.taskId || null);
+                          setCurrentView('couple-checklist');
+                        }}
+                        onOpenInvite={() => setCurrentView('helpers')}
+                        onOpenDashboard={() => setCurrentView('events-dashboard')}
                       />
                     )}
                     {(userRole === 'owner' || userRole === 'vendor') && (
