@@ -1,4 +1,4 @@
-import { MessageSquare, Star, X, Loader2 } from 'lucide-react';
+import { MessageSquare, Star, X, Loader2, MessageCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
@@ -17,15 +17,34 @@ import { db } from '../../lib/firebase';
 // coupleUid at query level so couples can only see their own job's
 // proposals (defense in depth — rules enforce it; query hardens it).
 //
-// Loading skeleton + empty state preserved from the previous UX.
+// 2026-08-08 — added "💬 開始對話" button on each proposal card.
+// Calls onOpenChat({otherUid, otherName, eventId=jobId}) so the
+// couple can jump directly to the chat thread with the vendor
+// who proposed. We also pass eventId through so the chat room
+// has the right context.
+//
+// 2026-08-08 — marks the job as "seen" in localStorage on mount so
+// the 🔔 indicator on CoupleJobBoard.jsx goes away. Per-job key
+// `lastSeenProposalsAt_<jobId>`.
 
-export function ProposalsModal({ jobId, coupleUid, onClose }) {
+const SEEN_KEY = (jobId) => `lastSeenProposalsAt_${jobId}`;
+
+export function ProposalsModal({ jobId, coupleUid, onClose, onOpenChat }) {
   if (!jobId) return null;
   const [proposals, setProposals] = useState(null); // null = loading, [] = empty
   const [error, setError] = useState(null);
 
   useEffect(() => {
     if (!jobId) return undefined;
+    // Mark as seen immediately when the modal opens — couples may
+    // not read every proposal but the act of opening means they've
+    // been notified. The 🔔 hides until a NEW proposal arrives.
+    try {
+      window.localStorage.setItem(SEEN_KEY(jobId), String(Date.now()));
+    } catch {
+      // localStorage may be unavailable (private mode); non-fatal.
+    }
+
     let cancelled = false;
     setProposals(null);
     setError(null);
@@ -54,6 +73,7 @@ export function ProposalsModal({ jobId, coupleUid, onClose }) {
             const data = d.data();
             return {
               id: d.id,
+              vendorUid: data.vendorUid || '',
               vendorName: data.vendorName || '商戶',
               rating: typeof data.rating === 'number' ? data.rating : 0,
               price: data.price || '',
@@ -138,6 +158,23 @@ export function ProposalsModal({ jobId, coupleUid, onClose }) {
                 <p className="text-sm text-slate-700 leading-relaxed bg-white p-3 rounded-lg border border-slate-100 whitespace-pre-wrap">
                   {p.message}
                 </p>
+                {onOpenChat && p.vendorUid && (
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      onClick={() => {
+                        onOpenChat({
+                          otherUid: p.vendorUid,
+                          otherName: p.vendorName,
+                          eventId: jobId,
+                        });
+                      }}
+                      className="inline-flex items-center gap-1.5 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 px-4 py-2 rounded-lg transition-colors"
+                    >
+                      <MessageCircle className="w-4 h-4" />
+                      同 {p.vendorName} 開始對話
+                    </button>
+                  </div>
+                )}
               </div>
             ))
           )}

@@ -3922,6 +3922,14 @@ export default function App() {
         jobId={viewingProposals}
         coupleUid={user?.uid}
         onClose={() => setViewingProposals(null)}
+        onOpenChat={async (payload) => {
+          // 2026-08-08 — couple nudges from a proposal card
+          // straight into the chat thread with the vendor.
+          // Close the modal first so the chat room mounts
+          // cleanly on top.
+          setViewingProposals(null);
+          await handleOpenChat(payload);
+        }}
       />
       <SubmitProposalModal
         job={proposalJob}

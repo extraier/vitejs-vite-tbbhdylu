@@ -185,7 +185,7 @@ export const postJobRequest = onCall(
  *     the in-memory jobRequests array. The vendor sees the toast as
  *     before; the couple sees real proposalsCount + real proposals.
  */
-export const submitProposalV2 = onCall(
+export const submitProposal = onCall(
   { cors: true, region: 'us-central1' },
   async (req) => {
     if (!req.auth) {
