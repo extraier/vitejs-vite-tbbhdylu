@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { getVendorCategoryLabel } from '../lib/config';
 import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
+import { formatBudgetString } from '../lib/format';
 import { TaskComments } from '../components/TaskComments';
 import { VendorPortfolioAnalytics } from '../components/VendorPortfolioAnalytics';
 import { VendorInquiriesPanel } from '../components/VendorInquiriesPanel';
@@ -459,7 +460,7 @@ export function VendorDashboard({
                   <span className="text-slate-500 flex items-center gap-1.5">
                     <DollarSign className="w-4 h-4" /> 預算
                   </span>
-                  <strong className="text-rose-600">{job.budget}</strong>
+                  <strong className="text-rose-600">{formatBudgetString(job.budget)}</strong>
                 </div>
                 <div className="text-sm text-slate-700 mt-3 pt-3 border-t border-slate-200 leading-relaxed">
                   <span className="text-slate-400 block mb-1 text-xs">詳細要求：</span>

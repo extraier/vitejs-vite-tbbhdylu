@@ -1,5 +1,6 @@
 import { AlertCircle, Send } from 'lucide-react';
 import { TASK_CATEGORIES } from '../lib/config';
+import { formatBudgetString } from '../lib/format';
 
 export function CoupleJobBoard({
   jobRequests,
@@ -86,7 +87,7 @@ export function CoupleJobBoard({
                 {job.serviceNeeded}
               </h4>
               <p className="text-sm text-slate-500 mt-1">
-                預算: <span className="font-bold text-slate-700">{job.budget}</span>
+                預算: <span className="font-bold text-slate-700">{formatBudgetString(job.budget)}</span>
               </p>
             </div>
             <div className="text-right">

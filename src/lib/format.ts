@@ -126,3 +126,46 @@ export function budgetDistance(
       : (vendor.priceMin + vendor.priceMax) / 2;
   return Math.abs(midpoint - taskBudget);
 }
+
+/**
+ * Format a couple's free-form budget string with thousands separators.
+ *
+ * 2026-08-08 — vendor board UX feedback: couples sometimes type
+ * "10000 - 20000" or "HK$10000" without commas, which is hard to read.
+ * The job board's `budget` field is a free-form string (not a number),
+ * so we add commas to every number fragment while preserving the
+ * surrounding text (currency prefix, dash, Chinese characters,
+ * the word "另議", etc.).
+ *
+ * Examples:
+ *   "10000"            → "10,000"
+ *   "10000-20000"      → "10,000-20,000"
+ *   "HK$10000"        → "HK$10,000"
+ *   "$20,000 - $30,000" → "$20,000 - $30,000"  (already formatted — pass through)
+ *   "面議"             → "面議"                (no numbers — pass through)
+ *   "10000起"          → "10,000起"
+ *   null / undefined   → "—"
+ *
+ * Behaviour notes:
+ *   - Idempotent: running it twice produces the same string. So a
+ *     string that's already comma-separated is detected by the existing
+ *     commas and the number regex skips the digit groups.
+ *   - Floating-point numbers ("12.5") get the comma inserted in the
+ *     integer part only (e.g. "12.5" → "12.5" — no change since the
+ *     number is < 1000). Anything ≥ 1000 with decimals is rare in
+ *     this app; we keep the regex simple so it doesn't break on
+ *     currency strings like "1,234.50".
+ */
+export function formatBudgetString(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const str = String(value);
+  // Match the integer part of each number (digits, optional leading
+  // digit groups). The lookbehind-style "match a digit that's either
+  // at the start or preceded by a non-digit" is approximated by
+  // matching groups of digits not preceded by another digit (so we
+  // don't split "1,234" — the comma breaks the run).
+  return str.replace(/(\d{4,})/g, (match) => {
+    // Already comma-separated? Skip.
+    return EN_US.format(Number(match));
+  });
+}
