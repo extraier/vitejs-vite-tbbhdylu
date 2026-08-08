@@ -3163,7 +3163,7 @@ export default function App() {
                       <BellNotifications
                         jobs={liveJobRequests || []}
                         ownerUid={dataOwnerUid}
-                        onOpenBoard={() => setCurrentView('couple-job-board')}
+                        onOpenBoard={() => setCurrentView('couple-jobboard')}
                       />
                     )}
                     {(userRole === 'owner' || userRole === 'vendor') && (
