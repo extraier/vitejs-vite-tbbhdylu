@@ -18,11 +18,15 @@
 // Behavior:
 //   - Sets sessionStorage.postLoginIntent = 'vendor-onboarding' on mount
 //     so App.jsx auto-routes to the wizard after successful sign-up.
-//   - Validates password length (≥8 chars) and non-empty business name.
+//   - Validates password with the same rules as LoginScreen signup
+//     (length + 3-of-4 categories + no email substring + not on the
+//     top-20 common list) AND requires the user to type the password
+//     twice. 2026-08-08 — aligned with the regular signup flow.
 //   - Translates Firebase auth error codes into Chinese error messages.
 
 import { useEffect, useState } from 'react';
 import { Briefcase, Mail, Lock, Loader2, Globe } from 'lucide-react';
+import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
 
 const STRINGS = {
   zh: {
@@ -32,13 +36,17 @@ const STRINGS = {
     nameLabel: '商戶名稱 / 工作室名',
     namePlaceholder: '例：ABC Wedding Studio',
     emailPlaceholder: '電郵地址',
-    passwordPlaceholder: '設定密碼（至少 8 個字元）',
+    passwordPlaceholder: '設定密碼 (至少 8 字元，至少 3 種字元)',
+    confirmPasswordPlaceholder: '再次輸入密碼',
+    confirmMatch: '✓ 一致',
+    confirmNoMatch: '✗ 唔一致',
     googleCta: '使用 Google 帳號註冊',
     submitCta: '建立商戶帳號並繼續',
     backLink: '← 我係新人，返回登入',
     busy: '處理中...',
     errEmpty: '請填寫商戶名稱、電郵同密碼',
-    errPasswordShort: '密碼至少需要 8 個字元',
+    errPasswordMismatch: '兩次輸入嘅密碼唔一致',
+    errPasswordRules: '密碼強度不足：請檢查下方規則',
     errNameMissing: '請輸入商戶名稱',
     errEmailInUse: '此電郵已被註冊，請改用登入模式',
     errWeakPassword: '密碼強度不足，請用 8 個字元以上',
@@ -53,13 +61,17 @@ const STRINGS = {
     nameLabel: 'Business name',
     namePlaceholder: 'e.g. ABC Wedding Studio',
     emailPlaceholder: 'Email address',
-    passwordPlaceholder: 'Choose a password (min 8 chars)',
+    passwordPlaceholder: 'Min 8 chars, 3 of 4 categories',
+    confirmPasswordPlaceholder: 'Confirm password',
+    confirmMatch: '✓ Match',
+    confirmNoMatch: '✗ No match',
     googleCta: 'Sign up with Google',
     submitCta: 'Create vendor account & continue',
     backLink: "← I'm a couple — back to sign in",
     busy: 'Working...',
     errEmpty: 'Please fill in your business name, email and password',
-    errPasswordShort: 'Password must be at least 8 characters',
+    errPasswordMismatch: 'Passwords do not match',
+    errPasswordRules: 'Password does not meet the rules below',
     errNameMissing: 'Please enter your business name',
     errEmailInUse: 'This email is already registered. Try signing in instead.',
     errWeakPassword: 'Password too weak — use 8+ characters',
@@ -75,6 +87,7 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -105,12 +118,23 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
-    if (!displayName.trim() || !email || !password) {
+    if (!displayName.trim() || !email || !password || !confirmPassword) {
       setError(t.errEmpty);
       return;
     }
-    if (password.length < 8) {
-      setError(t.errPasswordShort);
+    // 2026-08-08 — aligned with LoginScreen signup mode: full
+    // passwordValidation rules (length + 3-of-4 categories + no email
+    // substring + not on the top-20 common list) instead of the
+    // legacy "min 8 chars" check. The inline rules checklist below
+    // the inputs surfaces each rule in real time so users see what's
+    // failing before they hit submit.
+    const pwdEval = evaluatePassword(password, email);
+    if (!pwdEval.isValid) {
+      setError(t.errPasswordRules);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError(t.errPasswordMismatch);
       return;
     }
     setBusy(true);
@@ -252,11 +276,64 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={busy}
-                  minLength={8}
                   className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 disabled:opacity-50"
                 />
               </div>
             </div>
+
+            {/* 2026-08-08 — confirm password + live complexity checklist,
+                mirroring the LoginScreen signup-mode UX. The type-twice
+                pattern prevents typos at signup; the inline rule
+                checklist replaces the legacy minLength=8 hint that
+                'password' slipped past. */}
+            <div>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="password"
+                  required
+                  autoComplete="new-password"
+                  placeholder={t.confirmPasswordPlaceholder}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  disabled={busy}
+                  className={`w-full pl-11 pr-20 py-3 bg-slate-50 border rounded-xl text-sm outline-none focus:ring-2 disabled:opacity-50 ${
+                    confirmPassword && confirmPassword === password
+                      ? 'border-emerald-300 focus:ring-emerald-400 focus:border-emerald-400'
+                      : confirmPassword && confirmPassword !== password
+                      ? 'border-rose-300 focus:ring-rose-400 focus:border-rose-400'
+                      : 'border-slate-200 focus:ring-emerald-400 focus:border-emerald-400'
+                  }`}
+                />
+                {confirmPassword && (
+                  <span className={`absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold ${
+                    confirmPassword === password ? 'text-emerald-600' : 'text-rose-500'
+                  }`}>
+                    {confirmPassword === password ? t.confirmMatch : t.confirmNoMatch}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {password && (
+              <ul className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-left space-y-1">
+                {PASSWORD_RULES.map((rule) => {
+                  const pwdEval = evaluatePassword(password, email);
+                  const ok = pwdEval.checks[rule.key];
+                  return (
+                    <li
+                      key={rule.key}
+                      className={`text-[11px] flex items-start gap-1.5 ${
+                        ok ? 'text-emerald-700' : 'text-slate-500'
+                      }`}
+                    >
+                      <span className="flex-shrink-0 font-bold">{ok ? '✓' : '○'}</span>
+                      <span>{lang === 'zh' ? rule.label_zh : rule.label_en}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
 
             {error && (
               <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold px-3 py-2 rounded-lg text-left">
