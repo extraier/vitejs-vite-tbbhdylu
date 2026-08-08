@@ -16,6 +16,15 @@
         { "fieldPath": "scannedAt", "order": "DESCENDING" },
         { "fieldPath": "__name__", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "vendorImageViews",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "vendorSlug", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" },
+        { "fieldPath": "__name__", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [
@@ -29,6 +38,13 @@
     {
       "collectionGroup": "vendorContacts",
       "fieldPath": "vendorEmail",
+      "indexes": [
+        { "queryScope": "COLLECTION_GROUP", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tasks",
+      "fieldPath": "assignedVendorUid",
       "indexes": [
         { "queryScope": "COLLECTION_GROUP", "order": "ASCENDING" }
       ]
