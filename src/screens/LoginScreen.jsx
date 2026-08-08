@@ -502,10 +502,22 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           >
             <span className="flex items-center gap-2">
               <Briefcase className="w-4 h-4" />
-              <span>{lang === 'zh' ? '我是商戶 / 申請加入' : 'I\'m a Vendor — Apply'}</span>
+              <span>{lang === 'zh' ? '我是商戶 — 申請加入' : "I'm a Vendor — Apply to Join"}</span>
             </span>
             <span className="text-emerald-600">→</span>
           </a>
+          {/* 2026-08-08 — clarify for existing vendors. The email/password
+              form above already works for vendors who have an account; this
+              CTA is for *new* vendor signup only. Vendors who tapped the
+              original 'I'm a Vendor / 申請加入' expecting it to also log
+              them in landed in signup, then reported being 'confused where
+              to login'. Added the hint below so the form above is the
+              obvious path for existing accounts. */}
+          <p className="mt-2 text-[11px] text-slate-500 text-center leading-snug">
+            {lang === 'zh'
+              ? '已有商戶帳號?請用上面 email + 密碼 直接登入。'
+              : 'Already a vendor? Sign in above with your email + password.'}
+          </p>
         </div>
 
         {/* Features row — three core value props */}

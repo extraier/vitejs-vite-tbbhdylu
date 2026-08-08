@@ -75,6 +75,30 @@ match /{path=**}/events/{eventId} {
           allow read: if isSignedIn();
         }
 
+        // 2026-08-08 — collectionGroup FIX for tasks. VendorDashboard's
+        // `assignedTasks` subscription in App.jsx:1173 runs
+        // collectionGroup(db,'tasks').where('assignedVendorUid','==',uid)
+        // to find every task across every owner where the current user
+        // is the assigned vendor. Without this top-level rule the
+        // snapshot errors with "Missing or insufficient permissions" on
+        // every vendor login. Mirrors the vendorContacts pattern above
+        // (per-doc write stays owner-scoped at the nested rule).
+        //
+        // Read filter mirrors the per-event rule at line 399:
+        //   owner / co-owner read everything;
+        //   assigned vendor reads only their own;
+        //   assigned helper reads only their own.
+        // We can't enumerate "all owners" from a collectionGroup rule,
+        // so the only safe read pattern is to gate on
+        // assignedVendorUid / assignedHelperUid matching the caller.
+        // The owner's own per-event subscription covers their reads.
+        match /{path=**}/tasks/{taskId} {
+          allow read: if isSignedIn() && (
+            request.auth.uid == resource.data.assignedVendorUid
+            || request.auth.uid == resource.data.assignedHelperUid
+          );
+        }
+
 
     // ---- Helpers ---------------------------------------------------------
 

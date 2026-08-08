@@ -46,6 +46,7 @@ import {
   signInWithCustomToken,
   signOut,
   updatePassword,
+  updateProfile,
 } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '../lib/firebase';
