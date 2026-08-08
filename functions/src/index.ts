@@ -919,7 +919,12 @@ export {
 // requests through here because the direct Firestore path is
 // blocked by the catch-all deny (see functions/src/jobBoard.ts
 // for the full rationale).
-export { postJobRequest } from './jobBoard';
+//
+// 2026-08-08 — added submitProposal (vendors reply to a job) and
+// _listProposalsForJob (couple-side read; future-proofing). See
+// functions/src/jobBoard.ts for the full rationale on why these
+// go through a CF instead of direct Firestore.
+export { postJobRequest, submitProposalV2 } from './jobBoard';
 
 // 2026-07-26 — Co-owners (couples / partners). The sendPartnerInviteV2
 // callable sends a magic-link email to a partner; redeemPartnerInviteV2

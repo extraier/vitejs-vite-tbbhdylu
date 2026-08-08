@@ -38,8 +38,6 @@ import {
   DEFAULT_VENDORS,
   FREE_TIER_LIMIT_MB,
   INITIAL_JOB_REQUESTS,
-  MOCK_PROPOSALS,
-  TASK_CATEGORIES,
   getTaskCategoryLabel,
 } from './lib/config';
 import { parseGuestParams } from './lib/guestMode';
@@ -117,6 +115,7 @@ import { VendorModal } from './components/modals/VendorModal';
 import { VendorInviteLinkModal } from './components/modals/VendorInviteLinkModal';
 import { MyVendorsPanel } from './components/MyVendorsPanel';
 import { ProposalsModal } from './components/modals/ProposalsModal';
+import { SubmitProposalModal } from './components/modals/SubmitProposalModal';
 import { InviteModal } from './components/modals/InviteModal';
 import { HelperManager } from './components/modals/HelperManager';
 import { NotOnboardedEmailModal } from './components/modals/NotOnboardedEmailModal';
@@ -692,7 +691,12 @@ export default function App() {
   }, [vendorsStatic, vendorsLive]);
   const [discoverFilter, setDiscoverFilter] = useState('all');
   const [jobRequests, setJobRequests] = useState(INITIAL_JOB_REQUESTS);
-  const [proposalsData, setProposalsData] = useState(MOCK_PROPOSALS);
+  // 2026-08-08 — proposals removed from in-memory React state.
+  // Proposals now live in Firestore (/proposals). The vendor's submitProposal
+  // opens <SubmitProposalModal/> which calls the submitProposal CF; the couple's
+  // <ProposalsModal/> reads its own /proposals via onSnapshot. The previous
+  // `proposalsData` (backed by MOCK_PROPOSALS) was the cause of the
+  // "vendor sends proposal → couple sees nothing" bug.
 
   // Forms
   const [newEventName, setNewEventName] = useState('');
@@ -2801,20 +2805,19 @@ export default function App() {
     await deleteDoc(photoRef);
   };
 
+  // 2026-08-08 — submitProposal: vendor opens the proposal
+  // composer modal. The actual write to Firestore happens via the
+  // submitProposal Cloud Function, called from inside
+  // <SubmitProposalModal/>. The previous implementation only mutated
+  // in-memory React state — couple never saw anything.
+  const [proposalJob, setProposalJob] = useState(null); // {id, serviceNeeded, ...}
   const submitProposal = (jobId) => {
-    setJobRequests(
-      jobRequests.map((j) =>
-        j.id === jobId ? { ...j, proposalsCount: j.proposalsCount + 1 } : j,
-      ),
-    );
-    setProposalsData((prev) => ({
-      ...prev,
-      [jobId]: [
-        { id: Date.now().toString(), vendorName: 'Visionary Capture', rating: 4.9, price: '待定', message: '商戶已發送初步報價，請聯絡商戶了解詳情。', date: '剛剛' },
-        ...(prev[jobId] || []),
-      ],
-    }));
-    showToast('✅ 報價已發送畀新人！');
+    const job = (liveJobRequests || []).find((j) => j.id === jobId);
+    if (!job) {
+      showToast('❌ 搵唔到呢個 job，可能已經被刪除。');
+      return;
+    }
+    setProposalJob(job);
   };
 
   const handleInvite = (e) => {
@@ -3917,8 +3920,15 @@ export default function App() {
       )}
       <ProposalsModal
         jobId={viewingProposals}
-        proposals={viewingProposals ? proposalsData[viewingProposals] : null}
+        coupleUid={user?.uid}
         onClose={() => setViewingProposals(null)}
+      />
+      <SubmitProposalModal
+        job={proposalJob}
+        vendorName={vendorProfile?.name}
+        onClose={() => setProposalJob(null)}
+        onSubmitted={() => setProposalJob(null)}
+        showToast={showToast}
       />
       <ScanResultModal guest={scanResult} onClose={() => setScanResult(null)} />
       <InviteModal
