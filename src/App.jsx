@@ -3163,6 +3163,8 @@ export default function App() {
                       <BellNotifications
                         jobs={liveJobRequests || []}
                         ownerUid={dataOwnerUid}
+                        coupleUid={user?.uid}
+                        onOpenProposal={(jobId) => setViewingProposals(jobId)}
                         onOpenBoard={() => setCurrentView('couple-jobboard')}
                       />
                     )}
