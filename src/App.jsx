@@ -3640,6 +3640,20 @@ export default function App() {
                 userUid={user?.uid}
                 userRole={userRole === 'vendor' ? 'vendor' : 'couple'}
                 onSelectInquiry={handleSelectInquiry}
+                // 2026-08-08 — Vendors land here from the dashboard
+                // and previously had no way back. Wire only the
+                // vendor case so we don't show a back button on the
+                // couple's main inbox (couples already have the home
+                // tab in the bottom nav). For `owner` users (who
+                // also reach this via the chat bubble), default to
+                // the events dashboard.
+                onBack={
+                  userRole === 'vendor'
+                    ? () => setCurrentView('vendor-dashboard')
+                    : userRole === 'owner'
+                    ? () => setCurrentView('events-dashboard')
+                    : undefined
+                }
               />
             )}
 

@@ -14,7 +14,7 @@
 //   - onSelectInquiry: callback when a conversation row is clicked
 //   - onBack: optional back button (hides on standalone views)
 
-import { Inbox as InboxIcon, MessageCircle } from 'lucide-react';
+import { ChevronLeft, Inbox as InboxIcon, MessageCircle } from 'lucide-react';
 
 export function Inbox({
   inquiries = [],
@@ -64,10 +64,22 @@ export function Inbox({
 
   return (
     <div className="max-w-2xl mx-auto mt-6 px-4 animate-in fade-in duration-300">
-      <h2 className="text-2xl font-black text-slate-800 mb-4 flex items-center gap-2">
-        <MessageCircle className="w-6 h-6 text-rose-500" />
-        訊息收件匣
-      </h2>
+      <div className="flex items-center gap-2 mb-4">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="p-2 -ml-2 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+            aria-label="返回"
+            title="返回"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+        )}
+        <h2 className="text-2xl font-black text-slate-800 flex items-center gap-2">
+          <MessageCircle className="w-6 h-6 text-rose-500" />
+          訊息收件匣
+        </h2>
+      </div>
       <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 shadow-sm overflow-hidden">
         {inquiries.map((inq) => {
           const unread = unreadCount(inq);
