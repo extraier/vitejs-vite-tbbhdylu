@@ -3,25 +3,33 @@
 // Source of truth: src/components/VendorSignupCard.jsx.
 //
 // What's covered here (regression guards):
-//   1. Form posts all three fields (email, password, displayName) to
-//      onEmailRegister on valid submit.
-//   2. Password mismatch is rejected with errPasswordMismatch (typed
-//      twice, must match — 2026-08-08 alignment with LoginScreen
-//      signup mode).
-//   3. Password failing length / categories / common-list rules is
-//      rejected with errPasswordRules (NOT the legacy minLength=8
-//      check that 'password' slipped past).
-//   4. Password containing the email local part is rejected.
-//   5. Live rules checklist renders once the password field has any
-//      text, and shows ✓ on each rule that passes.
-//   6. Confirm-password input shows the live match indicator ((✓ 一致)
-//      vs (✗ 唔一致)).
+//   PASSWORD VALIDATION (2026-08-08):
+//     1. Form posts all three fields (email, password, displayName) to
+//        onEmailRegister on valid submit.
+//     2. Password mismatch is rejected with errPasswordMismatch (typed
+//        twice, must match).
+//     3. Password failing length / categories / common-list rules is
+//        rejected with errPasswordRules (NOT the legacy minLength=8
+//        check that 'password' slipped past).
+//     4. Password containing the email local part is rejected.
+//     5. Live rules checklist renders once the password field has any
+//        text, and shows ✓ on each rule that passes.
+//     6. Confirm-password input shows the live match indicator.
+//
+//   POST-LOGIN INTENT (2026-08-08 — stale-intent routing bug):
+//     7. The intent is NOT stashed on mount.
+//     8. The intent IS stashed when the user submits a valid email
+//        signup, so App.jsx routes them to vendor onboarding.
+//     9. The intent is CLEARED on submit failure (e.g. email already
+//        in use), so a follow-up sign-in via the regular LoginScreen
+//        is NOT routed to vendor onboarding.
+//     10. The intent is stashed when the user taps Google signup.
 //
 // 2026-08-08 — added when VendorSignupCard was upgraded to use
 // evaluatePassword + confirm-password matching, mirroring the
 // LoginScreen signup-mode UX.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { VendorSignupCard } from './VendorSignupCard';
@@ -58,6 +66,20 @@ function fillForm({ displayName, email, password, confirmPassword }) {
 function clickSubmit() {
   fireEvent.click(screen.getByRole('button', { name: /建立商戶帳號|Create vendor account/ }));
 }
+
+function clickGoogle() {
+  fireEvent.click(screen.getByRole('button', { name: /使用 Google 帳號註冊|Sign up with Google/ }));
+}
+
+beforeEach(() => {
+  // Each test starts with a clean sessionStorage so postLoginIntent
+  // from a previous test doesn't leak.
+  sessionStorage.clear();
+});
+
+afterEach(() => {
+  sessionStorage.clear();
+});
 
 describe('VendorSignupCard — password validation', () => {
   it('happy path: valid email + matching strong passwords submits onEmailRegister with all three args', async () => {
@@ -223,5 +245,121 @@ describe('VendorSignupCard — password validation', () => {
     fillForm({ confirmPassword: 'Password1!' });
 
     expect(screen.getByText(/✓ 一致/)).toBeTruthy();
+  });
+});
+
+describe('VendorSignupCard — postLoginIntent (stale-intent routing bug guard)', () => {
+  it('mounting the card does NOT stash the postLoginIntent in sessionStorage', () => {
+    render(
+      <VendorSignupCard
+        onGoogleLogin={NOOP}
+        onEmailRegister={NOOP}
+        onBack={NOOP}
+      />,
+    );
+
+    // 2026-08-08 — regression guard. The old code set the intent
+    // on mount, which meant a normal user who later signed in (in
+    // the same tab) was routed to vendor onboarding. The intent is
+    // now set ONLY at submit time.
+    expect(sessionStorage.getItem('postLoginIntent')).toBeNull();
+  });
+
+  it('successful email submit stashes the postLoginIntent so App.jsx routes to vendor onboarding', async () => {
+    const onEmailRegister = vi.fn().mockResolvedValue(undefined);
+    render(
+      <VendorSignupCard
+        onGoogleLogin={NOOP}
+        onEmailRegister={onEmailRegister}
+        onBack={NOOP}
+      />,
+    );
+
+    fillForm({
+      displayName: 'ABC Wedding Studio',
+      email: 'vendor@example.com',
+      password: 'Password1!',
+      confirmPassword: 'Password1!',
+    });
+
+    clickSubmit();
+
+    await waitFor(() => {
+      expect(onEmailRegister).toHaveBeenCalled();
+    });
+    expect(sessionStorage.getItem('postLoginIntent')).toBe('vendor-onboarding');
+  });
+
+  it('submit FAILURE clears the postLoginIntent so a follow-up normal sign-in is not hijacked', async () => {
+    // Simulate Firebase throwing email-already-in-use.
+    const onEmailRegister = vi.fn().mockRejectedValue({
+      code: 'auth/email-already-in-use',
+    });
+    render(
+      <VendorSignupCard
+        onGoogleLogin={NOOP}
+        onEmailRegister={onEmailRegister}
+        onBack={NOOP}
+      />,
+    );
+
+    fillForm({
+      displayName: 'ABC Wedding Studio',
+      email: 'taken@example.com',
+      password: 'Password1!',
+      confirmPassword: 'Password1!',
+    });
+
+    clickSubmit();
+
+    // Wait for the catch block to run.
+    await waitFor(() => {
+      expect(screen.getByText(/此電郵已被註冊/)).toBeTruthy();
+    });
+
+    // The intent must NOT still be stashed — otherwise the user
+    // clicking back, signing in via LoginScreen as a normal user
+    // with the same email, would be routed to vendor onboarding.
+    expect(sessionStorage.getItem('postLoginIntent')).toBeNull();
+  });
+
+  it('Google signup stashes the postLoginIntent', async () => {
+    const onGoogleLogin = vi.fn().mockResolvedValue(undefined);
+    render(
+      <VendorSignupCard
+        onGoogleLogin={onGoogleLogin}
+        onEmailRegister={NOOP}
+        onBack={NOOP}
+      />,
+    );
+
+    clickGoogle();
+
+    await waitFor(() => {
+      expect(onGoogleLogin).toHaveBeenCalled();
+    });
+    expect(sessionStorage.getItem('postLoginIntent')).toBe('vendor-onboarding');
+  });
+
+  it('Google signup FAILURE clears the postLoginIntent', async () => {
+    const onGoogleLogin = vi.fn().mockRejectedValue(new Error('popup-blocked'));
+    render(
+      <VendorSignupCard
+        onGoogleLogin={onGoogleLogin}
+        onEmailRegister={NOOP}
+        onBack={NOOP}
+      />,
+    );
+
+    clickGoogle();
+
+    // The catch block sets err.message as the error (then falls back
+    // to errGoogle only if the message is empty). Wait for the error
+    // to appear.
+    await waitFor(() => {
+      expect(screen.getByText(/popup-blocked|Google 登入失敗/)).toBeTruthy();
+    });
+
+    expect(sessionStorage.getItem('postLoginIntent')).toBeNull();
   });
 });

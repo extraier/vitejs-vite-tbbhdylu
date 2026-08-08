@@ -16,15 +16,19 @@
 //   onSwitchLanguage    — () => void; (optional) hook for zh/en toggle
 //
 // Behavior:
-//   - Sets sessionStorage.postLoginIntent = 'vendor-onboarding' on mount
-//     so App.jsx auto-routes to the wizard after successful sign-up.
+//   - Stashes sessionStorage.postLoginIntent = 'vendor-onboarding' ONLY
+//     at the moment the user commits (form submit / Google submit).
+//     NOT on mount. NOT on validation failure. Cleared on submit
+//     failure or back-button. This prevents stale-intent routing
+//     bugs where a normal user later signs in and gets hijacked to
+//     vendor onboarding.
 //   - Validates password with the same rules as LoginScreen signup
 //     (length + 3-of-4 categories + no email substring + not on the
 //     top-20 common list) AND requires the user to type the password
 //     twice. 2026-08-08 — aligned with the regular signup flow.
 //   - Translates Firebase auth error codes into Chinese error messages.
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Briefcase, Mail, Lock, Loader2, Globe } from 'lucide-react';
 import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
 
@@ -81,6 +85,38 @@ const STRINGS = {
   },
 };
 
+// 2026-08-08 — extracted helper. Sets the postLoginIntent exactly
+// when the user COMMITS to vendor signup (form submit / Google
+// button), not on mount. App.jsx's postLoginIntent effect at line
+// 270 routes to vendor-onboarding when this is set, then clears it.
+// If the user backs out of the card without submitting, no intent is
+// ever stashed — so a later sign-in by a normal user is NEVER
+// hijacked to the vendor onboarding flow.
+function setVendorSignupIntent() {
+  try {
+    sessionStorage.setItem('postLoginIntent', 'vendor-onboarding');
+  } catch {
+    // sessionStorage may throw in private mode; the user can still
+    // sign up — they just won't be auto-routed to the wizard.
+  }
+}
+
+// 2026-08-08 — paired with setVendorSignupIntent. Clears the
+// postLoginIntent on submit failure (e.g. email already in use) so
+// a follow-up sign-in via the regular LoginScreen is NOT routed to
+// vendor onboarding. Without this, a vendor submit with a
+// pre-existing email would stash the intent, the user would click
+// back, sign in via LoginScreen as a normal user with the same
+// email, and App.jsx's effect would short-circuit them to the
+// vendor wizard.
+function clearVendorSignupIntent() {
+  try {
+    sessionStorage.removeItem('postLoginIntent');
+  } catch {
+    // ignore — already best-effort
+  }
+}
+
 export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
   const [lang, setLang] = useState('zh');
   const t = STRINGS[lang];
@@ -91,24 +127,17 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  // 2026-07-14 — on mount, set the post-login intent so App.jsx routes
-  // the user to the vendor wizard after a successful sign-up. Cleared
-  // by App.jsx once consumed so subsequent visits don't auto-route.
-  useEffect(() => {
-    try {
-      sessionStorage.setItem('postLoginIntent', 'vendor-onboarding');
-    } catch {
-      // sessionStorage may throw in private mode; the user can still
-      // sign up — they just won't be auto-routed to the wizard.
-    }
-  }, []);
-
   const handleGoogle = async () => {
     setError(null);
+    setVendorSignupIntent();
     setBusy(true);
     try {
       await onGoogleLogin();
     } catch (err) {
+      // 2026-08-08 — clear the stashed intent on Google signup failure
+      // so the user can fall back to the regular LoginScreen without
+      // being routed to vendor onboarding on the next sign-in.
+      clearVendorSignupIntent();
       setError(err?.message || t.errGoogle);
     } finally {
       setBusy(false);
@@ -137,10 +166,21 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
       setError(t.errPasswordMismatch);
       return;
     }
+    // 2026-08-08 — only stash the intent AFTER all client-side
+    // validation passes. The intent lives in sessionStorage until
+    // App.jsx consumes it (and the user is routed to vendor
+    // onboarding). Stashing it only at commit time prevents the
+    // stale-intent routing bug where a normal user who later signs
+    // in gets hijacked to vendor onboarding.
+    setVendorSignupIntent();
     setBusy(true);
     try {
       await onEmailRegister(email, password, displayName.trim());
     } catch (err) {
+      // 2026-08-08 — clear the stashed intent on submit failure so
+      // the user can fall back to the regular LoginScreen via the
+      // back link without the next sign-in being hijacked.
+      clearVendorSignupIntent();
       const code = err?.code || '';
       if (code.includes('email-already-in-use')) {
         setError(t.errEmailInUse);
