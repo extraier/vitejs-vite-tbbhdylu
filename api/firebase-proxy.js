@@ -58,6 +58,12 @@ export default async function handler(req, res) {
     // deny (the rule match is under /artifacts/{appId}/jobRequests
     // but the collection lives at the top level).
     'postJobRequest',
+    // 2026-08-08 — vendors reply to a job posting via this callable
+    // (was previously a stub that only mutated in-memory React state,
+    // so nothing actually reached the couple). Same routing pattern
+    // as postJobRequest — see the jobBoard.ts docstring for the
+    // 1-click / vendor-composer UX flow.
+    'submitProposal',
     'verifyShareToken',
     // 2026-07-27 — 電子人情 QR upload/delete. Server-side because
     // client-side Storage rules with firestore.exists() don't work
