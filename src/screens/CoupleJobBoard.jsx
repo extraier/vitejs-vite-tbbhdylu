@@ -1,34 +1,21 @@
-// 2026-08-08 — added 🔔 "有新報價" indicator on each job card.
-//
-// Behavior: when a couple has NOT yet opened the 商戶報價單 modal for
-// a given job, and there's at least one proposal newer than the local
-// "last seen" timestamp, show a pulsing bell emoji next to the count.
-// The marker is stored per-job in localStorage (scoped under a
-// `lastSeenProposalsAt_<jobId>` key) so the bell goes away as soon as
-// the couple opens the modal — without needing a server-side "read"
-// field. Acceptable for a small SaaS at this scale; if proposal volume
-// grows, the marker should move to Firestore (per-couple doc) so it
-// syncs across devices.
-
-const BELL_SEEN_KEY = (jobId) => `lastSeenProposalsAt_${jobId}`;
-
-function hasNewProposals(job) {
-  if (!job?.proposalsCount || job.proposalsCount <= 0) return false;
-  // 2026-08-08 — newestProposalAt isn't on the job doc yet (the CF
-  // writes the timestamp on the proposal, not on the job). Until
-  // that's added, we conservatively show the bell whenever the couple
-  // hasn't opened the modal AND the count > 0. Cheap and correct.
-  try {
-    const seen = window.localStorage.getItem(BELL_SEEN_KEY(job.id));
-    return !seen; // bell shows until first open
-  } catch {
-    return false;
-  }
-}
-
-import { AlertCircle, Bell, Send } from 'lucide-react';
+import { AlertCircle, Send } from 'lucide-react';
 import { TASK_CATEGORIES } from '../lib/config';
 import { formatBudgetString } from '../lib/format';
+
+// CoupleJobBoard — the couple's "徵求報價" tab.
+//
+// 2026-08-08 — the per-job 🔔 badge was removed in favor of the
+// global <BellNotifications/> button in the header (App.jsx) which
+// aggregates new proposals across ALL of the couple's jobs. Two
+// competing bells ("1 on this card, 5 in the header") confused the
+// couple. Now the only bell lives in the header; this board just
+// shows the count number per job. Clicking the card or 報價單 button
+// marks the proposals as seen via markProposalsSeenExact() (wired
+// in App.jsx through onShowProposals).
+//
+// Pre-2026-08-08: each card had its own `lastSeenProposalsAt_<jobId>`
+// localStorage marker and a `hasNewProposals(job)` helper. Replaced
+// with a single global marker per owner uid.
 
 export function CoupleJobBoard({
   jobRequests,
@@ -105,47 +92,32 @@ export function CoupleJobBoard({
         我發佈過嘅求救記錄
       </h3>
       <div className="space-y-4">
-        {jobRequests.map((job) => {
-          const showBell = hasNewProposals(job);
-          return (
-            <div
-              key={job.id}
-              className={`bg-white rounded-xl p-5 border flex justify-between items-center transition-colors ${
-                showBell ? 'border-rose-300 bg-rose-50/30' : 'border-slate-200 hover:border-rose-200'
-              }`}
-            >
-              <div>
-                <h4 className="font-bold text-slate-800 text-lg flex items-center gap-2">
-                  {job.serviceNeeded}
-                  {showBell && (
-                    <span
-                      className="inline-flex items-center gap-1 text-xs font-bold text-rose-600 bg-rose-100 px-2 py-0.5 rounded-full animate-pulse"
-                      title="有商戶已發送新報價"
-                    >
-                      <Bell className="w-3 h-3 fill-rose-500" />
-                      🔔 有新報價
-                    </span>
-                  )}
-                </h4>
-                <p className="text-sm text-slate-500 mt-1">
-                  預算: <span className="font-bold text-slate-700">{formatBudgetString(job.budget)}</span>
-                </p>
-              </div>
-              <div className="text-right">
-                <div className="text-rose-600 font-bold mb-1 flex items-center gap-1.5 justify-end">
-                  {job.proposalsCount} 個商戶已報價
-                  {showBell && <span className="text-base">🔔</span>}
-                </div>
-                <button
-                  onClick={() => onShowProposals(job.id)}
-                  className="text-sm font-bold bg-rose-50 text-rose-700 border border-rose-200 px-4 py-1.5 rounded-lg hover:bg-rose-100"
-                >
-                  查看報價單
-                </button>
-              </div>
+        {jobRequests.map((job) => (
+          <div
+            key={job.id}
+            className="bg-white rounded-xl p-5 border border-slate-200 hover:border-rose-200 transition-colors flex justify-between items-center"
+          >
+            <div>
+              <h4 className="font-bold text-slate-800 text-lg">
+                {job.serviceNeeded}
+              </h4>
+              <p className="text-sm text-slate-500 mt-1">
+                預算: <span className="font-bold text-slate-700">{formatBudgetString(job.budget)}</span>
+              </p>
             </div>
-          );
-        })}
+            <div className="text-right">
+              <div className="text-rose-600 font-bold mb-1">
+                {job.proposalsCount} 個商戶已報價
+              </div>
+              <button
+                onClick={() => onShowProposals(job.id)}
+                className="text-sm font-bold bg-rose-50 text-rose-700 border border-rose-200 px-4 py-1.5 rounded-lg hover:bg-rose-100"
+              >
+                查看報價單
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -116,6 +116,8 @@ import { VendorInviteLinkModal } from './components/modals/VendorInviteLinkModal
 import { MyVendorsPanel } from './components/MyVendorsPanel';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { SubmitProposalModal } from './components/modals/SubmitProposalModal';
+import { BellNotifications } from './components/BellNotifications';
+import { markProposalsSeenExact } from './hooks/useProposalBell';
 import { InviteModal } from './components/modals/InviteModal';
 import { HelperManager } from './components/modals/HelperManager';
 import { NotOnboardedEmailModal } from './components/modals/NotOnboardedEmailModal';
@@ -3075,26 +3077,6 @@ export default function App() {
                     }}
                   />
                   <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-                    {/* 2026-07-15 — inbox icon with unread badge.
-                        Visible to owners + vendors (not reception/
-                        guest_portal). Click navigates to the inbox. */}
-                    {(userRole === 'owner' || userRole === 'vendor') && (
-                      <button
-                        onClick={() => {
-                          setSelectedInquiry(null);
-                          setCurrentView('inbox');
-                        }}
-                        className="relative text-slate-600 hover:text-slate-800 p-2 rounded-lg hover:bg-slate-100 transition-colors flex-shrink-0"
-                        title="訊息收件匣"
-                      >
-                        <MessageCircle className="w-5 h-5" />
-                        {totalUnread > 0 && (
-                          <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-tight ring-2 ring-white">
-                            {totalUnread > 9 ? '9+' : totalUnread}
-                          </span>
-                        )}
-                      </button>
-                    )}
                     {userRole === 'owner' && (
                       <button
                         onClick={() => setShowHelperManager(true)}
@@ -3170,6 +3152,36 @@ export default function App() {
                       >
                         <ChevronLeft className="w-4 h-4" />
                         <span className="hidden sm:inline">返回總大堂</span>
+                      </button>
+                    )}
+                    {/* 2026-08-08 — header buttons moved next to the user
+                        profile icon. Order is: 🔔 商戶報價 bell (owners
+                        only) → 💬 訊息收件匣 (owners + vendors) → UserMenu.
+                        Both bells sit tight against the avatar so the
+                        couple sees "you have new stuff" at a glance. */}
+                    {userRole === 'owner' && (
+                      <BellNotifications
+                        jobs={liveJobRequests || []}
+                        ownerUid={dataOwnerUid}
+                        onOpenBoard={() => setCurrentView('couple-job-board')}
+                      />
+                    )}
+                    {(userRole === 'owner' || userRole === 'vendor') && (
+                      <button
+                        onClick={() => {
+                          setSelectedInquiry(null);
+                          setCurrentView('inbox');
+                        }}
+                        className="relative text-slate-600 hover:text-slate-800 p-2 rounded-lg hover:bg-slate-100 transition-colors flex-shrink-0"
+                        title="訊息收件匣"
+                        aria-label="訊息收件匣"
+                      >
+                        <MessageCircle className="w-5 h-5" />
+                        {totalUnread > 0 && (
+                          <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-tight ring-2 ring-white">
+                            {totalUnread > 9 ? '9+' : totalUnread}
+                          </span>
+                        )}
                       </button>
                     )}
                     {/* 2026-07-30 — UserMenu. Avatar + dropdown header
