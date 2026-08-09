@@ -51,11 +51,12 @@
 //   - "✨ 暫時無新通知"
 
 import { useEffect, useRef, useState } from 'react';
-import { Bell, Check, Loader2 } from 'lucide-react';
+import { Bell, Check, ExternalLink, Loader2 } from 'lucide-react';
 import {
   useNotifications,
   markAllNotificationsSeen,
   CATEGORY_META,
+  MAX_BELL_DROPDOWN_ITEMS,
 } from '../hooks/useNotifications';
 
 function formatTimeAgo(ts) {
@@ -191,6 +192,19 @@ export function BellNotifications({
   };
 
   const proposalCount = items.filter((i) => i.category === 'proposal').length;
+  // 2026-08-09 — bell dropdown truncates to MAX_BELL_DROPDOWN_ITEMS (20)
+  // for visual density. The full notifications-center view shows every
+  // item; the "查看全部" footer navigates there. We slice here, NOT in
+  // the hook, so both consumers share the same subscription cost.
+  const bellItems = items.slice(0, MAX_BELL_DROPDOWN_ITEMS);
+  const hasMore = items.length > MAX_BELL_DROPDOWN_ITEMS;
+
+  // 2026-08-09 — 查看全部 navigates to the full notifications-center
+  // view (always shown when there are items, regardless of truncation).
+  const handleViewAll = () => {
+    setOpen(false);
+    if (onOpenDashboard) onOpenDashboard();
+  };
 
   return (
     <div className="relative flex-shrink-0" ref={rootRef}>
@@ -274,14 +288,14 @@ export function BellNotifications({
               </div>
             )}
 
-            {loading && items.length === 0 && (
+            {loading && bellItems.length === 0 && (
               <div className="px-4 py-10 text-center text-slate-500 text-sm">
                 <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />
                 載入中...
               </div>
             )}
 
-            {!loading && items.length === 0 && (
+            {!loading && bellItems.length === 0 && (
               <div className="px-4 py-10 text-center">
                 <div className="text-3xl mb-2">✨</div>
                 <div className="text-sm font-bold text-slate-700">暫時無新通知</div>
@@ -291,9 +305,9 @@ export function BellNotifications({
               </div>
             )}
 
-            {items.length > 0 && (
+            {bellItems.length > 0 && (
               <ul className="divide-y divide-slate-100">
-                {items.map((item) => {
+                {bellItems.map((item) => {
                   const meta = CATEGORY_META[item.category] || CATEGORY_META.system;
                   return (
                     <li key={item.id}>
@@ -335,13 +349,27 @@ export function BellNotifications({
             )}
           </div>
 
-          {/* Footer — click anywhere outside the panel to dismiss; no
-              "查看全部" button because the dropdown IS the canonical
-              view (sorted newest-first, 60vh scroll). Slack/Linear/
-              Notion all follow this pattern. Keeping the button was
-              confusing: it used to navigate to the empty dashboard
-              for new couples; now it just closes the panel — neither
-              feels like "view all notifications". */}
+          {/* Footer — 查看全部 navigates to the full notifications-center
+              view. Only shown when there are items (would be confusing
+              to click "view all" on an empty dropdown). The label
+              hints at the dropdown truncation when relevant. */}
+          {items.length > 0 && (
+            <div className="border-t border-slate-100 px-4 py-2.5 bg-slate-50">
+              <button
+                onClick={handleViewAll}
+                data-testid="bell-view-all"
+                className="w-full text-sm font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg py-1.5 flex items-center justify-center gap-1.5 transition-colors"
+              >
+                查看全部
+                {hasMore && (
+                  <span className="text-xs text-slate-500 font-normal">
+                    （共 {items.length} 個，呢度只顯示頭 {MAX_BELL_DROPDOWN_ITEMS} 個）
+                  </span>
+                )}
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

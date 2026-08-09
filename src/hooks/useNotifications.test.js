@@ -52,7 +52,7 @@ vi.mock('../lib/firebase', () => ({
 }));
 
 import { renderHook, waitFor } from '@testing-library/react';
-import { useNotifications, markAllNotificationsSeen } from './useNotifications';
+import { useNotifications, markAllNotificationsSeen, MAX_BELL_DROPDOWN_ITEMS } from './useNotifications';
 
 describe('useNotifications', () => {
   beforeEach(() => {
@@ -290,9 +290,13 @@ describe('useNotifications', () => {
     expect(result.current.totalNew).toBe(0);
   });
 
-  it('caps merged items at 20 sorted newest-first', async () => {
+  it('returns ALL items sorted newest-first (no truncation in hook)', async () => {
+    // 2026-08-09 — the hook no longer caps merged items at 20. The bell
+    // dropdown truncates client-side (in BellNotifications.jsx via
+    // MAX_BELL_DROPDOWN_ITEMS); the full notifications-center view
+    // shows every item. Bump the docs to 50 to verify we return all.
     const docs = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 50; i++) {
       docs.push({
         id: `p${i}`,
         data: () => ({
@@ -316,11 +320,16 @@ describe('useNotifications', () => {
     );
 
     await waitFor(() => {
-      expect(result.current.items.length).toBe(20);
+      expect(result.current.items.length).toBe(50);
     });
 
-    // Newest first
-    expect(result.current.items[0].actorName).toBe('V29');
-    expect(result.current.items[19].actorName).toBe('V10');
+    // Newest first (createdAt.toMillis() == i, highest i wins)
+    expect(result.current.items[0].actorName).toBe('V49');
+    expect(result.current.items[49].actorName).toBe('V0');
+  });
+
+  it('exports MAX_BELL_DROPDOWN_ITEMS so BellNotifications can slice', () => {
+    expect(typeof MAX_BELL_DROPDOWN_ITEMS).toBe('number');
+    expect(MAX_BELL_DROPDOWN_ITEMS).toBe(20);
   });
 });

@@ -271,9 +271,9 @@ function inviteItems(docs) {
 
 // ---- The main hook ----
 
-const MAX_ITEMS = 20;
-const PROPOSALS_LIMIT = 50;
-const TASKS_LIMIT = 50;
+export const MAX_BELL_DROPDOWN_ITEMS = 20;
+const PROPOSALS_LIMIT = 200;
+const TASKS_LIMIT = 200;
 
 export function useNotifications({
   ownerUid,
@@ -419,7 +419,13 @@ export function useNotifications({
     return () => { cancelled = true; unsub(); };
   }, [ownerUid, enabled]);
 
-  // ---- Merge + sort + slice ----
+  // ---- Merge + sort ----
+  // Returns ALL items (no truncation). The bell dropdown caps the
+  // rendered list to 20 client-side for visual density; the full
+  // notifications-center view shows every item. Source-level Firestore
+  // limits (PROPOSALS_LIMIT, TASKS_LIMIT) still cap how many docs the
+  // hook can fetch — bump those if a single event has more than 50
+  // tasks or 50 proposals in active conversation.
   const merged = useMemo(() => {
     const items = [
       ...proposalItems(proposals || [], ownerUid),
@@ -427,7 +433,7 @@ export function useNotifications({
       ...inviteItems(helpers.filter((h) => h.status === 'active')),
     ];
     items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    return items.slice(0, MAX_ITEMS);
+    return items;
   }, [proposals, tasks, helpers, ownerUid, eventId]);
 
   // ---- Per-source "new since last seen" counts ----

@@ -117,6 +117,7 @@ import { MyVendorsPanel } from './components/MyVendorsPanel';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { SubmitProposalModal } from './components/modals/SubmitProposalModal';
 import { BellNotifications } from './components/BellNotifications';
+import { NotificationsCenter } from './components/NotificationsCenter';
 import { markProposalsSeenExact } from './hooks/useProposalBell';
 import { InviteModal } from './components/modals/InviteModal';
 import { HelperManager } from './components/modals/HelperManager';
@@ -3205,7 +3206,7 @@ export default function App() {
                           setCurrentView('couple-checklist');
                         }}
                         onOpenInvite={() => setCurrentView('helpers')}
-                        onOpenDashboard={() => setCurrentView('events-dashboard')}
+                        onOpenDashboard={() => setCurrentView('notifications-center')}
                       />
                     )}
                     {(userRole === 'owner' || userRole === 'vendor') && (
@@ -3250,6 +3251,32 @@ export default function App() {
           )}
 
           <main className="max-w-7xl mx-auto px-4">
+            {/* Notifications center — full list (no 20-item cap). Owner-only.
+                Reached from the bell dropdown's 查看全部 button. */}
+            {userRole === 'owner' && currentView === 'notifications-center' && (
+              <NotificationsCenter
+                ownerUid={dataOwnerUid}
+                coupleUid={user?.uid}
+                selfUid={user?.uid}
+                eventId={currentEvent?.id}
+                onBack={() => setCurrentView(
+                  currentEvent ? 'couple-checklist' : 'events-dashboard',
+                )}
+                onOpenProposal={(jobId) => {
+                  setCurrentView('couple-jobboard');
+                  setViewingProposals(jobId);
+                }}
+                onOpenComment={(meta) => {
+                  if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                    setCurrentEvent({ id: meta.eventId });
+                  }
+                  setFocusedTaskId(meta?.taskId || null);
+                  setCurrentView('couple-checklist');
+                }}
+                onOpenInvite={() => setCurrentView('helpers')}
+              />
+            )}
+
             {!currentEvent && currentView === 'events-dashboard' && (
               <EventsDashboard
                 events={events}
