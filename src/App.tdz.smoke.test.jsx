@@ -28,3 +28,31 @@ describe('App upload-preferences initialization order', () => {
     expect(tokenBlock).toContain('ownerUid: dataOwnerUid');
   });
 });
+
+// 2026-08-09 — Second TDZ regression guard. Vendors-for-picker hook
+// was previously declared next to `dataOwnerUid` (line ~942) but its
+// deps array referenced `inquiries` which is declared ~290 lines
+// later. The deps array evaluates at hook-call time, BEFORE any
+// subsequent useState in the same component runs, so the browser
+// threw `Cannot access 'Ye' before initialization` and the whole
+// app crashed with the generic error page.
+//
+// This test locks in the correct ordering: any future code that
+// reads `inquiries` inside a deps array must live AFTER the
+// `inquiries` useState declaration.
+describe('App vendorsForPicker initialization order', () => {
+  it('reads `inquiries` in a deps array AFTER the inquiries useState declaration', () => {
+    const inquiriesDeclaration = appSource.indexOf('const [inquiries, setInquiries]');
+    const vendorsPickerHook = appSource.indexOf('const vendorsForPicker = useMemo');
+    const vendorsPickerDeps = appSource.indexOf('[inquiries]', vendorsPickerHook);
+
+    expect(inquiriesDeclaration).toBeGreaterThanOrEqual(0);
+    expect(vendorsPickerHook).toBeGreaterThanOrEqual(0);
+    expect(vendorsPickerDeps).toBeGreaterThanOrEqual(0);
+    // The smoking-gun guard: if `vendorsForPicker` ever ends up
+    // BEFORE the inquiries useState again, the deps array is
+    // evaluated against an uninitialized binding. Catch it here
+    // before it ships to production.
+    expect(vendorsPickerHook).toBeGreaterThan(inquiriesDeclaration);
+  });
+});

@@ -932,28 +932,6 @@ export default function App() {
     return currentEvent._ownerUid || user?.uid;
   }, [currentEvent, user?.uid, guest.isGuestMode, guest.qOwner]);
 
-  // 2026-08-09 — Vendor list for VendorPicker (大日流程 / 物資
-  // assignment). Source: couple's `inquiries` (vendors they've
-  // started a chat with). Couples may also tag vendors they haven't
-  // contacted yet — that path uses the VendorPicker free-text
-  // fallback so we don't need a separate vendor-master subscription.
-  // Memoized so WeddingDay's memoization doesn't churn on every
-  // inquiry read.
-  const vendorsForPicker = useMemo(() => {
-    const seen = new Set();
-    const out = [];
-    for (const i of inquiries || []) {
-      if (!i || !i.vendorUid) continue;
-      if (seen.has(i.vendorUid)) continue;
-      seen.add(i.vendorUid);
-      out.push({
-        uid: i.vendorUid,
-        name: i.vendorName || i.vendorDisplayName || '商戶',
-      });
-    }
-    return out;
-  }, [inquiries]);
-
   // 2026-08-09 — Comment-path resolvers for <ItemComments/>. The
   // component takes a Firestore CollectionReference and subscribes
   // via onSnapshot, so we MUST return the actual `collection(db, ...)`
@@ -1240,6 +1218,37 @@ export default function App() {
      const unsub = subscribeToInquiries(user.uid, role, setInquiries);
      return unsub;
    }, [user?.uid, userRole]);
+
+   // 2026-08-09 — Vendor list for VendorPicker (大日流程 / 物資
+   // assignment). Source: couple's `inquiries` (vendors they've
+   // started a chat with). Couples may also tag vendors they haven't
+   // contacted yet — that path uses the VendorPicker free-text
+   // fallback so we don't need a separate vendor-master subscription.
+   // Memoized so WeddingDay's memoization doesn't churn on every
+   // inquiry read.
+   //
+   // 2026-08-09 — TDZ-fix: this hook MUST live AFTER the `inquiries`
+   // declaration above. Putting it earlier (next to dataOwnerUid)
+   // caused `Cannot access 'inquiries' before initialization` because
+   // the deps array reads the variable at hook-eval time, before
+   // any subsequent useState/useEffect in the same component has
+   // run. Symptom: app crashes on first render with a minified
+   // "Cannot access 'Ye' before initialization" — see Hermes
+   // session 2026-08-09.
+   const vendorsForPicker = useMemo(() => {
+     const seen = new Set();
+     const out = [];
+     for (const i of inquiries || []) {
+       if (!i || !i.vendorUid) continue;
+       if (seen.has(i.vendorUid)) continue;
+       seen.add(i.vendorUid);
+       out.push({
+         uid: i.vendorUid,
+         name: i.vendorName || i.vendorDisplayName || '商戶',
+       });
+     }
+     return out;
+   }, [inquiries]);
 
    // 2026-07-15 — assigned tasks for the current vendor. Uses a
    // collectionGroup query on /tasks subcollections, filtered by
