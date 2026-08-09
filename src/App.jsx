@@ -1390,8 +1390,17 @@ export default function App() {
             const list = snap.docs.map((d) => {
               // collectionGroup doc path:
               //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/{groupName}/{id}
-              const ownerUid = d.ref.parent.parent?.parent?.parent?.id;
-              const eventId = d.ref.parent.parent?.id;
+              // d.ref = .../{groupName}/{id}         (the doc itself)
+              // d.ref.parent = .../events/{eventId} → .id is eventId
+              // d.ref.parent.parent = .../users/{ownerUid} → .id is ownerUid
+              // d.ref.parent.parent.parent = .../artifacts/{appId} → .id is appId
+              // (Three-segment chain, NOT four — earlier versions had
+              // an extra .parent that walked up to the appId and
+              // silently stamped the appId string as the "ownerUid",
+              // which made the commentPath resolver target a
+              // non-existent user doc and silently fail.)
+              const ownerUid = d.ref.parent.parent?.id;
+              const eventId = d.ref.parent.id;
               return {
                 id: d.id,
                 ...d.data(),
