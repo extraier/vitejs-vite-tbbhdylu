@@ -33,6 +33,10 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import * as crypto from 'crypto';
 import { sendViaSendgrid } from './sendgridMailer';
+// 2026-08-09 — shared contact-linker from vendors.ts. Wired into
+// claimAndApplyAsVendor so a claimed seeded vendor links to any
+// pre-existing unlinked contacts.
+import { linkMatchingVendorContacts } from './vendors';
 
 try {
   initializeApp();
@@ -595,6 +599,17 @@ export const claimAndApplyAsVendor = onCall(
     batch.set(newRef, newDoc);
     batch.delete(slugRef);
     await batch.commit();
+
+    // 2026-08-09 — Link any pre-existing unlinked vendorContacts whose
+    // (name + category) matches this newly-claimed vendor. See
+    // linkMatchingVendorContacts in vendors.ts for the rationale.
+    // Best-effort — a failure here just means the contact stays
+    // "未加入" until a follow-up.
+    await linkMatchingVendorContacts(
+      authUid,
+      (newDoc.name as string) || data.name,
+      (newDoc.category as string) || data.category,
+    );
 
     // Analytics — log AFTER the commit so we don't write a "success"
     // for a transaction that rolled back.

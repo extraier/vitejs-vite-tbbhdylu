@@ -82,6 +82,77 @@ function pickAllowed(input: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
+// --- linkMatchingVendorContacts --------------------------------------------
+//
+// 2026-08-09 — Cross-owner contact linker for vendor onboarding.
+//
+// When a vendor signs up via applyAsVendor (no claim) or
+// claimAndApplyAsVendor (claim-from-invite), couples who have already
+// added the same business name from the catalog need to be linked to
+// the new auth uid so the vendor sees their assigned work + can post
+// comments. The pre-existing client-side contactLink.tryAutoLinkContacts
+// only matches by email, but catalog-seeded vendorContacts have empty
+// vendorEmail (the catalog data was imported from heychoices which
+// doesn't expose vendor emails publicly). So that path can never link
+// a catalog contact to a real vendor.
+//
+// This helper uses the Admin SDK (cross-owner read + write) to find
+// any unlinked contact whose (vendorName + category) matches the new
+// vendor's (name + category) and stamp linkedVendorUid on each. The
+// match is intentionally loose on name (case-insensitive trim) but
+// strict on category — false-positive links would silently reassign
+// the wrong vendor's tasks.
+//
+// Idempotent: contacts that already have linkedVendorUid are skipped.
+// The first claim wins; if two vendors share a name, the second
+// signup won't disturb the first's links.
+//
+// Bounded: collectionGroup('vendorContacts') is read once per vendor
+// signup. At our scale (a few thousand contacts across all couples)
+// this is a single admin read of <100KB — acceptable as part of the
+// onboarding flow. If the table grows past 10K contacts we'd want to
+// add a composite index (vendorName + linkedVendorUid) and filter
+// server-side.
+
+export async function linkMatchingVendorContacts(
+  vendorUid: string,
+  vendorName: string,
+  category: string,
+): Promise<number> {
+  const trimmed = (vendorName || '').trim();
+  if (!trimmed) return 0;
+  let matched = 0;
+  try {
+    const cg = db.collectionGroup('vendorContacts');
+    const snap = await cg.get();
+    if (snap.empty) return 0;
+    const batch = db.batch();
+    for (const docSnap of snap.docs) {
+      const data = docSnap.data();
+      if (data.linkedVendorUid) continue; // already linked — skip
+      const contactName = typeof data.vendorName === 'string' ? data.vendorName.trim() : '';
+      const contactCategory = typeof data.category === 'string' ? data.category : '';
+      if (!contactName || !contactCategory) continue;
+      if (contactName.toLowerCase() !== trimmed.toLowerCase()) continue;
+      if (contactCategory !== category) continue;
+      batch.update(docSnap.ref, {
+        linkedVendorUid: vendorUid,
+        invitationAccepted: true,
+      });
+      matched++;
+    }
+    if (matched > 0) {
+      await batch.commit();
+    }
+  } catch (e) {
+    // Non-fatal — the main vendor write already succeeded. Log so we
+    // can see in the cloud-functions log when this fails (e.g.
+    // permission rules, collection-group index missing, etc.).
+    console.warn('[linkMatchingVendorContacts] failed (non-fatal):', e);
+  }
+  return matched;
+}
+
 // --- applyAsVendor ----------------------------------------------------------
 
 interface ApplyAsVendorInput {
@@ -213,6 +284,15 @@ export const applyAsVendor = onCall(
       // Non-fatal — the main vendor doc write already succeeded.
       console.warn('[applyAsVendor] profile upsert failed (non-fatal):', e);
     }
+
+    // 2026-08-09 — Link any pre-existing unlinked vendorContacts whose
+    // (name + category) matches this new vendor. See
+    // linkMatchingVendorContacts for the rationale. Best-effort — the
+    // main vendor doc + custom claim above must complete first so the
+    // vendor can sign in immediately. A failure here just means the
+    // contact stays "未加入" and a follow-up onboarding pass can fix
+    // it later.
+    await linkMatchingVendorContacts(vendorUid, sanitized.name as string, sanitized.category as string);
 
     return { ok: true, vendorUid, vendorId: vendorUid, status: 'pending' };
   },
