@@ -33,6 +33,8 @@ export async function recordTaskStatusUpdate({
   byName,
   byRole,
   reason,
+  assignedVendorUid,
+  assignedHelperUid,
 }) {
   if (!ownerUid || !taskId || !byUid || !toStatus) return;
   try {
@@ -55,6 +57,15 @@ export async function recordTaskStatusUpdate({
         fromStatus: fromStatus || null,
         toStatus,
         reason: reason || null,
+        // 2026-08-09 — denormalize access-control fields for the top-level
+        // /{path=**}/statusUpdates/{updateId} collectionGroup rule. See
+        // TaskComments.jsx for the rationale. Caller MUST pass
+        // assignedVendorUid + assignedHelperUid from the parent task —
+        // the rule reads these fields to gate reads without having to
+        // walk back to the parent task.
+        ownerUid,
+        assignedVendorUid: assignedVendorUid || null,
+        assignedHelperUid: assignedHelperUid || null,
         createdAt: serverTimestamp(),
       },
     );

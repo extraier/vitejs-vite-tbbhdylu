@@ -199,6 +199,12 @@ export function TaskActivityTimeline({
           authorRole: currentRole,
           text: clean,
           parentCommentId: replyTo?.id || null,
+          // 2026-08-09 — denormalize access-control fields for the
+          // top-level /{path=**}/comments/{commentId} collectionGroup rule.
+          // See TaskComments.jsx for the rationale.
+          ownerUid,
+          assignedVendorUid: task?.assignedVendorUid || null,
+          assignedHelperUid: task?.assignedHelperUid || null,
           createdAt: Date.now(),
         },
       );
@@ -431,6 +437,8 @@ export async function recordTaskStatusUpdate({
   byName,
   byRole,
   reason,
+  assignedVendorUid,
+  assignedHelperUid,
 }) {
   if (!ownerUid || !taskId || !byUid || !toStatus) return;
   try {
@@ -445,7 +453,21 @@ export async function recordTaskStatusUpdate({
         taskId,
         'statusUpdates',
       ),
-      buildStatusUpdateDoc({ fromStatus, toStatus, byUid, byName, byRole, reason }),
+      // 2026-08-09 — pass the access-control fields so the top-level
+      // /{path=**}/statusUpdates collectionGroup rule can gate reads
+      // without walking back to the parent task. See TaskComments.jsx
+      // for the rationale.
+      buildStatusUpdateDoc({
+        fromStatus,
+        toStatus,
+        byUid,
+        byName,
+        byRole,
+        reason,
+        ownerUid,
+        assignedVendorUid,
+        assignedHelperUid,
+      }),
     );
   } catch (err) {
     // eslint-disable-next-line no-console

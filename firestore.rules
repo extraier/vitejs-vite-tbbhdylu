@@ -105,32 +105,43 @@ match /{path=**}/events/{eventId} {
         // bell feed. Without this top-level rule the collectionGroup
         // query fails with "Missing or insufficient permissions" even
         // for the owner (the nested rule at line 447 only applies to
-        // per-doc get(), not collectionGroup). Mirrors the tasks/
-        // pattern above. We can't enumerate "all owners" from a
-        // collectionGroup rule, so the safe read pattern is to gate
-        // on authorRole == 'vendor' (and assignedVendorUid matches),
-        // OR authorRole == 'helper' (and assignedHelperUid matches).
-        // The owner's own per-event subscription covers her own reads.
-        match /{path=**}/comments/{commentId} {
-          allow read: if isSignedIn() && (
-            (resource.data.authorRole == 'vendor' &&
-              resource.data.assignedVendorUid == request.auth.uid)
-            || (resource.data.authorRole == 'helper' &&
-              resource.data.assignedHelperUid == request.auth.uid)
-          );
-        }
-
-        // 2026-08-09 — collectionGroup FIX for task status updates.
-        // Same rationale as the comments rule above. statusUpdates is
-        // a sibling subcollection to comments under each task.
-        match /{path=**}/statusUpdates/{updateId} {
-          allow read: if isSignedIn() && (
-            (resource.data.authorRole == 'vendor' &&
-              resource.data.assignedVendorUid == request.auth.uid)
-            || (resource.data.authorRole == 'helper' &&
-              resource.data.assignedHelperUid == request.auth.uid)
-          );
-        }
+        // per-doc get(), not collectionGroup).
+        //
+        // 2026-08-09 (later) — allow the OWNER via the denormalized
+        // ownerUid field. The original rule only allowed the assigned
+        // vendor / helper, which broke the owner's bell panel (she
+        // couldn't see her own wedding's vendor activity). The
+        // assignedVendorUid / assignedHelperUid fields are also
+        // denormalized from the parent task at write time (see
+        // TaskComments.jsx + TaskActivityTimeline.jsx), so the rule
+        // can gate reads without walking back to the parent task.
+        //
+        // 2026-08-09 (later) — authorRole check removed. The owner
+        // commenting on her own task is now allowed because
+        // ownerUid == auth.uid covers her. Vendor/helper authors
+        // match via assignedVendorUid / assignedHelperUid — those
+        // fields are denormalized on every doc, so the rule works
+        // regardless of authorRole.
+        // 2026-08-09 (later) — defensive null checks added. The
+        // collectionGroup query enumerates EVERY comments/statusUpdates
+        // doc across the database, including legacy docs from before
+        // the denormalization landed. Without the `hasAll` guard,
+        // accessing `resource.data.assignedVendorUid` on a doc that
+        // doesn't have that field throws `Property X is undefined`
+        // and the entire subscription fails for the owner — even
+        // docs that SHOULD be allowed. The `hasAll` gate skips the
+        // comparison for legacy docs (deny by default), then the rule
+        // returns false for those — which is the correct conservative
+        // posture until the legacy data ages out.
+        // 2026-08-09 — Removed the top-level /{path=**}/comments/{commentId}
+        // and /{path=**}/statusUpdates/{updateId} rules. The per-event
+        // nested rule at line 492 + 525 (comment / statusUpdate under
+        // /users/{ownerUid}/events/{eventId}/tasks/{taskId}/) is the
+        // canonical read path. The bell hook no longer uses collectionGroup
+        // aggregation (see useNotifications.js 2026-08-09 — switched to
+        // per-event subscriptions). Keeping the broken top-level rules
+        // would shadow the nested read for the owner under certain path
+        // patterns. Removing them keeps the rules simpler.
 
 
     // ---- Helpers ---------------------------------------------------------

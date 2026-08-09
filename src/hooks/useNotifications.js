@@ -1,29 +1,39 @@
 // 2026-08-09 — useNotifications
 //
-// Unified notification feed for the header bell. Aggregates multiple
-// event sources into a single sorted list, so one click shows the
-// couple everything that's changed since they last looked.
+// Unified notification feed for the header bell. Aggregates a small number
+// of sources into a single sorted list, so one click shows the couple
+// everything that's changed since they last looked.
 //
-// Sources (v1):
+// 2026-08-09 (later) — Simplified to per-event subscriptions. The earlier
+// version used collectionGroup('comments') and collectionGroup('statusUpdates')
+// to aggregate activity across the owner's OWN events, but the top-level
+// rules for those collections referenced fields that don't exist on the
+// comment/statusUpdate doc (assignedVendorUid / assignedHelperUid live on
+// the PARENT task, not the comment itself). The rules returned false for
+// every read, and the bell panel produced
+// "Missing or insufficient permissions" errors on every refresh.
+//
+// The fix: drop the comments/statusUpdates aggregation entirely. The bell
+// now shows:
 //   1. **Vendor proposals** on /proposals filtered by coupleUid.
-//      (Existing useRecentProposals logic, ported to the unified shape.)
-//   2. **Task comments** by helpers/vendors — collectionGroup('comments')
-//      where the author is NOT the owner.
-//   3. **Task status updates** by helpers/vendors — collectionGroup('statusUpdates').
-//   4. **Helper accepted invitation** — per-helper doc flip on
+//   2. **New tasks** for the current event (owner creates one for the
+//      couple's wedding; vendor/helper creates one as they engage).
+//   3. **Helper accepted invitation** — per-helper doc flip on
 //      /users/{ownerUid}/helpers/{helperUid}.status from 'invited' to 'active'.
 //
-// Sources deferred to follow-up commits (need new server-side fields):
-//   - Vendor chat inbox messages (already has its own badge; easy merge)
+// Sources that are deferred to follow-up commits (need new server-side
+// fields or new rules):
+//   - Task comments (visible at the task view in <TaskComments>)
+//   - Task status updates (visible at the task view in <TaskActivityTimeline>)
+//   - Vendor chat inbox messages (already has its own badge)
 //   - Photo uploads (needs denormalized event-feed counter)
 //   - Cron reminders (needs Cloud Scheduled function)
 //
-// Why client-side aggregate (not a single denormalized feed doc):
-//   - No CF refactor needed. Wed 1-2 hours saved vs. doing it server-side.
-//   - Each source's subscription is rule-permitted as-is for the owner.
-//   - The downside is N subscriptions per panel-open. N=4 today. At
-//     that scale it's fine. If a couple ever has 10K comments, this
-//     needs to move server-side. Today's couples have ~0-50 each.
+// Why per-event instead of collectionGroup:
+//   - Each subscription is a single, narrow read against a path the
+//     rule already allows. No new top-level rules needed.
+//   - N subscriptions per event was never the right pattern — couples
+//     have N events, not M tasks-per-event. Per-event is the right scope.
 //
 // Client-side sort:
 //   - Each source subscribes to its own shape; we merge, sort by
@@ -31,23 +41,16 @@
 //     React batches the state update so the panel rerenders once.
 //
 // Mark-read semantics:
-//   - Per-source localStorage keys: lastSeenCommentsAt_<ownerUid>,
-//     lastSeenStatusAt_<ownerUid>, lastSeenHelperAcceptAt_<ownerUid>,
+//   - Per-source localStorage keys: lastSeenTasksAt_<ownerUid>_<eventId>,
+//     lastSeenHelperAcceptAt_<ownerUid> (existing),
 //     lastSeenProposalsCount_<ownerUid> (existing).
 //   - "全部已讀" writes each source's marker to "now". The bell badge
 //     computes per-source delta and sums them.
-//
-// Categories + icons + colors:
-//   - See CATEGORY_META below. The dropdown row picks the icon + tint
-//     based on the item's category. Adding a new category = one entry
-//     in the map + one subscription source. No render changes.
 
 import { useEffect, useMemo, useState } from 'react';
 import {
   collection,
-  collectionGroup,
   onSnapshot,
-  orderBy,
   query,
   where,
   limit as fsLimit,
@@ -82,27 +85,16 @@ export const CATEGORY_META = {
     badgeClass: 'bg-amber-500',
     borderClass: 'border-amber-200',
   },
-  comment: {
-    icon: '💭',
-    color: 'blue',
-    label: '待辦新留言',
-    pluralLabel: '待辦留言',
-    bgClass: 'from-blue-400 to-cyan-400',
-    hoverBgClass: 'hover:bg-blue-50/50',
-    textClass: 'text-blue-600',
-    badgeClass: 'bg-blue-500',
-    borderClass: 'border-blue-200',
-  },
-  status: {
-    icon: '✅',
-    color: 'green',
-    label: '待辦狀態更新',
-    pluralLabel: '狀態更新',
-    bgClass: 'from-green-400 to-emerald-400',
-    hoverBgClass: 'hover:bg-green-50/50',
-    textClass: 'text-green-600',
-    badgeClass: 'bg-green-500',
-    borderClass: 'border-green-200',
+  task: {
+    icon: '📋',
+    color: 'cyan',
+    label: '待辦事項',
+    pluralLabel: '待辦事項',
+    bgClass: 'from-cyan-400 to-blue-400',
+    hoverBgClass: 'hover:bg-cyan-50/50',
+    textClass: 'text-cyan-600',
+    badgeClass: 'bg-cyan-500',
+    borderClass: 'border-cyan-200',
   },
   invite: {
     icon: '🤝',
@@ -142,16 +134,15 @@ export const CATEGORY_META = {
 // ---- localStorage keys for per-source "last seen" markers ----
 const SEEN_KEYS = {
   proposal: (ownerUid) => `lastSeenProposalsCount_${ownerUid}`,
-  comment: (ownerUid) => `lastSeenCommentsAt_${ownerUid}`,
-  status: (ownerUid) => `lastSeenStatusAt_${ownerUid}`,
+  task: (ownerUid, eventId) => `lastSeenTasksAt_${ownerUid}_${eventId || '0'}`,
   invite: (ownerUid) => `lastSeenHelperAcceptAt_${ownerUid}`,
 };
 
 // Read a "last seen" marker from localStorage. Returns 0 if missing.
-function readSeen(ownerUid, sourceKey) {
-  if (!ownerUid) return 0;
+function readSeen(ownerUid, sourceKey, eventId) {
+  if (!ownerUid || typeof SEEN_KEYS[sourceKey] !== 'function') return 0;
   try {
-    const raw = window.localStorage.getItem(SEEN_KEYS[sourceKey](ownerUid));
+    const raw = window.localStorage.getItem(SEEN_KEYS[sourceKey](ownerUid, eventId));
     if (!raw) return 0;
     return parseInt(raw, 10) || 0;
   } catch {
@@ -159,11 +150,10 @@ function readSeen(ownerUid, sourceKey) {
   }
 }
 
-function writeSeen(ownerUid, sourceKey, value) {
-  if (!ownerUid) return;
+function writeSeen(ownerUid, sourceKey, value, eventId) {
+  if (!ownerUid || typeof SEEN_KEYS[sourceKey] !== 'function') return;
   try {
-    if (typeof SEEN_KEYS[sourceKey] !== 'function') return;
-    window.localStorage.setItem(SEEN_KEYS[sourceKey](ownerUid), String(value));
+    window.localStorage.setItem(SEEN_KEYS[sourceKey](ownerUid, eventId), String(value));
   } catch {
     // ignore
   }
@@ -174,11 +164,12 @@ function writeSeen(ownerUid, sourceKey, value) {
 // count (so the marker is exact), for others it's a timestamp (so
 // "last seen" semantics work). Caller's responsibility to pass the
 // right shape.
-export function markAllNotificationsSeen(ownerUid, badges) {
+export function markAllNotificationsSeen(ownerUid, badges, eventId) {
   if (!ownerUid) return;
-  for (const [sourceKey, value] of Object.entries(badges)) {
+  for (const [sourceKey, value] of Object.entries(badges || {})) {
+    if (typeof SEEN_KEYS[sourceKey] !== 'function') continue;
     try {
-      window.localStorage.setItem(SEEN_KEYS[sourceKey](ownerUid), String(value));
+      window.localStorage.setItem(SEEN_KEYS[sourceKey](ownerUid, eventId), String(value));
     } catch {
       // ignore
     }
@@ -224,58 +215,20 @@ function proposalItems(docs, ownerUid) {
   }));
 }
 
-function commentItems(docs) {
+function taskItems(docs, ownerUid, eventId) {
   return docs.map((d) => ({
-    id: `comment:${d.id}`,
-    category: 'comment',
-    actorRole: d.authorRole || 'helper',
-    actorName: d.authorName || (d.authorRole === 'vendor' ? '商戶' : '兄弟姊妹'),
-    actorInitial: initialOf(d.authorName),
-    title: '待辦新留言',
-    preview: summarize(d.text) || '已新增留言',
-    meta: {
-      taskId: d.taskId,
-      eventId: d.eventId,
-      ownerUid: d.ownerUid,
-    },
-    href: {
-      view: 'couple-checklist',
-      taskId: d.taskId,
-      eventId: d.eventId,
-      source: 'comment',
-    },
+    id: `task:${d.id}`,
+    category: 'task',
+    actorRole: d.assignedVendorUid ? 'vendor' : (d.assignedHelperUid ? 'helper' : 'owner'),
+    actorName: d.assignedVendorName || d.assignedHelperName || '待辦',
+    actorInitial: initialOf(d.assignedVendorName || d.assignedHelperName || '待'),
+    title: '新待辦事項',
+    preview: summarize(d.title) || '已新增待辦',
+    meta: { taskId: d.id, eventId },
+    href: { view: 'couple-checklist', taskId: d.id, eventId, source: 'task' },
     createdAt: toMillis(d.createdAt),
-    sourceKey: 'comment',
+    sourceKey: 'task',
   }));
-}
-
-function statusItems(docs) {
-  return docs.map((d) => {
-    const newStatus = d.newStatus || d.status || '已更新';
-    return {
-      id: `status:${d.id}`,
-      category: 'status',
-      actorRole: d.authorRole || 'helper',
-      actorName: d.authorName || (d.authorRole === 'vendor' ? '商戶' : '兄弟姊妹'),
-      actorInitial: initialOf(d.authorName),
-      title: '待辦狀態更新',
-      preview: summarize(d.text) || `狀態變更為 ${newStatus}`,
-      meta: {
-        taskId: d.taskId,
-        eventId: d.eventId,
-        ownerUid: d.ownerUid,
-        newStatus,
-      },
-      href: {
-        view: 'couple-checklist',
-        taskId: d.taskId,
-        eventId: d.eventId,
-        source: 'status',
-      },
-      createdAt: toMillis(d.createdAt),
-      sourceKey: 'status',
-    };
-  });
 }
 
 function inviteItems(docs) {
@@ -302,18 +255,17 @@ function inviteItems(docs) {
 
 const MAX_ITEMS = 20;
 const PROPOSALS_LIMIT = 50;
-const COMMENTS_LIMIT = 50;
-const STATUS_LIMIT = 50;
+const TASKS_LIMIT = 50;
 
 export function useNotifications({
   ownerUid,
   coupleUid,
   selfUid,
+  eventId,
   enabled = true,
 }) {
   const [proposals, setProposals] = useState(null); // null = loading
-  const [comments, setComments] = useState([]);
-  const [statusUpdates, setStatusUpdates] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [helpers, setHelpers] = useState([]);
   const [errors, setErrors] = useState({});
 
@@ -355,122 +307,51 @@ export function useNotifications({
     return () => { cancelled = true; unsub(); };
   }, [coupleUid, enabled]);
 
-  // ---- Source 2 + 3: collectionGroup comments + statusUpdates ----
-  // We subscribe to BOTH at once but only filter by date > window. The
-  // owner reads her own comments via the per-event subscription; what
-  // we want here is the GLOBAL feed of "anyone else wrote something
-  // on your tasks". Filter authorUid != self in memory.
+  // ---- Source 2: new tasks for the current event (per-event subscription) ----
+  // Reads /users/{ownerUid}/events/{eventId}/tasks — the path the existing
+  // /events/{eventId}/tasks/{taskId} read rule already covers (owner /
+  // co-owner / vendor / helper). No new top-level rule needed.
   useEffect(() => {
-    if (!enabled || !ownerUid) {
-      setComments([]);
-      setStatusUpdates([]);
+    if (!enabled || !ownerUid || !eventId) {
+      setTasks([]);
       return undefined;
     }
-    let cancelledC = false;
-    let cancelledS = false;
-
-    // Comments
-    const cQ = query(
-      collectionGroup(db, 'comments'),
-      orderBy('createdAt', 'desc'),
-      fsLimit(COMMENTS_LIMIT),
+    let cancelled = false;
+    const q = query(
+      collection(db, 'users', ownerUid, 'events', eventId, 'tasks'),
+      fsLimit(TASKS_LIMIT),
     );
-    const unsubC = onSnapshot(
-      cQ,
+    const unsub = onSnapshot(
+      q,
       (snap) => {
-        if (cancelledC) return;
-        const list = snap.docs
-          .map((d) => {
-            const data = d.data();
-            // d.ref.path = artifacts/{appId}/users/{ownerUid}/events/{eventId}/tasks/{taskId}/comments/{commentId}
-            const m = d.ref.path.match(/users\/([^/]+)\/events\/([^/]+)\/tasks\/([^/]+)\/comments\/([^/]+)$/);
-            if (!m) return null;
-            const [, docOwnerUid, eventId, taskId] = m;
-            return {
-              id: d.id,
-              ownerUid: docOwnerUid,
-              eventId,
-              taskId,
-              authorUid: data.authorUid,
-              authorRole: data.authorRole,
-              authorName: data.authorName,
-              text: data.text,
-              createdAt: data.createdAt,
-            };
-          })
-          .filter((x) => {
-            if (!x) return false;
-            // Only show comments on tasks owned by this user
-            if (x.ownerUid !== ownerUid) return false;
-            // Skip comments authored by the owner herself (she's reacting
-            // to someone else's note, not the other way around)
-            if (selfUid && x.authorUid === selfUid) return false;
-            return true;
-          });
-        setComments(list);
+        if (cancelled) return;
+        const list = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            title: data.title || '',
+            assignedVendorUid: data.assignedVendorUid || null,
+            assignedHelperUid: data.assignedHelperUid || null,
+            assignedVendorName: data.assignedVendorName || null,
+            assignedHelperName: data.assignedHelperName || null,
+            createdAt: data.createdAt,
+            eventId,
+          };
+        });
+        list.sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+        setTasks(list);
       },
       (err) => {
-        if (cancelledC) return;
-        console.error('[useNotifications] comments error:', err);
-        setErrors((s) => ({ ...s, comment: err.message || '讀取失敗' }));
-        setComments([]);
+        if (cancelled) return;
+        console.error('[useNotifications] tasks error:', err);
+        setErrors((s) => ({ ...s, task: err.message || '讀取失敗' }));
+        setTasks([]);
       },
     );
+    return () => { cancelled = true; unsub(); };
+  }, [ownerUid, eventId, enabled]);
 
-    // Status updates
-    const sQ = query(
-      collectionGroup(db, 'statusUpdates'),
-      orderBy('createdAt', 'desc'),
-      fsLimit(STATUS_LIMIT),
-    );
-    const unsubS = onSnapshot(
-      sQ,
-      (snap) => {
-        if (cancelledS) return;
-        const list = snap.docs
-          .map((d) => {
-            const data = d.data();
-            const m = d.ref.path.match(/users\/([^/]+)\/events\/([^/]+)\/tasks\/([^/]+)\/statusUpdates\/([^/]+)$/);
-            if (!m) return null;
-            const [, docOwnerUid, eventId, taskId] = m;
-            return {
-              id: d.id,
-              ownerUid: docOwnerUid,
-              eventId,
-              taskId,
-              authorUid: data.authorUid,
-              authorRole: data.authorRole,
-              authorName: data.authorName,
-              text: data.note || data.text || '',
-              newStatus: data.newStatus || data.status,
-              createdAt: data.createdAt,
-            };
-          })
-          .filter((x) => {
-            if (!x) return false;
-            if (x.ownerUid !== ownerUid) return false;
-            if (selfUid && x.authorUid === selfUid) return false;
-            return true;
-          });
-        setStatusUpdates(list);
-      },
-      (err) => {
-        if (cancelledS) return;
-        console.error('[useNotifications] statusUpdates error:', err);
-        setErrors((s) => ({ ...s, status: err.message || '讀取失敗' }));
-        setStatusUpdates([]);
-      },
-    );
-
-    return () => {
-      cancelledC = true;
-      cancelledS = true;
-      unsubC();
-      unsubS();
-    };
-  }, [ownerUid, selfUid, enabled]);
-
-  // ---- Source 4: helpers (any "active" flip is a notification) ----
+  // ---- Source 3: helpers (any "active" flip is a notification) ----
   // We subscribe to the owner's helpers collection. The docs are kept
   // around even after acceptance (they're the perms record), so we
   // detect "newly active" by comparing against the lastSeen timestamp.
@@ -505,32 +386,28 @@ export function useNotifications({
   const merged = useMemo(() => {
     const items = [
       ...proposalItems(proposals || [], ownerUid),
-      ...commentItems(comments),
-      ...statusItems(statusUpdates),
+      ...taskItems(tasks, ownerUid, eventId),
       ...inviteItems(helpers.filter((h) => h.status === 'active')),
     ];
     items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     return items.slice(0, MAX_ITEMS);
-  }, [proposals, comments, statusUpdates, helpers, ownerUid]);
+  }, [proposals, tasks, helpers, ownerUid, eventId]);
 
   // ---- Per-source "new since last seen" counts ----
   const badges = useMemo(() => {
-    if (!ownerUid) return { proposal: 0, comment: 0, status: 0, invite: 0 };
+    if (!ownerUid) return { proposal: 0, task: 0, invite: 0 };
 
     // Proposals: marker is the last-seen *count*. New = current count - marker.
     const lastSeenProposalCount = readSeen(ownerUid, 'proposal');
     const proposalCount = (proposals || []).length;
     const proposalNew = Math.max(0, proposalCount - lastSeenProposalCount);
 
-    // Comments + status + invite: marker is a timestamp. New = items createdAt > marker.
-    const lastSeenCommentAt = readSeen(ownerUid, 'comment');
-    const lastSeenStatusAt = readSeen(ownerUid, 'status');
-    const lastSeenInviteAt = readSeen(ownerUid, 'invite');
+    // Tasks: marker is a timestamp. New = tasks createdAt > marker.
+    const lastSeenTaskAt = readSeen(ownerUid, 'task', eventId);
+    const taskNew = tasks.filter((t) => toMillis(t.createdAt) > lastSeenTaskAt).length;
 
-    const commentNew = comments.filter((c) => toMillis(c.createdAt) > lastSeenCommentAt).length;
-    const statusNew = statusUpdates.filter((s) => toMillis(s.createdAt) > lastSeenStatusAt).length;
-    // For invites we only count helpers whose acceptedAt > lastSeenInviteAt
-    // AND status == 'active'
+    // Invites: marker is a timestamp. New = helpers whose acceptedAt > marker.
+    const lastSeenInviteAt = readSeen(ownerUid, 'invite');
     const inviteNew = helpers.filter((h) => {
       if (h.status !== 'active') return false;
       const ts = toMillis(h.acceptedAt) || toMillis(h.updatedAt) || 0;
@@ -539,13 +416,12 @@ export function useNotifications({
 
     return {
       proposal: proposalNew,
-      comment: commentNew,
-      status: statusNew,
+      task: taskNew,
       invite: inviteNew,
     };
-  }, [ownerUid, proposals, comments, statusUpdates, helpers]);
+  }, [ownerUid, eventId, proposals, tasks, helpers]);
 
-  const totalNew = badges.proposal + badges.comment + badges.status + badges.invite;
+  const totalNew = badges.proposal + badges.task + badges.invite;
 
   const loading = proposals === null && totalNew === 0;
 

@@ -1257,6 +1257,13 @@ export default function App() {
       byName: vendor?.name || user.displayName || user.email || null,
       byRole: 'vendor',
       reason: statusNote || null,
+      // 2026-08-09 — denormalize access-control fields so the top-level
+      // /{path=**}/statusUpdates collectionGroup rule can gate reads.
+      // Vendor-role writes: the byUid is the vendor, but the owner
+      // (and any other assigned vendor/helper) must still see the
+      // trail. Pass them through from the parent task.
+      assignedVendorUid: task.assignedVendorUid || user.uid,
+      assignedHelperUid: task.assignedHelperUid || null,
     });
   };
 
@@ -1991,6 +1998,13 @@ export default function App() {
       byUid: user.uid,
       byName: user.displayName || user.email || '主理新人',
       byRole: 'owner',
+      // 2026-08-09 — denormalize access-control fields so the top-level
+      // /{path=**}/statusUpdates collectionGroup rule can gate reads.
+      // Owner-role: only the owner (the user themselves) writes here,
+      // but the assigned vendor/helper must still be able to see this
+      // update in their bell. Pass them through from the parent task.
+      assignedVendorUid: task.assignedVendorUid || null,
+      assignedHelperUid: task.assignedHelperUid || null,
     });
   };
 
@@ -3170,6 +3184,7 @@ export default function App() {
                         ownerUid={dataOwnerUid}
                         coupleUid={user?.uid}
                         selfUid={user?.uid}
+                        eventId={currentEvent?.id}
                         onOpenProposal={(jobId) => setViewingProposals(jobId)}
                         onOpenComment={(meta) => {
                           // 2026-08-09 — bell notification click: scroll

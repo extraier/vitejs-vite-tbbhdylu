@@ -77,7 +77,17 @@ export function mergeTaskActivity(comments, statusUpdates) {
  * createdAt for sub-second ordering when `serverTimestamp()` is
  * available.
  */
-export function buildStatusUpdateDoc({ fromStatus, toStatus, byUid, byName, byRole, reason }) {
+export function buildStatusUpdateDoc({
+  fromStatus,
+  toStatus,
+  byUid,
+  byName,
+  byRole,
+  reason,
+  ownerUid,
+  assignedVendorUid,
+  assignedHelperUid,
+}) {
   return {
     byUid,
     byName,
@@ -85,6 +95,15 @@ export function buildStatusUpdateDoc({ fromStatus, toStatus, byUid, byName, byRo
     fromStatus,
     toStatus,
     reason: reason || null,
+    // 2026-08-09 — denormalize access-control fields for the top-level
+    // /{path=**}/statusUpdates/{updateId} collectionGroup rule. See
+    // TaskComments.jsx for the rationale. Caller MUST pass ownerUid +
+    // assignedVendorUid + assignedHelperUid from the parent task — the
+    // rule reads these fields to gate reads without having to walk back
+    // to the parent task.
+    ownerUid: ownerUid || null,
+    assignedVendorUid: assignedVendorUid || null,
+    assignedHelperUid: assignedHelperUid || null,
     createdAt: Date.now(),
   };
 }

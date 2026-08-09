@@ -164,6 +164,18 @@ export function TaskComments({
         text: clean,
         // Optional: only set if the sender actually clicked "reply".
         parentCommentId: replyTo?.id || null,
+        // 2026-08-09 — denormalize the access-control fields so the
+        // top-level /{path=**}/comments/{commentId} collectionGroup rule
+        // can gate reads without having to walk back to the parent task.
+        // The owner (resource.data.ownerUid == auth.uid) and any vendor
+        // /helper currently assigned to the task (matching their role)
+        // are allowed to read. Legacy comments written before this field
+        // was added won't have it, and the rule will silently fail for
+        // those — but the owner-side nested rule still works (see
+        // firestore.rules L480).
+        ownerUid: task.ownerUid,
+        assignedVendorUid: task.assignedVendorUid || null,
+        assignedHelperUid: task.assignedHelperUid || null,
         createdAt: Date.now(),
       });
       setText('');

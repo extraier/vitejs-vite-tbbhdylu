@@ -8,8 +8,15 @@
 // 2026-08-09 — third iteration: multi-source. The first version only
 // surfaced vendor proposals. The second iteration (Aug 8) added a
 // persistent panel. This third iteration wires useNotifications
-// which aggregates 4 sources (proposals, task comments, task status
-// updates, helper accepted invitations) into a single sorted feed.
+// which aggregates 3 sources (proposals, NEW tasks for the current
+// event, helper accepted invitations) into a single sorted feed.
+//
+// 2026-08-09 (later) — task comments + status updates dropped from the
+// bell. The collectionGroup queries for those collections referenced
+// fields that didn't exist on the comment/statusUpdate doc (the
+// assignedVendorUid / assignedHelperUid live on the parent task, not
+// the comment itself). The bell now shows proposals + new tasks + new
+// helpers, and the user opens a task to see comments/status updates.
 //
 // Layout (right edge of header, anchored to the bell button):
 //   ┌─────────────────────────────────────┐
@@ -80,6 +87,7 @@ export function BellNotifications({
   ownerUid,
   coupleUid,
   selfUid,
+  eventId,
   onOpenProposal,
   onOpenComment,
   onOpenStatus,
@@ -100,6 +108,7 @@ export function BellNotifications({
     ownerUid,
     coupleUid,
     selfUid,
+    eventId,
     enabled: open || liveTotalNew > 0,
   });
   useEffect(() => {
@@ -131,8 +140,7 @@ export function BellNotifications({
       // not "now". Otherwise the next render would still show
       // a tiny delta for items created in the same millisecond.
       proposal: (badges.proposal ?? 0),
-      comment: Date.now(),
-      status: Date.now(),
+      task: Date.now(),
       invite: Date.now(),
     });
   };
@@ -144,11 +152,8 @@ export function BellNotifications({
       case 'proposal':
         if (item.href?.jobId && onOpenProposal) onOpenProposal(item.href.jobId);
         break;
-      case 'comment':
+      case 'task':
         if (onOpenComment) onOpenComment(item.meta);
-        break;
-      case 'status':
-        if (onOpenStatus) onOpenStatus(item.meta);
         break;
       case 'invite':
         if (onOpenInvite) onOpenInvite(item.meta);
@@ -228,14 +233,9 @@ export function BellNotifications({
                   💬 {badges.proposal} 個新報價
                 </span>
               )}
-              {badges.comment > 0 && (
-                <span className={`px-2 py-0.5 rounded-full text-white ${CATEGORY_META.comment.badgeClass}`}>
-                  💭 {badges.comment} 個新留言
-                </span>
-              )}
-              {badges.status > 0 && (
-                <span className={`px-2 py-0.5 rounded-full text-white ${CATEGORY_META.status.badgeClass}`}>
-                  ✅ {badges.status} 個狀態更新
+              {badges.task > 0 && (
+                <span className={`px-2 py-0.5 rounded-full text-white ${CATEGORY_META.task.badgeClass}`}>
+                  📋 {badges.task} 個新待辦
                 </span>
               )}
               {badges.invite > 0 && (
@@ -266,7 +266,7 @@ export function BellNotifications({
                 <div className="text-3xl mb-2">✨</div>
                 <div className="text-sm font-bold text-slate-700">暫時無新通知</div>
                 <div className="text-xs text-slate-500 mt-1">
-                  商戶報價、留言、狀態更新會即刻顯示
+                  商戶報價、新待辦、邀請接受會即刻顯示
                 </div>
               </div>
             )}

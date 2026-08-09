@@ -303,6 +303,12 @@ function HelperTaskCard({ task, ownerUid, currentUser, showToast }) {
         byUid: currentUser.uid,
         byName: currentUser.displayName || currentUser.email || '助手',
         byRole: 'helper',
+        // 2026-08-09 — denormalize access-control fields so the top-level
+        // /{path=**}/statusUpdates collectionGroup rule can gate reads.
+        // Helper-role writes: pass the assigned vendor/helper from the
+        // parent task so the owner can still see this update.
+        assignedVendorUid: task.assignedVendorUid || null,
+        assignedHelperUid: task.assignedHelperUid || currentUser.uid,
       });
       showToast?.(
         `✓ 已更新為「${
