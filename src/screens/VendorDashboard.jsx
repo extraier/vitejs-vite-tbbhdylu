@@ -94,23 +94,58 @@ function VendorAssignedItem({ item, currentUser }) {
   const title = item.title || item.name || item.label || item.description || '未命名項目';
   const detail = item.description || item.note || item.location || item.venue || '';
   const path = item.commentPath;
+  // 2026-08-09 — Surface which wedding this is for at the top of
+  // every assigned card. Vendors routinely take more than one event
+  // at a time, so without this header they can't tell whether
+  // "新娘梳洗、更衣" belongs to the 2027-01-01 wedding or the
+  // 2027-04-15 one. The eventName / eventDate fields are
+  // denormalized on the doc at write time (see App.jsx upsert
+  // helpers) so we don't need a separate event-doc read here.
+  const eventName = item.eventName || null;
+  const eventDate = item.eventDate || null;
   return (
     <li className="rounded-xl border border-emerald-200 bg-white overflow-hidden">
+      {eventName && (
+        <div
+          className="px-3 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-emerald-200 flex items-center gap-2"
+          title="呢個工作係邊場婚禮"
+        >
+          <span className="text-base">💒</span>
+          <span className="text-xs font-black text-emerald-900 truncate flex-1">
+            {eventName}
+          </span>
+          {eventDate && (
+            <span className="text-[11px] font-bold text-emerald-700 bg-white border border-emerald-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+              📅 {eventDate}
+            </span>
+          )}
+        </div>
+      )}
       <div className="p-3 flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <div className="font-bold text-slate-800">{title}</div>
           <div className="flex flex-wrap gap-2 text-xs text-slate-500 mt-1">
-            {item.eventName && <span>💒 {item.eventName}</span>}
+            {!eventName && item.eventId && (
+              <span className="text-slate-400">💒 (event {item.eventId.slice(0, 6)}…)</span>
+            )}
             {item.startTime && <span>🕒 {item.startTime}</span>}
             {item.dueDate && <span>📅 {item.dueDate}</span>}
+            {item.dueTime && <span>· {item.dueTime}</span>}
             {item.category && <span>📂 {item.category}</span>}
+            {item.venue && <span>📍 {item.venue}</span>}
           </div>
-          {detail && <p className="mt-1 text-xs text-slate-600 whitespace-pre-wrap">{detail}</p>}
+          {detail && (
+            <p className="mt-1 text-xs text-slate-600 whitespace-pre-wrap">{detail}</p>
+          )}
         </div>
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
-          className={`p-1.5 rounded-lg border ${expanded ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-300'}`}
+          className={`p-1.5 rounded-lg border ${
+            expanded
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-300'
+          }`}
           aria-label="留言溝通"
           title="留言溝通"
         >
@@ -121,14 +156,22 @@ function VendorAssignedItem({ item, currentUser }) {
         <div className="px-3 pb-3">
           <ItemComments
             path={path}
-            currentUser={{ uid: currentUser?.uid, displayName: currentUser?.displayName || currentUser?.name, email: currentUser?.email }}
+            currentUser={{
+              uid: currentUser?.uid,
+              displayName: currentUser?.displayName || currentUser?.name,
+              email: currentUser?.email,
+            }}
             currentRole="vendor"
             label="留言溝通"
             emptyHint="未有留言，可以留低第一句。"
           />
         </div>
       )}
-      {expanded && !path && <p className="px-3 pb-3 text-xs text-rose-600">留言路徑未準備好，請重新整理再試。</p>}
+      {expanded && !path && (
+        <p className="px-3 pb-3 text-xs text-rose-600">
+          留言路徑未準備好，請重新整理再試。
+        </p>
+      )}
     </li>
   );
 }
@@ -446,24 +489,127 @@ export function VendorDashboard({
           <p className="text-sm text-emerald-800 mb-4">
             任務、大日流程同物資都會喺度顯示。你可以更新任務狀態，亦可以直接留言同新人溝通。
           </p>
-          {assignedRundown.length > 0 && (
-            <div className="mb-4">
-              <h3 className="font-bold text-emerald-900 mb-2">🕒 大日流程 ({assignedRundown.length})</h3>
-              <ul className="space-y-2">{assignedRundown.map((item) => <VendorAssignedItem key={`${item.ownerUid}_${item.eventId}_${item.id}`} item={item} currentUser={user} />)}</ul>
-            </div>
-          )}
-          {assignedResources.length > 0 && (
-            <div className="mb-4">
-              <h3 className="font-bold text-emerald-900 mb-2">📦 物資 ({assignedResources.length})</h3>
-              <ul className="space-y-2">{assignedResources.map((item) => <VendorAssignedItem key={`${item.ownerUid}_${item.eventId}_${item.id}`} item={item} currentUser={user} />)}</ul>
-            </div>
-          )}
-          {assignedTasks.length > 0 && (
-            <div>
-              <h3 className="font-bold text-emerald-900 mb-2">✅ 待辦任務 ({assignedTasks.length})</h3>
-              <ul className="space-y-2">{assignedTasks.map((t) => <VendorTaskCard key={`${t.ownerUid}_${t.id}`} task={t} onUpdateStatus={onUpdateTaskStatus} currentUser={vendor} />)}</ul>
-            </div>
-          )}
+          {/*
+            2026-08-09 — Group by event, NOT by type. A vendor routinely
+            takes more than one wedding at a time, so seeing "大日流程
+            (3) 📦 物資 (2)" across two couples makes it impossible to
+            tell which item belongs to which wedding. Now each event
+            gets its own section header (event name + date) so the
+            vendor immediately knows which wedding the items below
+            are for. Within an event, we still sub-group by type
+            (rundown / resources / tasks) so the structure is familiar.
+          */}
+          {(() => {
+            // Build unique event list, ordered by eventDate asc (the
+            // soonest wedding first). Falls back to eventName for
+            // stability if the date isn't denormalized yet (legacy
+            // docs).
+            const allItems = [
+              ...assignedRundown,
+              ...assignedResources,
+              ...assignedTasks,
+            ];
+            const eventKeys = [
+              ...new Map(
+                allItems
+                  .filter((i) => i.eventId)
+                  .map((i) => [
+                    `${i.ownerUid}/${i.eventId}`,
+                    {
+                      key: `${i.ownerUid}/${i.eventId}`,
+                      ownerUid: i.ownerUid,
+                      eventId: i.eventId,
+                      eventName: i.eventName,
+                      eventDate: i.eventDate,
+                    },
+                  ]),
+              ).values(),
+            ];
+            eventKeys.sort((a, b) => {
+              const ad = a.eventDate || '';
+              const bd = b.eventDate || '';
+              if (ad !== bd) return ad.localeCompare(bd);
+              return (a.eventName || '').localeCompare(b.eventName || '');
+            });
+            const inEvent = (key) => (item) =>
+              item.eventId && `${item.ownerUid}/${item.eventId}` === key;
+            if (eventKeys.length === 0) return null;
+            return eventKeys.map((ev) => {
+              const rd = assignedRundown.filter(inEvent(ev.key));
+              const rs = assignedResources.filter(inEvent(ev.key));
+              const tk = assignedTasks.filter(inEvent(ev.key));
+              return (
+                <div
+                  key={ev.key}
+                  className="mb-5 last:mb-0 bg-white/40 border border-emerald-100 rounded-xl p-3"
+                >
+                  <div className="flex items-center gap-2 mb-3 pb-2 border-b border-emerald-100">
+                    <span className="text-base">💒</span>
+                    <span className="font-black text-emerald-900 truncate flex-1">
+                      {ev.eventName || `婚禮 ${ev.eventId.slice(0, 6)}…`}
+                    </span>
+                    {ev.eventDate && (
+                      <span className="text-[11px] font-bold text-emerald-700 bg-white border border-emerald-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                        📅 {ev.eventDate}
+                      </span>
+                    )}
+                    <span className="text-[10px] text-emerald-700 font-bold">
+                      {rd.length + rs.length + tk.length} 個
+                    </span>
+                  </div>
+                  {rd.length > 0 && (
+                    <div className="mb-3">
+                      <h4 className="text-xs font-bold text-emerald-800 mb-1.5">
+                        🕒 大日流程 ({rd.length})
+                      </h4>
+                      <ul className="space-y-2">
+                        {rd.map((item) => (
+                          <VendorAssignedItem
+                            key={`${item.ownerUid}_${item.eventId}_${item.id}`}
+                            item={item}
+                            currentUser={user}
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {rs.length > 0 && (
+                    <div className="mb-3">
+                      <h4 className="text-xs font-bold text-emerald-800 mb-1.5">
+                        📦 物資 ({rs.length})
+                      </h4>
+                      <ul className="space-y-2">
+                        {rs.map((item) => (
+                          <VendorAssignedItem
+                            key={`${item.ownerUid}_${item.eventId}_${item.id}`}
+                            item={item}
+                            currentUser={user}
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {tk.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-bold text-emerald-800 mb-1.5">
+                        ✅ 待辦任務 ({tk.length})
+                      </h4>
+                      <ul className="space-y-2">
+                        {tk.map((t) => (
+                          <VendorTaskCard
+                            key={`${t.ownerUid}_${t.id}`}
+                            task={t}
+                            onUpdateStatus={onUpdateTaskStatus}
+                            currentUser={vendor}
+                          />
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              );
+            });
+          })()}
         </div>
       )}
       {!loading && assignedTasks.length === 0 && assignedRundown.length === 0 && assignedResources.length === 0 && (

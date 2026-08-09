@@ -1276,9 +1276,19 @@ export default function App() {
              const list = snap.docs.map((d) => ({
                id: d.id,
                ...d.data(),
-               // The collectionGroup doc path looks like
-               // artifacts/{appId}/users/{ownerUid}/tasks/{taskId}
+               // collectionGroup doc path:
+               //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/tasks/{taskId}
+               // d.ref = tasks/{taskId}
+               // d.ref.parent = events/{eventId}    → id is eventId
+               // d.ref.parent.parent = users/{ownerUid} → id is ownerUid
                ownerUid: d.ref.parent.parent?.id,
+               // 2026-08-09 — surface eventId from the parent path so
+               // the vendor dashboard can group / dedupe by wedding
+               // when the same vendor is assigned across multiple
+               // events. (eventName / eventDate come from the doc
+               // body via denormalized fields — see App.jsx upsert
+               // helpers.)
+               eventId: d.ref.parent.id,
              }));
              list.sort((a, b) => {
                // Incomplete first, then by dueDate asc, then most-recent
@@ -2125,6 +2135,12 @@ export default function App() {
       assignedHelperId: chosenHelperId,
       assignedHelperName: chosenHelperName,
       assignedHelperUid: chosenHelperUid,
+      // 2026-08-09 — denormalize event name + date so the vendor's
+      // collectionGroup('tasks').where('assignedVendorUid'==...) read
+      // can show which wedding this task is for. See upsertWeddingDoc
+      // for the full rationale (per-event read rule denies non-owners).
+      eventName: currentEvent?.name || null,
+      eventDate: currentEvent?.date || null,
     };
     // 2026-07-27 — Migrated to event-scoped path.
     await addDoc(collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks'), newTask);
@@ -2263,7 +2279,25 @@ export default function App() {
     // Strip the id itself — Firestore stores it as the doc key
     const { id: _id, ...rest } = data;
     try {
-      await setDoc(ref, { ...rest, eventId: currentEvent.id, updatedAt: Date.now() }, { merge: true });
+      // 2026-08-09 — denormalize event name + date onto every
+      // wedding-day doc so the vendor's collectionGroup read can
+      // show "which wedding is this for" without a separate
+      // event-doc fetch (which the per-event read rule would deny
+      // for non-owners). Covers rundown / resources / teaCeremony /
+      // playlist because all four go through this helper. The two
+      // fields are stable for the lifetime of the event; if the
+      // couple renames or reschedules, the next upsert overwrites.
+      await setDoc(
+        ref,
+        {
+          ...rest,
+          eventId: currentEvent.id,
+          eventName: currentEvent.name || null,
+          eventDate: currentEvent.date || null,
+          updatedAt: Date.now(),
+        },
+        { merge: true },
+      );
     } catch (err) {
       throw err;
     }
