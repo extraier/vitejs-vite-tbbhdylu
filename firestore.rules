@@ -474,9 +474,24 @@ match /{path=**}/events/{eventId} {
           // the timeline. Comments live in the /comments subcollection
           // (see below).
           match /rundown/{entryId} {
-            allow read: if isOwnerOrAnyCoOwner(ownerUid)
-              || hasHelperPerm(ownerUid, 'canViewChecklist')
-              || (isSignedIn() && resource.data.assignedVendorUid == request.auth.uid);
+            // 2026-08-10 — REORDERED. Vendor branch moved BEFORE
+            // isOwnerOrAnyCoOwner. isOwnerOrAnyCoOwner internally
+            // calls isCoOwnerOfEventDoc(ownerUid) which accesses the
+            // EVENT doc via get(). Vendor cannot read the event doc
+            // (event doc's read rule is isOwnerOrAnyCoOwner || guestLink,
+            // which vendor satisfies neither), so the get() throws on
+            // permission-denied and the entire isOwnerOrAnyCoOwner call
+            // throws — short-circuiting the || chain before vendor's
+            // own assignedVendorUid branch ever runs.
+            //
+            // The vendor branch is a pure UID comparison against
+            // resource.data.assignedVendorUid. Putting it first means
+            // vendors never trigger the recursive access.
+            //
+            // Same fix applied to /resources/{itemId} below.
+            allow read: if (isSignedIn() && resource.data.assignedVendorUid == request.auth.uid)
+              || isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewChecklist');
             allow write: if isOwnerOrAnyCoOwner(ownerUid);
             match /comments/{commentId} {
               // 2026-08-10 — Vendor comment read for /rundown/{entryId}/comments.
@@ -557,9 +572,12 @@ match /{path=**}/events/{eventId} {
           // replacement (see /rundown/{entryId}/comments block above
           // for the full explanation of why).
           match /resources/{itemId} {
-            allow read: if isOwnerOrAnyCoOwner(ownerUid)
-              || hasHelperPerm(ownerUid, 'canViewChecklist')
-              || (isSignedIn() && resource.data.assignedVendorUid == request.auth.uid);
+            // 2026-08-10 — See /rundown/{entryId} above for why this is
+            // reordered. Same recursive isOwnerOrAnyCoOwner → event doc
+            // → throw issue applies here.
+            allow read: if (isSignedIn() && resource.data.assignedVendorUid == request.auth.uid)
+              || isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewChecklist');
             allow write: if isOwnerOrAnyCoOwner(ownerUid);
             match /comments/{commentId} {
               allow read: if isOwner(ownerUid)
