@@ -104,11 +104,25 @@ export function BellNotifications({
   // stays subscribed while the badge itself is non-zero — without the
   // circular destructure.
   const [liveTotalNew, setLiveTotalNew] = useState(0);
+  // 2026-08-09 — localSeenTick forces an immediate re-render when the
+  // user clicks 全部已讀. The hook also dispatches a window event for
+  // the same purpose (so other open panels stay in sync), but the
+  // event listener inside the hook subscribes asynchronously after
+  // mount — there can be a tick of latency on first interaction.
+  // The local state update is synchronous, so the badge clears on
+  // the very next render no matter what.
+  const [localSeenTick, setLocalSeenTick] = useState(0);
   const { items, badges, totalNew, loading, errors } = useNotifications({
     ownerUid,
     coupleUid,
     selfUid,
     eventId,
+    // Bump a localSeenTick on 全部已讀 so this consumer re-renders
+    // immediately even if the hook's window-event listener hasn't
+    // fired yet (first interaction, event listener async-mount race).
+    // The hook also reads from localStorage, so the fresh markers are
+    // already there when this re-render runs.
+    refreshKey: localSeenTick,
     enabled: open || liveTotalNew > 0,
   });
   useEffect(() => {
@@ -143,6 +157,11 @@ export function BellNotifications({
       task: Date.now(),
       invite: Date.now(),
     });
+    // Bump local tick so this component re-renders immediately
+    // against the fresh localStorage markers. The hook also listens
+    // for the dispatched event, but using local state here is
+    // synchronous and removes any race with the async listener mount.
+    setLocalSeenTick((t) => t + 1);
   };
 
   const handleItemClick = (item) => {

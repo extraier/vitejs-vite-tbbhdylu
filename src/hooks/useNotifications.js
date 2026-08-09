@@ -280,6 +280,13 @@ export function useNotifications({
   coupleUid,
   selfUid,
   eventId,
+  // 2026-08-09 — refreshKey is an opaque counter the caller bumps
+  // whenever they want to force a badges recomputation (e.g. after
+  // writing localStorage markers via markAllNotificationsSeen). The
+  // hook also listens for a window event for the same purpose, but
+  // the local refreshKey is synchronous and removes any race with
+  // the event listener mount.
+  refreshKey = 0,
   enabled = true,
 }) {
   const [proposals, setProposals] = useState(null); // null = loading
@@ -449,7 +456,7 @@ export function useNotifications({
       task: taskNew,
       invite: inviteNew,
     };
-  }, [ownerUid, eventId, proposals, tasks, helpers, seenTick]);
+  }, [ownerUid, eventId, proposals, tasks, helpers, seenTick, refreshKey]);
 
   const totalNew = badges.proposal + badges.task + badges.invite;
 

@@ -245,6 +245,51 @@ describe('useNotifications', () => {
     expect(window.localStorage.getItem('lastSeenHelperAcceptAt_owner-1')).toBe('999');
   });
 
+  it('recomputes badges after markAllNotificationsSeen (event flow)', async () => {
+    // 1. Start: 1 unread task (createdAt > 0 marker), 1 active helper
+    window.localStorage.setItem('lastSeenTasksAt_owner-1_e-1', '0');
+    window.localStorage.setItem('lastSeenHelperAcceptAt_owner-1', '0');
+    window.localStorage.setItem('lastSeenProposalsCount_owner-1', '0');
+
+    mocks.onSnapshot.mockImplementation((q, onNext) => {
+      const qHead = q.args[0];
+      let docs = [];
+      if (qHead?.__isCollection && qHead.args[1] === 'artifacts' && qHead.args[5] === 'events' && qHead.args[7] === 'tasks') {
+        docs = [{ id: 't1', data: () => ({ title: 'pick venue', createdAt: { toMillis: () => 1000 } }) }];
+      } else if (qHead?.__isCollection && qHead.args[1] === 'artifacts' && qHead.args[5] === 'helpers') {
+        docs = [{ id: 'h1', data: () => ({ status: 'active', name: 'Tiger', acceptedAt: { toMillis: () => 1000 } }) }];
+      } else if (qHead?.__isCollection && qHead.args[1] === 'proposals') {
+        docs = [{ id: 'p1', data: () => ({ vendorName: 'V1', createdAt: { toMillis: () => 1000 } }) }];
+      }
+      setTimeout(() => onNext({ docs: docs.map((d) => ({ id: d.id, data: d.data })) }), 0);
+      return () => {};
+    });
+
+    const { result } = renderHook(() =>
+      useNotifications({ ownerUid: 'owner-1', coupleUid: 'c-1', selfUid: 'owner-1', eventId: 'e-1', enabled: true }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.totalNew).toBeGreaterThan(0);
+    });
+    expect(result.current.badges.task).toBe(1);
+    expect(result.current.badges.invite).toBe(1);
+
+    // 2. Mark all as read
+    markAllNotificationsSeen('owner-1', {
+      proposal: result.current.badges.proposal ?? 0,
+      task: Date.now() + 1_000_000, // future timestamp so nothing is newer
+      invite: Date.now() + 1_000_000,
+    }, 'e-1');
+
+    // 3. Badge counters must update via the window event listener
+    await waitFor(() => {
+      expect(result.current.badges.task).toBe(0);
+      expect(result.current.badges.invite).toBe(0);
+    });
+    expect(result.current.totalNew).toBe(0);
+  });
+
   it('caps merged items at 20 sorted newest-first', async () => {
     const docs = [];
     for (let i = 0; i < 30; i++) {
