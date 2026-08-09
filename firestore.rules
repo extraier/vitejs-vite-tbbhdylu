@@ -479,16 +479,29 @@ match /{path=**}/events/{eventId} {
               || (isSignedIn() && resource.data.assignedVendorUid == request.auth.uid);
             allow write: if isOwnerOrAnyCoOwner(ownerUid);
             match /comments/{commentId} {
-              // Anyone who can read the parent entry can read its comments.
-              // (helpers + assigned vendors + owner + coOwner)
+              // 2026-08-10 — Vendor comment read for /rundown/{entryId}/comments.
+              // The original `$(appId)` template path didn't fire for vendor
+              // maxportrading@gmail.com even though assignedVendorUid matched
+              // the auth uid, appId resolved to 'savetheday-production'
+              // (matching the data path), and parent doc exists. Added a
+              // hardcoded appId fallback (defensive — if the template
+              // variable resolution is flaky, the OR-chain falls through to
+              // the literal path).
               allow read: if isOwnerOrAnyCoOwner(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid)
                 || (
                   isSignedIn()
-                  && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
-                  && get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
+                  && (
+                    exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                    || exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                  )
+                  && (
+                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
+                    || get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
+                  )
                 );
+              // 2026-08-10 — Same hardcoded-fallback fix as read above.
               // Create: author must be one of (owner/coOwner/assigned helper
               // with canViewChecklist/assigned vendor). Author identity is
               // stamped onto the doc so update/delete can authorise via
@@ -502,9 +515,13 @@ match /{path=**}/events/{eventId} {
                   && request.resource.data.text.size() > 0
                   && request.resource.data.text.size() <= 2000
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
-                  && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                  && (
+                    exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                    || exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                  )
                   && (
                     get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
+                    || get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
                     || hasHelperPerm(ownerUid, 'canViewChecklist')
                   )
                 );
@@ -516,6 +533,8 @@ match /{path=**}/events/{eventId} {
           // as /rundown: helpers with canViewChecklist + assigned
           // vendor can read the item and post comments; only the
           // owner can add/delete the item itself.
+          // 2026-08-10 — Same hardcoded-appId fallback added (see
+          // /rundown/{entryId}/comments block above for context).
           match /resources/{itemId} {
             allow read: if isOwnerOrAnyCoOwner(ownerUid)
               || hasHelperPerm(ownerUid, 'canViewChecklist')
@@ -527,8 +546,14 @@ match /{path=**}/events/{eventId} {
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid)
                 || (
                   isSignedIn()
-                  && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
-                  && get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
+                  && (
+                    exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                    || exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                  )
+                  && (
+                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
+                    || get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
+                  )
                 );
               allow create: if isOwnerOrAnyCoOwner(ownerUid)
                 || (
@@ -539,9 +564,13 @@ match /{path=**}/events/{eventId} {
                   && request.resource.data.text.size() > 0
                   && request.resource.data.text.size() <= 2000
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
-                  && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                  && (
+                    exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                    || exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                  )
                   && (
                     get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
+                    || get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
                     || hasHelperPerm(ownerUid, 'canViewChecklist')
                   )
                 );
