@@ -31,6 +31,7 @@ import {
   serverTimestamp,
   increment,
   getDocs,
+  deleteField,
 } from 'firebase/firestore';
 import { db, appId } from './firebase';
 
@@ -140,11 +141,21 @@ export function subscribeToInquiries(userUid, role, callback) {
 
 // ---- Mark all messages in an inquiry as read for one side ----
 // Zeros out the unread counter for the side that just viewed it.
+// Uses deleteField() for the OTHER side's counter — Firestore's
+// updateDoc rejects `undefined` values as an "Unsupported field
+// value", so passing undefined for the side we're not zeroing
+// was throwing in production (see log:
+// "updateDoc() called with invalid data. Unsupported field value:
+// undefined (found in field vendorUnread)").
 export async function markInquiryRead(inquiryId, role) {
   const ref = doc(db, COL, inquiryId);
   await updateDoc(ref, {
-    coupleUnread: role === 'couple' ? 0 : undefined,
-    vendorUnread: role === 'vendor' ? 0 : undefined,
+    // 2026-08-09 — use deleteField() for the side we're NOT zeroing,
+    // not `undefined`. The original code passed `undefined` and Firestore
+    // rejected the call entirely, so the unread counter never actually
+    // got cleared.
+    coupleUnread: role === 'couple' ? 0 : deleteField(),
+    vendorUnread: role === 'vendor' ? 0 : deleteField(),
   });
 }
 

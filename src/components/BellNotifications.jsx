@@ -51,7 +51,7 @@
 //   - "✨ 暫時無新通知"
 
 import { useEffect, useRef, useState } from 'react';
-import { Bell, Check, ExternalLink, Loader2 } from 'lucide-react';
+import { Bell, Check, Loader2 } from 'lucide-react';
 import {
   useNotifications,
   markAllNotificationsSeen,
@@ -190,23 +190,6 @@ export function BellNotifications({
     }
   };
 
-  const handleViewAll = () => {
-    // 2026-08-09 — the "查看全部" button used to navigate to the
-    // dashboard via onOpenDashboard, but the dashboard renders the
-    // couple's event list — it does NOT show notifications. For
-    // users with no events yet (or who clicked looking for their
-    // vendor activity), this led to an empty page.
-    //
-    // The bell dropdown itself is already "view all" — items are
-    // sorted newest-first and the dropdown body scrolls up to
-    // 60vh. So "查看全部" is just an explicit close. Drop the
-    // onOpenDashboard call (keep the prop in the signature so
-    // existing callers don't break — it's a no-op now).
-    setOpen(false);
-  };
-
-  // Compute the proposal count for the mark-all-read marker.
-  // (Other sources use timestamp markers, this one uses absolute count.)
   const proposalCount = items.filter((i) => i.category === 'proposal').length;
 
   return (
@@ -352,16 +335,13 @@ export function BellNotifications({
             )}
           </div>
 
-          {/* Footer */}
-          <div className="border-t border-slate-100 px-4 py-2.5 bg-slate-50">
-            <button
-              onClick={handleViewAll}
-              className="w-full text-sm font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg py-1.5 flex items-center justify-center gap-1.5 transition-colors"
-            >
-              查看全部
-              <ExternalLink className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          {/* Footer — click anywhere outside the panel to dismiss; no
+              "查看全部" button because the dropdown IS the canonical
+              view (sorted newest-first, 60vh scroll). Slack/Linear/
+              Notion all follow this pattern. Keeping the button was
+              confusing: it used to navigate to the empty dashboard
+              for new couples; now it just closes the panel — neither
+              feels like "view all notifications". */}
         </div>
       )}
     </div>
