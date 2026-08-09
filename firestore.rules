@@ -480,33 +480,50 @@ match /{path=**}/events/{eventId} {
             allow write: if isOwnerOrAnyCoOwner(ownerUid);
             match /comments/{commentId} {
               // 2026-08-10 — Vendor comment read for /rundown/{entryId}/comments.
-              // The original `$(appId)` template path didn't fire for vendor
-              // maxportrading@gmail.com even though assignedVendorUid matched
-              // the auth uid, appId resolved to 'savetheday-production'
-              // (matching the data path), and parent doc exists. Added a
-              // hardcoded appId fallback (defensive — if the template
-              // variable resolution is flaky, the OR-chain falls through to
-              // the literal path).
-              allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              // Root cause: the previous `isOwnerOrAnyCoOwner(ownerUid)` call
+              // internally invokes `isCoOwnerOfEventDoc(ownerUid)`, which
+              // accesses `resource.data.eventId`. For LIST queries
+              // (collection-group listener + Firestore SDK onSnapshot), the
+              // rules engine evaluates the rule against each candidate doc,
+              // and `resource.data.eventId is string` is FALSE for a comment
+              // doc (comments don't have an eventId field — it's in the
+              // parent path). But for vendor's auth context, the rule never
+              // gets that far: `isCoOwnerOfEventDoc` also accesses the
+              // event doc's coOwners field via `get()`, and vendor cannot
+              // read the event doc (their read rule only allows
+              // isOwnerOrAnyCoOwner + guestLink). The `get()` throws on
+              // permission-denied, which aborts the entire OR chain
+              // even though vendor doesn't need co-owner access.
+              //
+              // Fix: bypass isOwnerOrAnyCoOwner entirely. Inline the safe
+              // branches directly:
+              //   - isOwner(ownerUid) — pure UID comparison, no doc access
+              //   - isCoOwnerOfAnyEvent(ownerUid) — reads /coOwners/{uid}
+              //     standalone doc, which has its own read rule that
+              //     allows the co-owner themselves to read it
+              //   - hasHelperPerm — safe (reads /helpers/{uid} doc with
+              //     its own read rule)
+              // Both isCoOwnerOfEventDoc / isCoOwnerByRequestEvent
+              // (which need resource.data.eventId) are skipped — partners
+              // still get access via isCoOwnerOfAnyEvent's standalone doc.
+              allow read: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid)
                 || (
                   isSignedIn()
-                  && (
-                    exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
-                    || exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
-                  )
-                  && (
-                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
-                    || get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
-                  )
+                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
                 );
-              // 2026-08-10 — Same hardcoded-fallback fix as read above.
+              // 2026-08-10 — Same root cause + same fix on the create rule.
+              // The create rule also called isOwnerOrAnyCoOwner, which
+              // has the same vendor-blocked-by-event-doc-access issue.
               // Create: author must be one of (owner/coOwner/assigned helper
               // with canViewChecklist/assigned vendor). Author identity is
               // stamped onto the doc so update/delete can authorise via
               // resource.data.authorUid.
-              allow create: if isOwnerOrAnyCoOwner(ownerUid)
+              allow create: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
@@ -515,15 +532,18 @@ match /{path=**}/events/{eventId} {
                   && request.resource.data.text.size() > 0
                   && request.resource.data.text.size() <= 2000
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
-                  && (
-                    exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
-                    || exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
-                  )
-                  && (
-                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
-                    || get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
-                    || hasHelperPerm(ownerUid, 'canViewChecklist')
-                  )
+                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
+                )
+                || (
+                  isSignedIn()
+                  && request.resource.data.authorUid == request.auth.uid
+                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                  && request.resource.data.text is string
+                  && request.resource.data.text.size() > 0
+                  && request.resource.data.text.size() <= 2000
+                  && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
+                  && hasHelperPerm(ownerUid, 'canViewChecklist')
                 );
               allow update, delete: if isOwnerOrAnyCoOwner(ownerUid)
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid);
@@ -533,29 +553,26 @@ match /{path=**}/events/{eventId} {
           // as /rundown: helpers with canViewChecklist + assigned
           // vendor can read the item and post comments; only the
           // owner can add/delete the item itself.
-          // 2026-08-10 — Same hardcoded-appId fallback added (see
-          // /rundown/{entryId}/comments block above for context).
+          // 2026-08-10 — Same isOwnerOrAnyCoOwner → safe-branches
+          // replacement (see /rundown/{entryId}/comments block above
+          // for the full explanation of why).
           match /resources/{itemId} {
             allow read: if isOwnerOrAnyCoOwner(ownerUid)
               || hasHelperPerm(ownerUid, 'canViewChecklist')
               || (isSignedIn() && resource.data.assignedVendorUid == request.auth.uid);
             allow write: if isOwnerOrAnyCoOwner(ownerUid);
             match /comments/{commentId} {
-              allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              allow read: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid)
                 || (
                   isSignedIn()
-                  && (
-                    exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
-                    || exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
-                  )
-                  && (
-                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
-                    || get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
-                  )
+                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
                 );
-              allow create: if isOwnerOrAnyCoOwner(ownerUid)
+              allow create: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
@@ -564,15 +581,18 @@ match /{path=**}/events/{eventId} {
                   && request.resource.data.text.size() > 0
                   && request.resource.data.text.size() <= 2000
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
-                  && (
-                    exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
-                    || exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
-                  )
-                  && (
-                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
-                    || get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
-                    || hasHelperPerm(ownerUid, 'canViewChecklist')
-                  )
+                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
+                )
+                || (
+                  isSignedIn()
+                  && request.resource.data.authorUid == request.auth.uid
+                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                  && request.resource.data.text is string
+                  && request.resource.data.text.size() > 0
+                  && request.resource.data.text.size() <= 2000
+                  && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
+                  && hasHelperPerm(ownerUid, 'canViewChecklist')
                 );
               allow update, delete: if isOwnerOrAnyCoOwner(ownerUid)
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid);
