@@ -99,6 +99,26 @@ match /{path=**}/events/{eventId} {
           );
         }
 
+        // 2026-08-09 — collectionGroup FIX for 大日流程 (rundown) and
+        // 物資 (resources). VendorDashboard in App.jsx runs
+        // collectionGroup(db,'rundown'|'resources') filtered by
+        // assignedVendorUid == auth.uid. Without these top-level
+        // rules the snapshot errors with "Missing or insufficient
+        // permissions" for vendors — the per-event nested rules only
+        // apply to per-doc get(), not collectionGroup. Same shape as
+        // the /tasks collectionGroup rule above: per-doc writes
+        // remain owner-scoped at the nested rule.
+        match /{path=**}/rundown/{entryId} {
+          allow read: if isSignedIn() && (
+            request.auth.uid == resource.data.assignedVendorUid
+          );
+        }
+        match /{path=**}/resources/{itemId} {
+          allow read: if isSignedIn() && (
+            request.auth.uid == resource.data.assignedVendorUid
+          );
+        }
+
         // 2026-08-09 — collectionGroup FIX for task comments. The
         // useNotifications hook in the header bell aggregates EVERY
         // helper/vendor comment across EVERY event into a single

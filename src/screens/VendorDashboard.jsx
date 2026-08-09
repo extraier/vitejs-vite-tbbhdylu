@@ -39,7 +39,7 @@ import {
 import { getVendorCategoryLabel } from '../lib/config';
 import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 import { formatBudgetString } from '../lib/format';
-import { TaskComments } from '../components/TaskComments';
+import { ItemComments } from '../components/ItemComments';
 import { VendorPortfolioAnalytics } from '../components/VendorPortfolioAnalytics';
 import { VendorInquiriesPanel } from '../components/VendorInquiriesPanel';
 import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
@@ -89,6 +89,50 @@ const TASK_STATUSES = [
 
 const STATUS_BY_ID = Object.fromEntries(TASK_STATUSES.map((s) => [s.id, s]));
 
+function VendorAssignedItem({ item, currentUser }) {
+  const [expanded, setExpanded] = useState(false);
+  const title = item.title || item.name || item.label || item.description || '未命名項目';
+  const detail = item.description || item.note || item.location || item.venue || '';
+  const path = item.commentPath;
+  return (
+    <li className="rounded-xl border border-emerald-200 bg-white overflow-hidden">
+      <div className="p-3 flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="font-bold text-slate-800">{title}</div>
+          <div className="flex flex-wrap gap-2 text-xs text-slate-500 mt-1">
+            {item.eventName && <span>💒 {item.eventName}</span>}
+            {item.startTime && <span>🕒 {item.startTime}</span>}
+            {item.dueDate && <span>📅 {item.dueDate}</span>}
+            {item.category && <span>📂 {item.category}</span>}
+          </div>
+          {detail && <p className="mt-1 text-xs text-slate-600 whitespace-pre-wrap">{detail}</p>}
+        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className={`p-1.5 rounded-lg border ${expanded ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-white text-slate-400 border-slate-200 hover:border-emerald-300'}`}
+          aria-label="留言溝通"
+          title="留言溝通"
+        >
+          <MessageSquare className="w-4 h-4" />
+        </button>
+      </div>
+      {expanded && path && (
+        <div className="px-3 pb-3">
+          <ItemComments
+            path={path}
+            currentUser={{ uid: currentUser?.uid, displayName: currentUser?.displayName || currentUser?.name, email: currentUser?.email }}
+            currentRole="vendor"
+            label="留言溝通"
+            emptyHint="未有留言，可以留低第一句。"
+          />
+        </div>
+      )}
+      {expanded && !path && <p className="px-3 pb-3 text-xs text-rose-600">留言路徑未準備好，請重新整理再試。</p>}
+    </li>
+  );
+}
+
 export function VendorDashboard({
   user,
   vendor,
@@ -99,6 +143,8 @@ export function VendorDashboard({
   onLogout,
   isAdminPreview = false,
   assignedTasks = [],
+  assignedRundown = [],
+  assignedResources = [],
   onUpdateTaskStatus,
   onOpenInquiry,
 }) {
@@ -388,30 +434,47 @@ export function VendorDashboard({
           (queried via collectionGroup in App.jsx). Lets vendors
           see exactly what work is on their plate for each couple
           they're connected to. */}
-      {!loading && assignedTasks && assignedTasks.length > 0 && (
+      {!loading && (assignedTasks.length > 0 || assignedRundown.length > 0 || assignedResources.length > 0) && (
         <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-6 border border-emerald-200 shadow-sm">
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-2">
             <ClipboardList className="w-6 h-6 text-emerald-600" />
-            <h2 className="text-xl font-black text-emerald-900">
-              📋 主理新人指派嘅任務
-            </h2>
+            <h2 className="text-xl font-black text-emerald-900">📋 主理新人指派嘅工作</h2>
             <span className="ml-auto bg-emerald-500 text-white text-xs font-black px-2.5 py-0.5 rounded-full">
-              {assignedTasks.length} 個
+              {assignedTasks.length + assignedRundown.length + assignedResources.length} 個
             </span>
           </div>
           <p className="text-sm text-emerald-800 mb-4">
-            以下係透過 Save The Day 被新人直接指派嘅工作項目。即時更新，按優先排序。
+            任務、大日流程同物資都會喺度顯示。你可以更新任務狀態，亦可以直接留言同新人溝通。
           </p>
-          <ul className="space-y-2">
-            {assignedTasks.map((t) => (
-              <VendorTaskCard
-                key={`${t.ownerUid}_${t.id}`}
-                task={t}
-                onUpdateStatus={onUpdateTaskStatus}
-                currentUser={vendor}
-              />
-            ))}
-          </ul>
+          {assignedRundown.length > 0 && (
+            <div className="mb-4">
+              <h3 className="font-bold text-emerald-900 mb-2">🕒 大日流程 ({assignedRundown.length})</h3>
+              <ul className="space-y-2">{assignedRundown.map((item) => <VendorAssignedItem key={`${item.ownerUid}_${item.eventId}_${item.id}`} item={item} currentUser={user} />)}</ul>
+            </div>
+          )}
+          {assignedResources.length > 0 && (
+            <div className="mb-4">
+              <h3 className="font-bold text-emerald-900 mb-2">📦 物資 ({assignedResources.length})</h3>
+              <ul className="space-y-2">{assignedResources.map((item) => <VendorAssignedItem key={`${item.ownerUid}_${item.eventId}_${item.id}`} item={item} currentUser={user} />)}</ul>
+            </div>
+          )}
+          {assignedTasks.length > 0 && (
+            <div>
+              <h3 className="font-bold text-emerald-900 mb-2">✅ 待辦任務 ({assignedTasks.length})</h3>
+              <ul className="space-y-2">{assignedTasks.map((t) => <VendorTaskCard key={`${t.ownerUid}_${t.id}`} task={t} onUpdateStatus={onUpdateTaskStatus} currentUser={vendor} />)}</ul>
+            </div>
+          )}
+        </div>
+      )}
+      {!loading && assignedTasks.length === 0 && assignedRundown.length === 0 && assignedResources.length === 0 && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 mb-6">
+          <div className="flex items-start gap-3">
+            <ClipboardList className="w-5 h-5 text-emerald-600 mt-0.5" />
+            <div>
+              <h2 className="font-black text-emerald-900">暫時未有指派工作</h2>
+              <p className="text-sm text-emerald-800 mt-1">新人可以喺大日流程、物資或待辦清單入面揀選你。完成指派後，工作會自動出現喺呢度。</p>
+            </div>
+          </div>
         </div>
       )}
 

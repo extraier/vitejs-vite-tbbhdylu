@@ -1351,6 +1351,93 @@ export default function App() {
     });
   };
 
+  // 2026-08-09 — Vendor-assigned 大日流程 + 物資. Mirrors the
+  // collectionGroup pattern used for assignedTasks above. Each
+  // rundown entry / resource item lives at
+  //   /users/{ownerUid}/events/{eventId}/{rundown|resources}/{id}
+  // and we filter on `assignedVendorUid == auth.uid`. The
+  // collectionGroup query works at any depth, so a single query
+  // enumerates every event the vendor is assigned to.
+  const [assignedRundown, setAssignedRundown] = useState([]);
+  const [assignedResources, setAssignedResources] = useState([]);
+  useEffect(() => {
+    if (!user || userRole !== 'vendor' || user.isAnonymous) {
+      setAssignedRundown([]);
+      setAssignedResources([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const subscribe = (groupName, setter) => {
+      try {
+        const q = query(
+          collectionGroup(db, groupName),
+          where('assignedVendorUid', '==', user.uid),
+        );
+        return onSnapshot(
+          q,
+          (snap) => {
+            if (cancelled) return;
+            const list = snap.docs.map((d) => {
+              // collectionGroup doc path:
+              //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/{groupName}/{id}
+              const ownerUid = d.ref.parent.parent?.parent?.parent?.id;
+              const eventId = d.ref.parent.parent?.id;
+              return {
+                id: d.id,
+                ...d.data(),
+                ownerUid,
+                eventId,
+                // build a comment path resolver in App.jsx-owned scope so
+                // <ItemComments/> in the vendor dashboard subscribes
+                // to the same `/comments/` subcollection the couple
+                // writes to.
+                commentPath:
+                  ownerUid && eventId
+                    ? collection(
+                        db,
+                        'artifacts',
+                        appId,
+                        'users',
+                        ownerUid,
+                        'events',
+                        eventId,
+                        groupName,
+                        d.id,
+                        'comments',
+                      )
+                    : null,
+              };
+            });
+            list.sort((a, b) => {
+              const at = a.startTime || a.dueDate || '';
+              const bt = b.startTime || b.dueDate || '';
+              return at.localeCompare(bt);
+            });
+            setter(list);
+          },
+          (err) => {
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[assigned${groupName}] subscribe failed (likely missing index):`,
+              err?.message,
+            );
+          },
+        );
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[assigned${groupName}] setup failed:`, err?.message);
+        return undefined;
+      }
+    };
+    const u1 = subscribe('rundown', setAssignedRundown);
+    const u2 = subscribe('resources', setAssignedResources);
+    return () => {
+      cancelled = true;
+      u1 && u1();
+      u2 && u2();
+    };
+  }, [user?.uid, userRole]);
+
    // Aggregate unread count for the header inbox badge.
    const totalUnread = inquiries.reduce((sum, inq) => {
      return sum + (userRole === 'vendor' ? inq.vendorUnread || 0 : inq.coupleUnread || 0);
@@ -3858,6 +3945,8 @@ export default function App() {
                 onManageProfile={() => setCurrentView('vendor-profile')}
                 onLogout={handleVendorLogout}
                 assignedTasks={assignedTasks}
+                assignedRundown={assignedRundown}
+                assignedResources={assignedResources}
                 isAdminPreview={isAdmin && !isVendor}
                 onUpdateTaskStatus={handleUpdateAssignedTaskStatus}
                 // 2026-07-20 — inquiry inbox routing. The
