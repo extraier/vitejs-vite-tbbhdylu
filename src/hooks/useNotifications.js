@@ -150,6 +150,13 @@ function readSeen(ownerUid, sourceKey, eventId) {
   }
 }
 
+// 2026-08-09 — `bell:mark-all-seen` is dispatched on `window` whenever
+// the user clicks 全部已讀. The useNotifications hook listens for it
+// and bumps an internal tick so the badges useMemo recomputes against
+// the fresh localStorage markers. Without this, writing to localStorage
+// silently does nothing — React doesn't know the storage changed.
+const MARK_SEEN_EVENT = 'bell:mark-all-seen';
+
 function writeSeen(ownerUid, sourceKey, value, eventId) {
   if (!ownerUid || typeof SEEN_KEYS[sourceKey] !== 'function') return;
   try {
@@ -164,12 +171,23 @@ function writeSeen(ownerUid, sourceKey, value, eventId) {
 // count (so the marker is exact), for others it's a timestamp (so
 // "last seen" semantics work). Caller's responsibility to pass the
 // right shape.
+//
+// After writing, dispatch the window event so any mounted
+// useNotifications hook re-evaluates its badges useMemo against the
+// fresh markers. (localStorage writes don't trigger React renders.)
 export function markAllNotificationsSeen(ownerUid, badges, eventId) {
   if (!ownerUid) return;
   for (const [sourceKey, value] of Object.entries(badges || {})) {
     if (typeof SEEN_KEYS[sourceKey] !== 'function') continue;
     try {
       window.localStorage.setItem(SEEN_KEYS[sourceKey](ownerUid, eventId), String(value));
+    } catch {
+      // ignore
+    }
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent(MARK_SEEN_EVENT, { detail: { ownerUid, eventId } }));
     } catch {
       // ignore
     }
@@ -268,6 +286,18 @@ export function useNotifications({
   const [tasks, setTasks] = useState([]);
   const [helpers, setHelpers] = useState([]);
   const [errors, setErrors] = useState({});
+  // 2026-08-09 — bumped by the `bell:mark-all-seen` window event so the
+  // badges useMemo recomputes against the fresh localStorage markers
+  // when the user clicks 全部已讀. Without this the marker writes succeed
+  // but the badge stays put (React doesn't see localStorage changes).
+  const [seenTick, setSeenTick] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handler = () => setSeenTick((t) => t + 1);
+    window.addEventListener(MARK_SEEN_EVENT, handler);
+    return () => window.removeEventListener(MARK_SEEN_EVENT, handler);
+  }, []);
 
   // ---- Source 1: vendor proposals (coupleUid scoped) ----
   useEffect(() => {
@@ -419,7 +449,7 @@ export function useNotifications({
       task: taskNew,
       invite: inviteNew,
     };
-  }, [ownerUid, eventId, proposals, tasks, helpers]);
+  }, [ownerUid, eventId, proposals, tasks, helpers, seenTick]);
 
   const totalNew = badges.proposal + badges.task + badges.invite;
 

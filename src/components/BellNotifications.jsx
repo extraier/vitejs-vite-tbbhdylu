@@ -321,7 +321,7 @@ export function BellNotifications({
               onClick={handleViewAll}
               className="w-full text-sm font-bold text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-lg py-1.5 flex items-center justify-center gap-1.5 transition-colors"
             >
-              查看全部 中心
+              查看全部
               <ExternalLink className="w-3.5 h-3.5" />
             </button>
           </div>
