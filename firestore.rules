@@ -629,11 +629,18 @@ match /{path=**}/events/{eventId} {
           // assigned via assignedVendorUid can read their assigned
           // tasks, helpers assigned via assignedHelperUid can read
           // theirs. Only owner/coOwner can write.
+          //
+          // 2026-08-10 — REORDERED vendor + helper branches BEFORE
+          // isOwnerOrAnyCoOwner. Same recursive-denial fix as
+          // /rundown/{entryId} and /resources/{itemId}: vendor
+          // token can never reach the assignedVendorUid branch when
+          // isOwnerOrAnyCoOwner is first because
+          // isCoOwnerOfEventDoc(ownerUid) throws on get(eventDoc).
           match /tasks/{taskId} {
-            allow read: if isOwnerOrAnyCoOwner(ownerUid)
-              || hasHelperPerm(ownerUid, 'canViewChecklist')
-              || (isSignedIn() && request.auth.uid == resource.data.assignedVendorUid)
-              || (isSignedIn() && request.auth.uid == resource.data.assignedHelperUid);
+            allow read: if (isSignedIn() && request.auth.uid == resource.data.assignedVendorUid)
+              || (isSignedIn() && request.auth.uid == resource.data.assignedHelperUid)
+              || isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewChecklist');
             allow create, delete: if isOwnerOrAnyCoOwner(ownerUid);
             // 2026-07-15 — vendors may also update tasks where they
             // are the assigned vendor (status / actualCost when they
@@ -653,8 +660,18 @@ match /{path=**}/events/{eventId} {
             // /tasks/{taskId}/statusUpdates/ blocks. The path in
             // get() calls now points to the new event-scoped tasks
             // path.
+            //
+            // 2026-08-10 — Replaced isOwnerOrAnyCoOwner with its
+            // safe components to avoid the recursive event-doc access
+            // via isCoOwnerOfEventDoc (vendor can't read event doc,
+            // get() throws, OR chain poisoned). The new parent
+            // /tasks/{taskId} read rule above allows vendor to read
+            // the task doc, so get(taskDoc) here succeeds. Partner
+            // access still works via isCoOwnerOfAnyEvent's standalone
+            // /coOwners/{uid} doc.
             match /comments/{commentId} {
-              allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              allow read: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid)
                 || (
@@ -665,7 +682,8 @@ match /{path=**}/events/{eventId} {
                     || get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/tasks/$(taskId)).data.assignedHelperUid == request.auth.uid
                   )
                 );
-              allow create: if isOwnerOrAnyCoOwner(ownerUid)
+              allow create: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
@@ -687,7 +705,11 @@ match /{path=**}/events/{eventId} {
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid);
             }
             match /statusUpdates/{updateId} {
-              allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              // 2026-08-10 — Same fix: avoid isOwnerOrAnyCoOwner in
+              // subcollection read rules (see /tasks/{taskId}/comments
+              // comment above).
+              allow read: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
                 || (
                   isSignedIn()
@@ -698,7 +720,8 @@ match /{path=**}/events/{eventId} {
                   )
                 );
               allow create: if (
-                isOwnerOrAnyCoOwner(ownerUid)
+                isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || (
                   isSignedIn()
                   && request.resource.data.byUid == request.auth.uid
