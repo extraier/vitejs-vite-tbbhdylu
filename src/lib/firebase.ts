@@ -82,7 +82,8 @@ export const appId: string = resolveAppId();
 void Promise.all([
   import('firebase/functions'),
   import('firebase/app'),
-]).then(([{ httpsCallable, getFunctions }, { getApp }]) => {
+  import('firebase/firestore'),
+]).then(([{ httpsCallable, getFunctions }, { getApp }, { disableNetwork, enableNetwork, clearIndexedDbPersistence }]) => {
   (globalThis as unknown as { __fb: unknown }).__fb = {
     app,
     getApp,
@@ -92,6 +93,18 @@ void Promise.all([
     appId,
     functions: getFunctions(app),
     httpsCallable,
+    // 2026-08-10 — Expose Firestore network toggle so DevTools can force a
+    // rules-cache refresh after a Firestore rules deploy. The dynamic
+    // `import('firebase/firestore')` from DevTools creates a SECOND SDK
+    // instance whose `disableNetwork` rejects with "Expected type 'Firestore'"
+    // because the user's `db` is from the bundle's SDK instance. These
+    // references come from the same Promise.all that builds `db`, so the
+    // instance matches. Use:
+    //   await window.__fb.disableNetwork(); await window.__fb.enableNetwork();
+    //   location.reload();
+    disableNetwork: () => disableNetwork(db),
+    enableNetwork: () => enableNetwork(db),
+    clearPersistence: () => clearIndexedDbPersistence(db).then(() => location.reload()),
   };
   // eslint-disable-next-line no-console
   console.info('[firebase] DevTools helpers attached: window.__fb');
