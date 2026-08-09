@@ -150,10 +150,18 @@ export function BellNotifications({
     e.stopPropagation();
     if (!ownerUid) return;
     markAllNotificationsSeen(ownerUid, {
-      // Use the actual current counts so the marker is exact,
-      // not "now". Otherwise the next render would still show
-      // a tiny delta for items created in the same millisecond.
-      proposal: (badges.proposal ?? 0),
+      // The proposal marker is the absolute count of proposals in
+      // the bell (not the badge delta). Without this the badge
+      // would persist: if 3 proposals exist and the user has marked
+      // 2 as read, the marker would jump from "2" to "1" (the badge
+      // count) and the next render would show badges.proposal = 3
+      // - 1 = 2 — WRONG. The marker must equal the total count so
+      // proposalCount - marker = 0.
+      //
+      // For task + invite the marker is a timestamp; the badge logic
+      // filters by "newer than marker", so Date.now() at click time
+      // is correct.
+      proposal: proposalCount,
       task: Date.now(),
       invite: Date.now(),
     });
@@ -183,8 +191,18 @@ export function BellNotifications({
   };
 
   const handleViewAll = () => {
+    // 2026-08-09 — the "查看全部" button used to navigate to the
+    // dashboard via onOpenDashboard, but the dashboard renders the
+    // couple's event list — it does NOT show notifications. For
+    // users with no events yet (or who clicked looking for their
+    // vendor activity), this led to an empty page.
+    //
+    // The bell dropdown itself is already "view all" — items are
+    // sorted newest-first and the dropdown body scrolls up to
+    // 60vh. So "查看全部" is just an explicit close. Drop the
+    // onOpenDashboard call (keep the prop in the signature so
+    // existing callers don't break — it's a no-op now).
     setOpen(false);
-    if (onOpenDashboard) onOpenDashboard();
   };
 
   // Compute the proposal count for the mark-all-read marker.
