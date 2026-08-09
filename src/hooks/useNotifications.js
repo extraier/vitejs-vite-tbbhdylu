@@ -162,7 +162,8 @@ function readSeen(ownerUid, sourceKey) {
 function writeSeen(ownerUid, sourceKey, value) {
   if (!ownerUid) return;
   try {
-    window.localStorage.setItem(SEEN_KEYS[sourceUid ? sourceKey(ownerUid) : sourceKey](ownerUid), String(value));
+    if (typeof SEEN_KEYS[sourceKey] !== 'function') return;
+    window.localStorage.setItem(SEEN_KEYS[sourceKey](ownerUid), String(value));
   } catch {
     // ignore
   }

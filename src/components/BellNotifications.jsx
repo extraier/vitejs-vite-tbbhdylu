@@ -88,12 +88,23 @@ export function BellNotifications({
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
+  // 2026-08-09 — TDZ fix: don't reference `totalNew` (which is being
+  // declared in this very destructure) inside the `enabled` arg. The
+  // hook returns `totalNew`, so reading it before the assignment
+  // completes throws `Cannot access 'p' before initialization` and
+  // unmounts the header. We switch to a local mirror so the panel
+  // stays subscribed while the badge itself is non-zero — without the
+  // circular destructure.
+  const [liveTotalNew, setLiveTotalNew] = useState(0);
   const { items, badges, totalNew, loading, errors } = useNotifications({
     ownerUid,
     coupleUid,
     selfUid,
-    enabled: open || totalNew > 0, // keep subscribed so badge stays fresh
+    enabled: open || liveTotalNew > 0,
   });
+  useEffect(() => {
+    setLiveTotalNew(totalNew);
+  }, [totalNew]);
 
   // Click-outside + Escape close — mirrors UserMenu's pattern.
   useEffect(() => {
@@ -119,7 +130,7 @@ export function BellNotifications({
       // Use the actual current counts so the marker is exact,
       // not "now". Otherwise the next render would still show
       // a tiny delta for items created in the same millisecond.
-      proposal: (badges.__proposalTotal ?? 0),
+      proposal: (badges.proposal ?? 0),
       comment: Date.now(),
       status: Date.now(),
       invite: Date.now(),
