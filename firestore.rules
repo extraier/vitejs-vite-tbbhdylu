@@ -445,11 +445,89 @@ match /{path=**}/events/{eventId} {
           // assignment gives them that perm (canViewChecklist /
           // canViewGuestList / canViewPhotos — same as before, just
           // evaluated against the new path).
+          // 2026-08-09 — Rundown (大日流程) open for read access to
+          // assigned helpers (any helper with canViewChecklist on
+          // this event) and the assigned vendor. The assignedVendor
+          // is stored as `assignedVendorUid` (single vendor per entry
+          // — e.g. photographer for the photo session). Write stays
+          // owner/coOwner only so helpers/vendors can't reshuffle
+          // the timeline. Comments live in the /comments subcollection
+          // (see below).
           match /rundown/{entryId} {
-            allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewChecklist')
+              || (isSignedIn() && resource.data.assignedVendorUid == request.auth.uid);
+            allow write: if isOwnerOrAnyCoOwner(ownerUid);
+            match /comments/{commentId} {
+              // Anyone who can read the parent entry can read its comments.
+              // (helpers + assigned vendors + owner + coOwner)
+              allow read: if isOwnerOrAnyCoOwner(ownerUid)
+                || hasHelperPerm(ownerUid, 'canViewChecklist')
+                || (isSignedIn() && request.auth.uid == resource.data.authorUid)
+                || (
+                  isSignedIn()
+                  && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                  && get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
+                );
+              // Create: author must be one of (owner/coOwner/assigned helper
+              // with canViewChecklist/assigned vendor). Author identity is
+              // stamped onto the doc so update/delete can authorise via
+              // resource.data.authorUid.
+              allow create: if isOwnerOrAnyCoOwner(ownerUid)
+                || (
+                  isSignedIn()
+                  && request.resource.data.authorUid == request.auth.uid
+                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                  && request.resource.data.text is string
+                  && request.resource.data.text.size() > 0
+                  && request.resource.data.text.size() <= 2000
+                  && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
+                  && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
+                  && (
+                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
+                    || hasHelperPerm(ownerUid, 'canViewChecklist')
+                  )
+                );
+              allow update, delete: if isOwnerOrAnyCoOwner(ownerUid)
+                || (isSignedIn() && request.auth.uid == resource.data.authorUid);
+            }
           }
+          // 2026-08-09 — Resources (物資分配) — same permission shape
+          // as /rundown: helpers with canViewChecklist + assigned
+          // vendor can read the item and post comments; only the
+          // owner can add/delete the item itself.
           match /resources/{itemId} {
-            allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewChecklist')
+              || (isSignedIn() && resource.data.assignedVendorUid == request.auth.uid);
+            allow write: if isOwnerOrAnyCoOwner(ownerUid);
+            match /comments/{commentId} {
+              allow read: if isOwnerOrAnyCoOwner(ownerUid)
+                || hasHelperPerm(ownerUid, 'canViewChecklist')
+                || (isSignedIn() && request.auth.uid == resource.data.authorUid)
+                || (
+                  isSignedIn()
+                  && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                  && get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
+                );
+              allow create: if isOwnerOrAnyCoOwner(ownerUid)
+                || (
+                  isSignedIn()
+                  && request.resource.data.authorUid == request.auth.uid
+                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                  && request.resource.data.text is string
+                  && request.resource.data.text.size() > 0
+                  && request.resource.data.text.size() <= 2000
+                  && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
+                  && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
+                  && (
+                    get(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
+                    || hasHelperPerm(ownerUid, 'canViewChecklist')
+                  )
+                );
+              allow update, delete: if isOwnerOrAnyCoOwner(ownerUid)
+                || (isSignedIn() && request.auth.uid == resource.data.authorUid);
+            }
           }
           match /teaCeremony/{personId} {
             allow read, write: if isOwnerOrAnyCoOwner(ownerUid);

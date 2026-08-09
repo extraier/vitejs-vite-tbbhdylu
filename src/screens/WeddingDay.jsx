@@ -32,6 +32,7 @@ import {
   Pause,
   Users,
   Package,
+  MessageCircle,
   ChevronUp,
   ChevronDown,
   Flame,
@@ -55,6 +56,15 @@ import {
  * Pure presentational. No Firebase imports. No state side-effects beyond
  * local UI (edit-mode, search query, sort direction).
  */
+
+// 2026-08-09 — comments and vendor assignment for 大日流程/物資.
+// ItemComments needs a Firestore CollectionReference. To keep this
+// file Firebase-free (see comment at line 55), the parent
+// (App.jsx) passes the resolved `rundownCommentPath` /
+// `resourceCommentPath` prop down for each entry/item. The VendorPicker
+// is pure-presentational so it can live here without a firebase import.
+import { VendorPicker } from '../components/VendorPicker';
+import { ItemComments } from '../components/ItemComments';
 
 // ---------- shared sub-tab shell ----------
 const SUB_TABS = [
@@ -353,10 +363,28 @@ export function HelperPicker({ helpers = [], ownerNames, value = [], onChange })
   );
 }
 
-function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpers, ownerNames }) {
+function RundownTab({
+  entries,
+  onUpsert,
+  onDelete,
+  onReorder,
+  onSetOrders,
+  helpers,
+  ownerNames,
+  vendors = [],
+  ownerUid,
+  eventId,
+  currentUser,
+  commentPathFor, // (entryId) => CollectionReference | null
+}) {
   const [editing, setEditing] = useState(null);
   const [filterGroup, setFilterGroup] = useState('all');
   const [filterAssigned, setFilterAssigned] = useState('all');
+  // 2026-08-09 — Track which entry's comments panel is open. Single
+  // entry at a time so we only mount one ItemComments subscription.
+  const [openCommentsFor, setOpenCommentsFor] = useState(null);
+  const toggleComments = (id) =>
+    setOpenCommentsFor((cur) => (cur === id ? null : id));
   // 2026-07-22 — Sort mode for 大日流程. Two modes:
   //   'time'   (default) — sort by startTime asc. The natural
   //                        schedule-driven order; couples plan
@@ -514,6 +542,7 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpe
       <NewEntryRow
         helpers={helpers}
         ownerNames={ownerNames}
+        vendors={vendors}
         onSubmit={(data) => {
           onUpsert({ id: `rd-${Date.now()}`, ...data });
         }}
@@ -534,6 +563,13 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpe
                     entry={entry}
                     helpers={helpers}
                     ownerNames={ownerNames}
+                    vendors={vendors}
+                    ownerUid={ownerUid}
+                    eventId={eventId}
+                    currentUser={currentUser}
+                    commentPath={commentPathFor ? commentPathFor(entry.id) : null}
+                    showComments={openCommentsFor === entry.id}
+                    onToggleComments={() => toggleComments(entry.id)}
                     isFirst={idx === 0}
                     isLast={idx === sorted.length - 1}
                     isEditing={editing === entry.id}
@@ -561,6 +597,13 @@ function RundownTab({ entries, onUpsert, onDelete, onReorder, onSetOrders, helpe
               entry={entry}
               helpers={helpers}
               ownerNames={ownerNames}
+              vendors={vendors}
+              ownerUid={ownerUid}
+              eventId={eventId}
+              currentUser={currentUser}
+              commentPath={commentPathFor ? commentPathFor(entry.id) : null}
+              showComments={openCommentsFor === entry.id}
+              onToggleComments={() => toggleComments(entry.id)}
               isFirst={idx === 0}
               isLast={idx === sorted.length - 1}
               isEditing={editing === entry.id}
@@ -600,6 +643,7 @@ function RundownCard({
   entry,
   helpers,
   ownerNames,
+  vendors = [],
   isEditing,
   isFirst,
   isLast,
@@ -609,6 +653,13 @@ function RundownCard({
   onDelete,
   onMoveUp,
   onMoveDown,
+  // 2026-08-09 — comments + assigned-vendor plumbing.
+  ownerUid,
+  eventId,
+  currentUser,
+  commentPath,
+  showComments = false,
+  onToggleComments,
   // 2026-07-22 — dnd-kit drag handle props. When set, the card
   // renders a GripVertical handle bound to dragHandleProps so
   // couples can drag to reorder in manual sort mode. When
@@ -624,6 +675,10 @@ function RundownCard({
     notes: entry.notes || '',
     group: entry.group || 'prep',
     assignedHelpers: entry.assignedHelpers || [],
+    // 2026-08-09 — vendor assignment. Single-vendor shape:
+    // { uid, name } | null. uid is null when the owner typed a
+    // custom name (no real vendor account yet).
+    assignedVendor: entry.assignedVendor || null,
   });
 
   // 2026-07-31 — Derive an end-time picker from the existing
@@ -693,12 +748,17 @@ function RundownCard({
             onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
             className="col-span-12 p-2 rounded-lg border border-slate-300 text-sm resize-none"
           />
-          <div className="col-span-12">
+          <div className="col-span-12 grid grid-cols-1 md:grid-cols-2 gap-3">
             <HelperPicker
               helpers={helpers}
               ownerNames={ownerNames}
               value={draft.assignedHelpers}
               onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
+            />
+            <VendorPicker
+              vendors={vendors}
+              value={draft.assignedVendor}
+              onChange={(av) => setDraft({ ...draft, assignedVendor: av })}
             />
           </div>
         </div>
@@ -710,7 +770,23 @@ function RundownCard({
             取消
           </button>
           <button
-            onClick={() => draft.title && !endBeforeStart && onSave(draft)}
+            onClick={() => {
+              if (!draft.title || endBeforeStart) return;
+              // 2026-08-09 — flatten the VendorPicker value
+              // ({uid, name}) to Firestore-friendly scalars.
+              // assignedVendorUid is what the rule checks for the
+              // assigned-vendor gate; assignedVendorName is for
+              // display. If uid is null (custom-typed placeholder)
+              // we still write the name but the rule will reject
+              // any vendor trying to comment until the name is
+              // replaced with a real uid.
+              const { assignedVendor, ...rest } = draft;
+              onSave({
+                ...rest,
+                assignedVendorUid: assignedVendor?.uid || null,
+                assignedVendorName: assignedVendor?.name || null,
+              });
+            }}
             disabled={!draft.title || endBeforeStart}
             className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
           >
@@ -811,6 +887,23 @@ function RundownCard({
               ⚠️ 未分配
             </span>
           )}
+          {/* 2026-08-09 — Vendor assignment pill. uid truthy means a
+              real vendor account is tagged (vendor can see + comment).
+              name-only (custom placeholder) is rendered with a
+              different style so the couple can tell at a glance that
+              no real vendor is connected yet. */}
+          {(entry.assignedVendorUid || entry.assignedVendorName) && (
+            <span
+              className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${
+                entry.assignedVendorUid
+                  ? 'bg-amber-100 text-amber-700 border-amber-200'
+                  : 'bg-slate-100 text-slate-500 border-slate-200'
+              }`}
+              title={entry.assignedVendorUid ? `商戶帳號 ${entry.assignedVendorUid}` : '自訂名稱（未連結商戶帳號）'}
+            >
+              🏪 {entry.assignedVendorName || '商戶'}
+            </span>
+          )}
         </div>
         {entry.notes && (
           <p className="text-xs text-slate-500 whitespace-pre-wrap leading-relaxed">
@@ -819,9 +912,26 @@ function RundownCard({
         )}
       </div>
       <div className="flex flex-col gap-1">
-        {/* 2026-07-24 — use the same ✏️ emoji that 敬茶/影相 uses
-            so the whole Wedding Day suite is consistent. Was
-            previously a text "編輯" button. */}
+        {/* 2026-08-09 — Comments toggle. Same logic as the bell
+            dropdown's 全部已讀: clicking expands an inline
+            <ItemComments/> for this entry. Click again to collapse.
+            Hidden when ownerUid / eventId / path are missing (e.g.
+            old entry that pre-dates this change but hasn't been
+            re-saved with the new fields). */}
+        {commentPath && currentUser && onToggleComments && (
+          <button
+            onClick={onToggleComments}
+            className={`p-1 rounded ${
+              showComments
+                ? 'text-rose-600 bg-rose-50'
+                : 'text-slate-300 hover:text-rose-600 hover:bg-rose-50'
+            }`}
+            title={showComments ? '收埋留言' : '睇留言 / 留'}
+            aria-label={showComments ? '收埋留言' : '睇留言 / 留'}
+          >
+            <MessageCircle className="w-4 h-4" />
+          </button>
+        )}
         <button
           onClick={onEdit}
           className="p-1 text-slate-300 hover:text-slate-700 rounded"
@@ -838,11 +948,26 @@ function RundownCard({
           <Trash2 className="w-4 h-4" />
         </button>
       </div>
+      {/* 2026-08-09 — Inline comments panel. Spans the full card
+          width (below the meta row + buttons). Only mounted when
+          expanded, so the subscription is paid for one entry at a
+          time — keeps Firestore read costs bounded even with 50+
+          rundown entries. */}
+      {showComments && commentPath && currentUser && (
+        <div className="col-span-12 mt-2">
+          <ItemComments
+            path={commentPath}
+            currentUser={currentUser}
+            currentRole="owner"
+            label="大日流程留言"
+          />
+        </div>
+      )}
     </div>
   );
 }
 
-function NewEntryRow({ onSubmit, helpers, ownerNames }) {
+function NewEntryRow({ onSubmit, helpers, ownerNames, vendors = [] }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
     startTime: '12:00',
@@ -853,6 +978,8 @@ function NewEntryRow({ onSubmit, helpers, ownerNames }) {
     notes: '',
     group: 'reception',
     assignedHelpers: [],
+    // 2026-08-09 — vendor assignment for new rundown entries.
+    assignedVendor: null,
   });
 
   if (!open) {
@@ -936,12 +1063,17 @@ function NewEntryRow({ onSubmit, helpers, ownerNames }) {
           onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
           className="col-span-12 p-2 rounded-lg border border-slate-300 text-sm resize-none"
         />
-        <div className="col-span-12">
+        <div className="col-span-12 grid grid-cols-1 md:grid-cols-2 gap-3">
           <HelperPicker
             helpers={helpers}
             ownerNames={ownerNames}
             value={draft.assignedHelpers}
             onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
+          />
+          <VendorPicker
+            vendors={vendors}
+            value={draft.assignedVendor}
+            onChange={(av) => setDraft({ ...draft, assignedVendor: av })}
           />
         </div>
       </div>
@@ -964,9 +1096,17 @@ function NewEntryRow({ onSubmit, helpers, ownerNames }) {
               draft.startTime,
               draft.endTime,
             );
-            const { endTime: _ignored, ...draftToSave } = draft;
-            onSubmit({ ...draftToSave, durationMin, createdAt: Date.now() });
-            setDraft({ startTime: '12:00', endTime: '12:30', durationMin: 30, title: '', location: '', notes: '', group: 'reception', assignedHelpers: [] });
+            const { endTime: _ignored, assignedVendor, ...rest } = draft;
+            // 2026-08-09 — flatten VendorPicker value into
+            // assignedVendorUid/Name for Firestore.
+            onSubmit({
+              ...rest,
+              durationMin,
+              assignedVendorUid: assignedVendor?.uid || null,
+              assignedVendorName: assignedVendor?.name || null,
+              createdAt: Date.now(),
+            });
+            setDraft({ startTime: '12:00', endTime: '12:30', durationMin: 30, title: '', location: '', notes: '', group: 'reception', assignedHelpers: [], assignedVendor: null });
             setOpen(false);
           }}
           disabled={!draft.title.trim() || endBeforeStart}
@@ -992,9 +1132,30 @@ const RESOURCE_CATEGORIES = {
   other: '其他',
 };
 
-function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrders, currentUser, helpers, showToast, ownerNames }) {
+function ResourcesTab({
+  items,
+  onUpsert,
+  onDelete,
+  onToggle,
+  onReorder,
+  onSetOrders,
+  currentUser,
+  helpers,
+  showToast,
+  ownerNames,
+  // 2026-08-09 — vendor assignment + comments for 物資.
+  vendors = [],
+  ownerUid,
+  eventId,
+  commentPathFor, // (itemId) => CollectionReference | null
+}) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
+  // 2026-08-09 — Track which item's comments panel is open. Same
+  // pattern as RundownTab.
+  const [openCommentsFor, setOpenCommentsFor] = useState(null);
+  const toggleComments = (id) =>
+    setOpenCommentsFor((cur) => (cur === id ? null : id));
   // 2026-07-22 — Sort mode toggle. Same pattern as PlaylistTab.
   //   'created' (default) — sort by createdAt asc; new items
   //                          appear at the bottom of their
@@ -1091,13 +1252,29 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
           {item.label}
         </div>
         {(item.qty || item.assignedToName || item.notes ||
-          (item.assignedHelpers && item.assignedHelpers.length > 0)) && (
+          (item.assignedHelpers && item.assignedHelpers.length > 0) ||
+          item.assignedVendorUid || item.assignedVendorName) && (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-xs text-slate-500">
             {item.qty && <span>數量: <b className="text-slate-700">{item.qty}</b></span>}
             {item.assignedToName && (
               <span className="inline-flex items-center gap-1">
                 <Users className="w-3 h-3" />
                 負責: <b className="text-rose-600">{item.assignedToName}</b>
+              </span>
+            )}
+            {/* 2026-08-09 — Vendor pill. Same shape/colors as the
+                rundown one. uid truthy = real account, name-only =
+                custom placeholder. */}
+            {(item.assignedVendorUid || item.assignedVendorName) && (
+              <span
+                className={`inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full border ${
+                  item.assignedVendorUid
+                    ? 'bg-amber-100 text-amber-700 border-amber-200'
+                    : 'bg-slate-100 text-slate-500 border-slate-200'
+                }`}
+                title={item.assignedVendorUid ? `商戶帳號 ${item.assignedVendorUid}` : '自訂名稱（未連結商戶帳號）'}
+              >
+                🏪 {item.assignedVendorName || '商戶'}
               </span>
             )}
             {item.assignedHelpers && item.assignedHelpers.length > 0 && (
@@ -1222,6 +1399,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
       <NewResourceRow
         helpers={helpers}
         ownerNames={ownerNames}
+        vendors={vendors}
         onSubmit={(d) => onUpsert({ id: `rs-${Date.now()}`, ...d })}
       />
 
@@ -1241,6 +1419,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                 {list.map((item) => (
                   <SortableRow key={item.id} id={item.id}>
                     {({ dragHandleProps }) => (
+                      <div>
                       <div
                         className={`flex items-center gap-3 px-4 py-2.5 ${
                           item.checked ? 'bg-slate-50 opacity-60' : ''
@@ -1268,6 +1447,25 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                           <GripVertical className="w-4 h-4" strokeWidth={2} />
                         </button>
                         <ResourceItemBody item={item} />
+                        {/* 2026-08-09 — Comments toggle for 物資.
+                            Same shape as the rundown one; clicking
+                            expands the inline ItemComments panel
+                            below the row. */}
+                        {commentPathFor && currentUser && (
+                          <button
+                            type="button"
+                            onClick={() => toggleComments(item.id)}
+                            className={`p-1 rounded flex-shrink-0 ${
+                              openCommentsFor === item.id
+                                ? 'text-rose-600 bg-rose-50'
+                                : 'text-slate-300 hover:text-rose-600 hover:bg-rose-50'
+                            }`}
+                            title={openCommentsFor === item.id ? '收埋留言' : '睇留言 / 留'}
+                            aria-label={openCommentsFor === item.id ? '收埋留言' : '睇留言 / 留'}
+                          >
+                            <MessageCircle className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           onClick={() => setEditing(item.id)}
                           className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded flex-shrink-0"
@@ -1283,6 +1481,20 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
+                      {/* 2026-08-09 — Inline comments panel for
+                          物資 (drag-mode row). Same single-open-at-
+                          a-time pattern as the rundown tab. */}
+                      {openCommentsFor === item.id && commentPathFor && currentUser && (
+                        <div className="px-4 pb-2">
+                          <ItemComments
+                            path={commentPathFor(item.id)}
+                            currentUser={currentUser}
+                            currentRole="owner"
+                            label="物資留言"
+                          />
+                        </div>
+                      )}
+                      </div>
                     )}
                   </SortableRow>
                 ))}
@@ -1292,6 +1504,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                     item={(items || []).find((i) => i.id === editing)}
                     helpers={helpers}
                     ownerNames={ownerNames}
+                    vendors={vendors}
                     onSave={(updated) => {
                       onUpsert(updated);
                       setEditing(null);
@@ -1307,10 +1520,9 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
               {list.map((item) => (
                 <div
                   key={item.id}
-                  className={`${editing === item.id ? 'hidden' : 'flex'} items-center gap-3 px-4 py-2.5 ${
-                    item.checked ? 'bg-slate-50 opacity-60' : ''
-                  }`}
+                  className={`${editing === item.id ? 'hidden' : 'flex flex-col'} ${item.checked ? 'bg-slate-50 opacity-60' : ''}`}
                 >
+                <div className="flex items-center gap-3 px-4 py-2.5">
                   <button
                     onClick={() => onToggle(item.id, !item.checked)}
                     className="flex-shrink-0"
@@ -1322,6 +1534,22 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                     )}
                   </button>
                   <ResourceItemBody item={item} />
+                  {/* 2026-08-09 — Comments toggle (non-drag row). */}
+                  {commentPathFor && currentUser && (
+                    <button
+                      type="button"
+                      onClick={() => toggleComments(item.id)}
+                      className={`p-1 rounded flex-shrink-0 ${
+                        openCommentsFor === item.id
+                          ? 'text-rose-600 bg-rose-50'
+                          : 'text-slate-300 hover:text-rose-600 hover:bg-rose-50'
+                      }`}
+                      title={openCommentsFor === item.id ? '收埋留言' : '睇留言 / 留'}
+                      aria-label={openCommentsFor === item.id ? '收埋留言' : '睇留言 / 留'}
+                    >
+                      <MessageCircle className="w-4 h-4" />
+                    </button>
+                  )}
                   {/* 2026-07-24 — edit button. ✏️ emoji to match
                       the rest of the wedding-day suite. */}
                   <button
@@ -1338,6 +1566,18 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
+                </div>
+                {/* 2026-08-09 — Inline comments panel (non-drag). */}
+                {openCommentsFor === item.id && commentPathFor && currentUser && (
+                  <div className="px-4 pb-2">
+                    <ItemComments
+                      path={commentPathFor(item.id)}
+                      currentUser={currentUser}
+                      currentRole="owner"
+                      label="物資留言"
+                    />
+                  </div>
+                )}
                 </div>
               ))}
               {editing && (items || []).some((i) => i.id === editing) && (
@@ -1370,7 +1610,7 @@ function ResourcesTab({ items, onUpsert, onDelete, onToggle, onReorder, onSetOrd
   );
 }
 
-function NewResourceRow({ onSubmit, helpers, ownerNames }) {
+function NewResourceRow({ onSubmit, helpers, ownerNames, vendors = [] }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState({
     label: '',
@@ -1378,6 +1618,8 @@ function NewResourceRow({ onSubmit, helpers, ownerNames }) {
     category: 'decor',
     assignedToName: '',
     assignedHelpers: [],
+    // 2026-08-09 — vendor assignment for new 物資 items.
+    assignedVendor: null,
     notes: '',
   });
 
@@ -1427,12 +1669,17 @@ function NewResourceRow({ onSubmit, helpers, ownerNames }) {
           onChange={(e) => setDraft({ ...draft, assignedToName: e.target.value })}
           className="col-span-4 p-2 rounded-lg border border-slate-300 text-sm"
         />
-        <div className="col-span-12">
+        <div className="col-span-12 grid grid-cols-1 md:grid-cols-2 gap-3">
           <HelperPicker
             helpers={helpers}
             ownerNames={ownerNames}
             value={draft.assignedHelpers}
             onChange={(ah) => setDraft({ ...draft, assignedHelpers: ah })}
+          />
+          <VendorPicker
+            vendors={vendors}
+            value={draft.assignedVendor}
+            onChange={(av) => setDraft({ ...draft, assignedVendor: av })}
           />
         </div>
         <input
@@ -1453,8 +1700,17 @@ function NewResourceRow({ onSubmit, helpers, ownerNames }) {
         <button
           onClick={() => {
             if (!draft.label.trim()) return;
-            onSubmit({ ...draft, checked: false, createdAt: Date.now() });
-            setDraft({ label: '', qty: '', category: 'decor', assignedToName: '', assignedHelpers: [], notes: '' });
+            // 2026-08-09 — flatten VendorPicker value to scalars
+            // before sending to onSubmit.
+            const { assignedVendor, ...rest } = draft;
+            onSubmit({
+              ...rest,
+              checked: false,
+              assignedVendorUid: assignedVendor?.uid || null,
+              assignedVendorName: assignedVendor?.name || null,
+              createdAt: Date.now(),
+            });
+            setDraft({ label: '', qty: '', category: 'decor', assignedToName: '', assignedHelpers: [], assignedVendor: null, notes: '' });
             setOpen(false);
           }}
           className="px-3 py-1.5 text-sm rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700"
@@ -1475,12 +1731,21 @@ function NewResourceRow({ onSubmit, helpers, ownerNames }) {
  * caller merges it into Firestore via onUpsert. We deliberately
  * re-use the onUpsert path so the save logic stays single-source.
  */
-function EditResourceRow({ item, helpers, ownerNames, onSave, onCancel }) {
+function EditResourceRow({ item, helpers, ownerNames, vendors = [], onSave, onCancel }) {
   const [label, setLabel] = useState(item.label || '');
   const [qty, setQty] = useState(item.qty || '');
   const [category, setCategory] = useState(item.category || 'other');
   const [assignedToName, setAssignedToName] = useState(item.assignedToName || '');
   const [assignedHelpers, setAssignedHelpers] = useState(item.assignedHelpers || []);
+  // 2026-08-09 — Vendor assignment. Round-trip the {uid, name} from
+  // the existing item into the picker. If only name is set (custom
+  // placeholder from before this feature), reconstruct a
+  // {uid: null, name} shape so the picker renders correctly.
+  const [assignedVendor, setAssignedVendor] = useState(
+    item.assignedVendorUid || item.assignedVendorName
+      ? { uid: item.assignedVendorUid || null, name: item.assignedVendorName || '' }
+      : null,
+  );
   const [notes, setNotes] = useState(item.notes || '');
   const [saving, setSaving] = useState(false);
 
@@ -1497,6 +1762,10 @@ function EditResourceRow({ item, helpers, ownerNames, onSave, onCancel }) {
         category,
         assignedToName: assignedToName.trim(),
         assignedHelpers,
+        // 2026-08-09 — flatten VendorPicker value into Firestore
+        // scalars. Same shape as NewRundownEntry / NewResourceRow.
+        assignedVendorUid: assignedVendor?.uid || null,
+        assignedVendorName: assignedVendor?.name || null,
         notes: notes.trim(),
       });
     } finally {
@@ -1551,12 +1820,17 @@ function EditResourceRow({ item, helpers, ownerNames, onSave, onCancel }) {
           onChange={(e) => setAssignedToName(e.target.value)}
           className="col-span-4 p-2 rounded-lg border border-slate-300 text-sm"
         />
-        <div className="col-span-12">
+        <div className="col-span-12 grid grid-cols-1 md:grid-cols-2 gap-3">
           <HelperPicker
             helpers={helpers}
             ownerNames={ownerNames}
             value={assignedHelpers}
             onChange={setAssignedHelpers}
+          />
+          <VendorPicker
+            vendors={vendors}
+            value={assignedVendor}
+            onChange={setAssignedVendor}
           />
         </div>
         <input
@@ -3050,6 +3324,16 @@ export function WeddingDay({
   // compat with pre-2026-08-01 callers (renders the picker
   // without the 新人自己 optgroup).
   ownerNames,
+  // 2026-08-09 — vendor assignment + comments plumbing. vendors
+  // is the list of vendors the couple has chatted with (for the
+  // VendorPicker source). ownerUid/eventId are needed by App.jsx
+  // to build the comment subcollection path. currentUser is the
+  // signed-in user (for author attribution).
+  vendors = [],
+  ownerUid,
+  eventId,
+  rundownCommentPathFor,
+  resourceCommentPathFor,
 }) {
   const [active, setActive] = useState('rundown');
 
@@ -3086,6 +3370,14 @@ export function WeddingDay({
             // updates for the dragged entries.
             onSetOrders={onSetRundownPositions}
             helpers={helpers}
+            // 2026-08-09 — vendor assignment + comments. App.jsx
+            // builds the comments path resolver so this file
+            // stays Firebase-free.
+            vendors={vendors}
+            currentUser={currentUser}
+            ownerUid={ownerUid}
+            eventId={eventId}
+            commentPathFor={rundownCommentPathFor}
           />
         )}
         {active === 'resources' && (
@@ -3104,6 +3396,11 @@ export function WeddingDay({
             // 兄弟姊妹 in 物資 too.
             ownerNames={ownerNames}
             showToast={showToast}
+            // 2026-08-09 — vendor assignment + comments for 物資.
+            vendors={vendors}
+            ownerUid={ownerUid}
+            eventId={eventId}
+            commentPathFor={resourceCommentPathFor}
           />
         )}
         {active === 'teaCeremony' && (

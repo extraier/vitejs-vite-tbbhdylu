@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Heart, Users, MessageCircle, ChevronLeft } from 'lucide-react';
 import {
      addDoc,
@@ -931,6 +931,80 @@ export default function App() {
     // the signed-in user's uid (the original-owner case).
     return currentEvent._ownerUid || user?.uid;
   }, [currentEvent, user?.uid, guest.isGuestMode, guest.qOwner]);
+
+  // 2026-08-09 — Vendor list for VendorPicker (大日流程 / 物資
+  // assignment). Source: couple's `inquiries` (vendors they've
+  // started a chat with). Couples may also tag vendors they haven't
+  // contacted yet — that path uses the VendorPicker free-text
+  // fallback so we don't need a separate vendor-master subscription.
+  // Memoized so WeddingDay's memoization doesn't churn on every
+  // inquiry read.
+  const vendorsForPicker = useMemo(() => {
+    const seen = new Set();
+    const out = [];
+    for (const i of inquiries || []) {
+      if (!i || !i.vendorUid) continue;
+      if (seen.has(i.vendorUid)) continue;
+      seen.add(i.vendorUid);
+      out.push({
+        uid: i.vendorUid,
+        name: i.vendorName || i.vendorDisplayName || '商戶',
+      });
+    }
+    return out;
+  }, [inquiries]);
+
+  // 2026-08-09 — Comment-path resolvers for <ItemComments/>. The
+  // component takes a Firestore CollectionReference and subscribes
+  // via onSnapshot, so we MUST return the actual `collection(db, ...)`
+  // ref, not a string. Both rundown and resources comments live
+  // under the owner's event-scoped tree:
+  //
+  //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/
+  //     rundown/{entryId}/comments/{commentId}
+  //     resources/{itemId}/comments/{commentId}
+  //
+  // Mirrors the same rule gating as the parent items so anyone who
+  // can READ the rundown entry can also READ its comments.
+  // Returns null when we don't have enough context yet, which
+  // gracefully degrades the comment UI to "path not ready" in
+  // <WeddingDay/> rather than throwing.
+  const rundownCommentPathFor = useCallback(
+    (entryId) => {
+      if (!db || !appId || !dataOwnerUid || !currentEvent?.id || !entryId) return null;
+      return collection(
+        db,
+        'artifacts',
+        appId,
+        'users',
+        dataOwnerUid,
+        'events',
+        currentEvent.id,
+        'rundown',
+        entryId,
+        'comments',
+      );
+    },
+    [dataOwnerUid, currentEvent?.id],
+  );
+  const resourceCommentPathFor = useCallback(
+    (itemId) => {
+      if (!db || !appId || !dataOwnerUid || !currentEvent?.id || !itemId) return null;
+      return collection(
+        db,
+        'artifacts',
+        appId,
+        'users',
+        dataOwnerUid,
+        'events',
+        currentEvent.id,
+        'resources',
+        itemId,
+        'comments',
+      );
+    },
+    [dataOwnerUid, currentEvent?.id],
+  );
 
   // 2026-08-02 — Upload preferences token (Option 1, watermark).
   // This must stay AFTER dataOwnerUid is initialized. The hook mints
@@ -3632,6 +3706,21 @@ export default function App() {
                 // 2026-07-24 — pass the toast hook so the new edit
                 // save confirmations in 物資/歌單 can show "✅ 已更新".
                 showToast={showToast}
+                // 2026-08-09 — Vendor assignment + comments for
+                // 大日流程 / 物資. The <ItemComments> panel needs a
+                // real Firestore collection reference (not a path
+                // string) because it subscribes via onSnapshot.
+                // We derive it here from dataOwnerUid + currentEvent
+                // so the comments live under the owner's tree.
+                ownerUid={dataOwnerUid}
+                eventId={currentEvent?.id}
+                // Vendors for VendorPicker: derives from inquiries
+                // (the couple has chatted with them). Memoized so
+                // WeddingDay's memoization doesn't churn.
+                vendors={vendorsForPicker}
+                // (entryId) => CollectionReference | null
+                rundownCommentPathFor={rundownCommentPathFor}
+                resourceCommentPathFor={resourceCommentPathFor}
               />
             )}
 
