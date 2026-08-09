@@ -48,6 +48,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 
 vi.mock('../lib/firebase', () => ({
   db: { __isDb: true },
+  appId: 'savetheday-production',
 }));
 
 import { renderHook, waitFor } from '@testing-library/react';
@@ -141,14 +142,16 @@ describe('useNotifications', () => {
         args[0] &&
         args[0].__isCollection &&
         args[0].args &&
-        args[0].args[1] === 'users' &&
-        args[0].args[2] === 'owner-1' &&
-        args[0].args[3] === 'events' &&
-        args[0].args[4] === 'e-1' &&
-        args[0].args[5] === 'tasks'
+        args[0].args[1] === 'artifacts' &&
+        args[0].args[2] === 'savetheday-production' &&
+        args[0].args[3] === 'users' &&
+        args[0].args[4] === 'owner-1' &&
+        args[0].args[5] === 'events' &&
+        args[0].args[6] === 'e-1' &&
+        args[0].args[7] === 'tasks'
       );
     });
-    expect(taskSub, 'expected a /users/owner-1/events/e-1/tasks subscription').toBeDefined();
+    expect(taskSub, 'expected a /artifacts/savetheday-production/users/owner-1/events/e-1/tasks subscription').toBeDefined();
   });
 
   it('does NOT subscribe to tasks when eventId is missing', async () => {
@@ -159,7 +162,7 @@ describe('useNotifications', () => {
     await new Promise((r) => setTimeout(r, 10));
     const taskSub = mocks.refs.find((r) => {
       const args = r.q.args;
-      return args && args[0] && args[0].__isCollection && Array.isArray(args[0].args) && args[0].args[5] === 'tasks';
+      return args && args[0] && args[0].__isCollection && Array.isArray(args[0].args) && args[0].args[args[0].args.length - 1] === 'tasks';
     });
     expect(taskSub, 'no tasks subscription without eventId').toBeUndefined();
   });
@@ -178,12 +181,13 @@ describe('useNotifications', () => {
         args[0] &&
         args[0].__isCollection &&
         Array.isArray(args[0].args) &&
-        args[0].args[1] === 'users' &&
-        args[0].args[2] === 'owner-1' &&
-        args[0].args[3] === 'helpers'
+        args[0].args[1] === 'artifacts' &&
+        args[0].args[3] === 'users' &&
+        args[0].args[4] === 'owner-1' &&
+        args[0].args[5] === 'helpers'
       );
     });
-    expect(helpersSub, 'expected a /users/owner-1/helpers subscription').toBeDefined();
+    expect(helpersSub, 'expected a /artifacts/savetheday-production/users/owner-1/helpers subscription').toBeDefined();
   });
 
   it('badge counters respect per-source localStorage markers', async () => {
@@ -198,17 +202,17 @@ describe('useNotifications', () => {
     mocks.onSnapshot.mockImplementation((q, onNext) => {
       const qHead = q.args[0];
       let docs = [];
-      if (qHead?.__isCollection && qHead.args[1] === 'proposals') {
-        docs = [
-          { id: 'p1', data: () => ({ jobId: 'j1', vendorName: 'V1', price: '$100', message: 'm', createdAt: { toMillis: () => 2000 } }) },
-        ];
-      } else if (qHead?.__isCollection && qHead.args[5] === 'tasks') {
+      if (qHead?.__isCollection && qHead.args[1] === 'artifacts' && qHead.args[5] === 'events' && qHead.args[7] === 'tasks') {
         docs = [
           { id: 't1', data: () => ({ title: 'pick venue', createdAt: { toMillis: () => 2000 } }) },
         ];
-      } else if (qHead?.__isCollection && qHead.args[3] === 'helpers') {
+      } else if (qHead?.__isCollection && qHead.args[1] === 'artifacts' && qHead.args[5] === 'helpers') {
         docs = [
           { id: 'helper-1', data: () => ({ status: 'active', name: 'Tiger', acceptedAt: { toMillis: () => 2000 } }) },
+        ];
+      } else if (qHead?.__isCollection && qHead.args[1] === 'proposals') {
+        docs = [
+          { id: 'p1', data: () => ({ jobId: 'j1', vendorName: 'V1', price: '$100', message: 'm', createdAt: { toMillis: () => 2000 } }) },
         ];
       }
       setTimeout(() => onNext({ docs: docs.map((d) => ({ id: d.id, data: d.data })) }), 0);

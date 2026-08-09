@@ -55,7 +55,7 @@ import {
   where,
   limit as fsLimit,
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, appId } from '../lib/firebase';
 
 // ---- Notification envelope (single shape for every source) ----
 //
@@ -318,7 +318,7 @@ export function useNotifications({
     }
     let cancelled = false;
     const q = query(
-      collection(db, 'users', ownerUid, 'events', eventId, 'tasks'),
+      collection(db, 'artifacts', appId, 'users', ownerUid, 'events', eventId, 'tasks'),
       fsLimit(TASKS_LIMIT),
     );
     const unsub = onSnapshot(
@@ -361,7 +361,7 @@ export function useNotifications({
       return undefined;
     }
     let cancelled = false;
-    const q = query(collection(db, 'users', ownerUid, 'helpers'));
+    const q = query(collection(db, 'artifacts', appId, 'users', ownerUid, 'helpers'));
     const unsub = onSnapshot(
       q,
       (snap) => {
