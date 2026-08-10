@@ -20,10 +20,11 @@
 //
 // Styling mirrors ReferralModal / the existing modal family.
 
-import { useEffect, useState } from 'react';
-import { X, Send, Check, Clock, RefreshCw, Instagram, AlertCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { X, Send, Check, Clock, RefreshCw, Instagram, AlertCircle, Upload, Image as ImageIcon } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../../lib/firebase';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { functions, storage } from '../../lib/firebase';
 
 // 2026-07-29 — UnlockType lives in EventsDashboard.tsx today but the
 // modal needs to be reachable from screens that don't import the
@@ -46,6 +47,10 @@ interface ProofRow {
   id: string;
   unlockType: UnlockType;
   postUrl: string;
+  // 2026-08-10 — optional screenshot URL (Storage download URL).
+  // Surfaces in the owner's "進度" tab so they can confirm what
+  // they uploaded alongside the postUrl.
+  screenshotUrl?: string | null;
   status: ProofStatus;
   createdAt: number | null;
   verifiedAt: number | null;
@@ -81,6 +86,15 @@ export function SocialProofModal({ isOpen, onClose, ownerUid }: SocialProofModal
   );
   const [postUrl, setPostUrl] = useState('');
   const [caption, setCaption] = useState('');
+  // 2026-08-10 — optional screenshot. When the IG/FB post is
+  // private/expired/non-public, couples attach a screenshot of
+  // what they posted. The file uploads to /social-proofs/{uid}/...
+  // BEFORE we call submitSocialProof, so the CF gets the download
+  // URL and stores it on the doc. AdminQueue renders it inline.
+  const [screenshot, setScreenshot] = useState<File | null>(null);
+  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
+  const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<
     | null
@@ -98,8 +112,41 @@ export function SocialProofModal({ isOpen, onClose, ownerUid }: SocialProofModal
       setSubmitResult(null);
       setPostUrl('');
       setCaption('');
+      setScreenshot(null);
+      if (screenshotPreview) {
+        URL.revokeObjectURL(screenshotPreview);
+        setScreenshotPreview(null);
+      }
     }
   }, [isOpen]);
+
+  // Handle screenshot file selection. Validates type + size, builds
+  // an Object URL for the inline preview.
+  const handleScreenshotChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (!f.type.startsWith('image/')) {
+      alert('請選擇圖片檔案 (PNG / JPG / WEBP)。');
+      e.target.value = '';
+      return;
+    }
+    if (f.size > 5 * 1024 * 1024) {
+      alert('檔案太大，請壓到 5MB 以下。');
+      e.target.value = '';
+      return;
+    }
+    if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
+    setScreenshot(f);
+    setScreenshotPreview(URL.createObjectURL(f));
+  };
+
+  // Remove the selected screenshot (also revokes the preview URL).
+  const clearScreenshot = () => {
+    if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
+    setScreenshot(null);
+    setScreenshotPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   // Load history when switching to history tab (or on first open).
   useEffect(() => {
@@ -133,14 +180,39 @@ export function SocialProofModal({ isOpen, onClose, ownerUid }: SocialProofModal
     setSubmitting(true);
     setSubmitResult(null);
     try {
+      // 2026-08-10 — Upload the screenshot FIRST so we can pass the
+      // download URL into the CF. Path matches the storage rule at
+      // /social-proofs/{ownerUid}/. We pick the file extension from
+      // the MIME type so the storage object stays in the right
+      // format for inline <img> rendering.
+      let screenshotUrl: string | null = null;
+      if (screenshot) {
+        setUploadingScreenshot(true);
+        try {
+          const ext = (() => {
+            if (screenshot.type === 'image/png') return 'png';
+            if (screenshot.type === 'image/webp') return 'webp';
+            if (screenshot.type === 'image/gif') return 'gif';
+            return 'jpg';
+          })();
+          const path = `social-proofs/${ownerUid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+          const ref = storageRef(storage, path);
+          await uploadBytes(ref, screenshot, { contentType: screenshot.type });
+          screenshotUrl = await getDownloadURL(ref);
+        } finally {
+          setUploadingScreenshot(false);
+        }
+      }
+
       const fn = httpsCallable<
-        { unlockType: string; postUrl: string; caption?: string },
+        { unlockType: string; postUrl: string; caption?: string; screenshotUrl?: string },
         { proofId: string; estimatedReviewTime: string }
       >(functions, 'submitSocialProof');
       const res = await fn({
         unlockType,
         postUrl: postUrl.trim(),
         caption: caption.trim() || undefined,
+        screenshotUrl: screenshotUrl || undefined,
       });
       setSubmitResult({
         kind: 'success',
@@ -149,6 +221,7 @@ export function SocialProofModal({ isOpen, onClose, ownerUid }: SocialProofModal
       });
       setPostUrl('');
       setCaption('');
+      clearScreenshot();
       // Refresh history if it's already loaded
       if (tab === 'history' && ownerUid) {
         const fn2 = httpsCallable<void, ProofList>(functions, 'listSocialProofs');
@@ -279,15 +352,64 @@ export function SocialProofModal({ isOpen, onClose, ownerUid }: SocialProofModal
                 maxLength={500}
                 rows={2}
                 disabled={submitting}
-                className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:border-rose-400 focus:ring-2 focus:ring-rose-100 outline-none disabled:opacity-50 mb-4 resize-none"
+                className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:border-rose-400 focus:ring-2 focus:ring-rose-100 outline-none disabled:opacity-50 mb-3 resize-none"
               />
+
+              {/* 2026-08-10 — Optional screenshot upload. Useful when the
+                  IG/FB post is private / expired / not publicly viewable
+                  — admin can still verify what was posted. */}
+              <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
+                截圖（可選）
+              </label>
+              <p className="text-xs text-slate-500 mb-2">
+                如果你嘅 Story/Post 已過期或設定咗私隱，可以貼一張截圖俾我哋人手核實。最多 5MB。
+              </p>
+              {screenshotPreview ? (
+                <div className="relative mb-3 inline-block">
+                  {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
+                  <img
+                    src={screenshotPreview}
+                    alt="截圖預覽"
+                    className="max-h-40 rounded-lg border border-slate-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={clearScreenshot}
+                    disabled={submitting}
+                    className="absolute -top-2 -right-2 bg-rose-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-rose-700 disabled:opacity-50"
+                    aria-label="移除截圖"
+                  >
+                    ✕
+                  </button>
+                  <div className="text-xs text-slate-500 mt-1">
+                    {screenshot?.name} · {((screenshot?.size ?? 0) / 1024).toFixed(0)} KB
+                  </div>
+                </div>
+              ) : (
+                <label className="flex items-center justify-center gap-2 px-3 py-3 mb-3 border-2 border-dashed border-slate-200 rounded-lg cursor-pointer hover:border-rose-300 hover:bg-rose-50 transition-colors">
+                  <Upload className="w-4 h-4 text-slate-400" />
+                  <span className="text-sm text-slate-600">選擇截圖 (PNG / JPG / WEBP)</span>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleScreenshotChange}
+                    disabled={submitting}
+                    className="hidden"
+                  />
+                </label>
+              )}
 
               <button
                 type="submit"
                 disabled={submitting || !postUrl.trim()}
                 className="w-full bg-rose-600 text-white font-bold py-2.5 rounded-xl hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {submitting ? '提交中…' : '🚀 提交社交證明'}
+                {submitting
+                  ? uploadingScreenshot
+                    ? '上傳截圖中…'
+                    : '提交中…'
+                  : '🚀 提交社交證明'}
               </button>
 
               {submitResult && (
@@ -352,6 +474,25 @@ export function SocialProofModal({ isOpen, onClose, ownerUid }: SocialProofModal
                       >
                         {row.postUrl}
                       </a>
+                      {/* 2026-08-10 — Inline screenshot preview in the
+                          owner's history tab. Lets them verify what
+                          they uploaded is still there. */}
+                      {row.screenshotUrl && (
+                        <a
+                          href={row.screenshotUrl}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="block mt-2"
+                        >
+                          {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
+                          <img
+                            src={row.screenshotUrl}
+                            alt="截圖預覽"
+                            className="max-h-32 rounded-lg border border-slate-200 hover:opacity-90 cursor-pointer"
+                            loading="lazy"
+                          />
+                        </a>
+                      )}
                       {row.status === 'rejected' && row.rejectionReason && (
                         <div className="mt-2 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1.5">
                           原因：{row.rejectionReason}

@@ -36,6 +36,10 @@ interface QueueItem {
   type: QueueType;
   unlockType: string;
   postUrl?: string;
+  // 2026-08-10 — social proofs now support an optional screenshot
+  // upload (e.g. when the IG story has expired). Same shape as
+  // receiptUrl so we can render them with the same <img> block.
+  screenshotUrl?: string;
   friendName?: string;
   friendUid?: string;
   amount?: number;
@@ -93,6 +97,9 @@ export function AdminQueue({ user, isAdmin, onBack }: AdminQueueProps) {
           type: filter,
           unlockType: data.unlockType || '',
           postUrl: data.postUrl,
+          // 2026-08-10 — optional screenshot for expired/private IG
+          // stories. Stored under /social-proofs/{uid}/ on Storage.
+          screenshotUrl: data.screenshotUrl,
           friendName: data.friendName,
           friendUid: data.friendUid,
           amount: data.amount,
@@ -263,6 +270,28 @@ export function AdminQueue({ user, isAdmin, onBack }: AdminQueueProps) {
                     >
                       <ExternalLink className="w-3 h-3 flex-shrink-0" />
                       {item.postUrl}
+                    </a>
+                  )}
+                  {/* 2026-08-10 — Optional screenshot. Renders inline
+                      when the user attached one (e.g. for expired
+                      IG stories). Click the image to open full size
+                      in a new tab. Same pattern as paymentReceipts
+                      below. */}
+                  {item.type === 'socialProofs' && item.screenshotUrl && (
+                    <a
+                      href={item.screenshotUrl}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="block mt-2"
+                    >
+                      {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
+                      <img
+                        src={item.screenshotUrl}
+                        alt="社交證明截圖"
+                        className="max-w-xs max-h-64 rounded-lg border border-slate-200 hover:opacity-90 cursor-pointer"
+                        loading="lazy"
+                      />
+                      <span className="text-xs text-slate-500 mt-1 block">放大</span>
                     </a>
                   )}
                   {item.type === 'referralClaims' && (

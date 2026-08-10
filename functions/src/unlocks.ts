@@ -151,10 +151,18 @@ export const submitSocialProof = onCall(
   async (req) => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const uid = req.auth.uid;
-    const { unlockType, postUrl, caption } = req.data as {
+    const { unlockType, postUrl, caption, screenshotUrl } = req.data as {
       unlockType: UnlockType;
       postUrl: string;
       caption?: string;
+      // 2026-08-10 — optional screenshot upload. Couples attach an
+      // image (screenshot of their IG story / FB post) when the post
+      // is private / expired / not publicly viewable. The client
+      // uploads to /social-proofs/{uid}/{proofId}.{ext} BEFORE
+      // calling this CF, then passes the resulting download URL.
+      // Owner+admin can read it (storage.rules gates it). Server-
+      // side validation: must be under the user's own folder.
+      screenshotUrl?: string;
     };
 
     // ---- Validation ----
@@ -175,6 +183,21 @@ export const submitSocialProof = onCall(
     if (caption && (typeof caption !== 'string' || caption.length > 500)) {
       throw new HttpsError('invalid-argument', 'caption must be <= 500 chars.');
     }
+    // 2026-08-10 — screenshot validation. If provided, must be a
+    // Firebase Storage download URL under the user's own folder.
+    // (Matches the payment-receipt validation pattern at line 384
+    // below — same security model, same folder-namespace check.)
+    if (screenshotUrl !== undefined && screenshotUrl !== null && screenshotUrl !== '') {
+      if (typeof screenshotUrl !== 'string') {
+        throw new HttpsError('invalid-argument', 'screenshotUrl must be a string.');
+      }
+      if (screenshotUrl.length > 2000) {
+        throw new HttpsError('invalid-argument', 'screenshotUrl too long.');
+      }
+      if (!screenshotUrl.includes(`/social-proofs/${uid}/`)) {
+        throw new HttpsError('permission-denied', 'screenshotUrl must be under your own folder.');
+      }
+    }
 
     // ---- Create pending social proof doc ----
     const proofId = `${unlockType}-${Date.now()}`;
@@ -182,6 +205,7 @@ export const submitSocialProof = onCall(
       unlockType,
       postUrl,
       caption: caption || '',
+      screenshotUrl: screenshotUrl || null,
       status: 'pending',
       createdAt: FieldValue.serverTimestamp(),
       verifiedAt: null,
@@ -285,6 +309,10 @@ export const listSocialProofs = onCall(
         unlockType: data.unlockType,
         postUrl: data.postUrl,
         status: data.status,
+        // 2026-08-10 — surface the optional screenshot URL so the
+        // owner's "進度" tab can show what they uploaded alongside
+        // the post URL. Admin sees the same in AdminQueue.
+        screenshotUrl: data.screenshotUrl || null,
         createdAt: tsToMs(data.createdAt),
         verifiedAt: tsToMs(data.verifiedAt),
         rejectionReason: data.rejectionReason || null,
