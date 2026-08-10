@@ -272,15 +272,22 @@ export function AdminQueue({ user, isAdmin, onBack }: AdminQueueProps) {
                   )}
                   {item.type === 'paymentReceipts' && (
                     <div>
-                      💰 {item.paymentMethod} · HK${item.amount}{' '}
+                      💰 {item.paymentMethod} · HK${item.amount}
                       {item.receiptUrl && (
                         <a
                           href={item.receiptUrl}
                           target="_blank"
                           rel="noreferrer noopener"
-                          className="text-rose-600 hover:text-rose-700 underline ml-2"
+                          className="block mt-2"
                         >
-                          [收據]
+                          {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
+                          <img
+                            src={item.receiptUrl}
+                            alt="付款收據 screenshot"
+                            className="max-w-xs max-h-64 rounded-lg border border-slate-200 hover:opacity-90 cursor-pointer"
+                            loading="lazy"
+                          />
+                          <span className="text-xs text-slate-500 mt-1 block">放大</span>
                         </a>
                       )}
                     </div>
