@@ -98,6 +98,26 @@ export function ItemComments({
   // (2026-08-11 — Diagnostic logging removed. Path resolution
   //  confirmed correct; see savetheday.io-1786448088933.log for the
   //  resolved path. Bug was in firestore.rules, not the client.)
+  //
+  // (2026-08-11 — Re-adding verbose diagnostics. The user's log
+  //  is empty and we still can't reproduce. Log every relevant
+  //  state to pinpoint where the vendor path drops.)
+  if (typeof window !== 'undefined' && path) {
+    try {
+      console.log('[ItemComments] mounted', {
+        pathString: path?.path,
+        pathId: path?.id,
+        parentPath: path?.parent?.path,
+        currentUid: currentUser?.uid,
+        currentRole,
+        parentAssignedVendorUid,
+        parentAssignedHelperUid,
+        readOnly,
+      });
+    } catch (e) {
+      console.log('[ItemComments] diag failed', e?.message);
+    }
+  }
 
   const sorted = useMemo(() => {
     return [...comments].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -127,6 +147,19 @@ export function ItemComments({
       return;
     }
     setSending(true);
+    if (typeof window !== 'undefined') {
+      try {
+        console.log('[ItemComments] handleSend attempt', {
+          pathString: path?.path,
+          parentAssignedVendorUid,
+          parentAssignedHelperUid,
+          currentUid: currentUser?.uid,
+          text: clean,
+        });
+      } catch (e) {
+        console.log('[ItemComments] diag send failed', e?.message);
+      }
+    }
     try {
       // 2026-08-11 — Stamp the parent's assignedVendorUid and
       // assignedHelperUid onto the comment so the Firestore rules
@@ -162,10 +195,11 @@ export function ItemComments({
         parentAssignedVendorUid: parentAssignedVendorUid || null,
         parentAssignedHelperUid: parentAssignedHelperUid || null,
       });
+      if (typeof window !== 'undefined') console.log('[ItemComments] handleSend OK', path?.path);
       setText('');
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn('[ItemComments] send failed', err?.message);
+      console.warn('[ItemComments] send failed', err?.message, err?.code);
       window.alert && window.alert('✗ 留言失敗：' + (err?.message || '未知錯誤'));
     } finally {
       setSending(false);
