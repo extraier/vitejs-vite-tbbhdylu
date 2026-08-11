@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
         data: () => ({
           unlockType: 'custom-template',
           postUrl: 'https://instagram.com/p/abc',
+          screenshotUrl: 'https://firebasestorage.googleapis.com/v0/b/savetheday-2377a.firebasestorage.app/o/social-proofs%2Fuid123%2Fproof.png?alt=media&token=test-token',
           status: 'pending',
           createdAt: { _seconds: 1700000000 },
         }),
@@ -134,6 +135,9 @@ describe('AdminQueue', () => {
     });
     // URL link present
     expect(screen.getByText(/instagram\.com\/p\/abc/)).toBeTruthy();
+    // Screenshot proof must be rendered as an inline image in the admin row.
+    expect(screen.getByRole('img', { name: '社交證明截圖' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: '社交證明截圖' }).getAttribute('src')).toContain('social-proofs%2Fuid123%2Fproof.png');
   });
 
   it('approve button calls adminVerifySocialProof with the right ids', async () => {

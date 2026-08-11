@@ -76,6 +76,18 @@ export default async function handler(req, res) {
     // Run's preflight rejection at the edge (403 Bad signature).
     // Routing through the proxy bypasses preflight entirely.
     'previewPartnerInvite',
+    // 2026-08-11 — Social proof (Instagram / Facebook screenshot
+    // unlock path). submitSocialProof + listSocialProofs are
+    // called by the couple (SocialProofModal) when submitting
+    // IG/FB proof; adminVerifySocialProof is called by the admin
+    // from AdminQueue. All three must be in the allowlist or the
+    // proxy returns 403 NOT_ALLOWED before the call reaches the
+    // Cloud Function, even when the CF is ACTIVE and IAM is
+    // correct (Trap 15 — see firebase-cf-v2-deploy-verify
+    // references/cloud-functions-proxy-allowlist-2026-08-09.md).
+    'submitSocialProof',
+    'listSocialProofs',
+    'adminVerifySocialProof',
   ]);
   if (!ALLOWED.has(fnName)) {
     return res.status(403).json({
