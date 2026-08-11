@@ -92,6 +92,26 @@ export function ItemComments({
   // (2026-08-11 TEMP DIAGNOSTIC removed after root cause identified:
   //  vendor was on a resource path the live SDK denied; redeployed
   //  firestore rules to force cache refresh. Keep this file clean.)
+  //
+  // 2026-08-11 — second diagnostic. The first showed the
+  // path. Now we want to know if the SAME path is being subscribed
+  // to across mounts, OR if multiple ItemComments instances are
+  // opening different paths. Look for `[ItemComments] path` in
+  // console to find the resolved path.
+  if (typeof window !== 'undefined' && path) {
+    const segments = path?._query?.path?.segments || [];
+    const ownerUid = segments[3];
+    const eventId = segments[5];
+    const groupName = segments[6];
+    const itemId = segments[7];
+    console.log('[ItemComments] path', {
+      ownerUid,
+      eventId,
+      groupName,
+      itemId,
+      pathStringified: path && JSON.stringify(path),
+    });
+  }
 
   const sorted = useMemo(() => {
     return [...comments].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
