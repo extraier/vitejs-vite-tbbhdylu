@@ -637,11 +637,19 @@ match /{path=**}/events/{eventId} {
               // assignedVendorUid / assignedHelperUid onto the comment
               // doc, and the rule does a pure field comparison.
               //
+              // 2026-08-11 — Vendor branch reordered BEFORE
+              // isCoOwnerOfAnyEvent. The LIVE engine throws on the
+              // get() inside isCoOwnerOfAnyEvent when the user can't
+              // read the target /coOwners/{uid} doc — even when that
+              // branch would conceptually return false. The throw
+              // aborts the entire `||` chain, so any vendor (or any
+              // non-co-owner user) was silently failing the rule.
+              // Putting the vendor branch first means it short-circuits
+              // TRUE before isCoOwnerOfAnyEvent is evaluated.
+              //
               // The owner/co-owner branches are unchanged. They use pure
               // UID comparisons and the standalone coOwners doc.
-              allow create: if isOwner(ownerUid)
-                || isCoOwnerOfAnyEvent(ownerUid)
-                || (
+              allow create: if (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
                   && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt', 'parentAssignedVendorUid', 'parentAssignedHelperUid'])
@@ -651,6 +659,8 @@ match /{path=**}/events/{eventId} {
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
                   && request.resource.data.parentAssignedVendorUid == request.auth.uid
                 )
+                || isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
