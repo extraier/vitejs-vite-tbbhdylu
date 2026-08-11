@@ -95,38 +95,9 @@ export function ItemComments({
     path && JSON.stringify(path),
   ]);
 
-  // (2026-08-11 TEMP DIAGNOSTIC removed after root cause identified:
-  //  vendor was on a resource path the live SDK denied; redeployed
-  //  firestore rules to force cache refresh. Keep this file clean.)
-  //
-  // 2026-08-11 — second diagnostic. The first showed the
-  // path. Now we want to know if the SAME path is being subscribed
-  // to across mounts, OR if multiple ItemComments instances are
-  // opening different paths. Look for `[ItemComments] path` in
-  // console to find the resolved path.
-  //
-  // 2026-08-11 — third diagnostic. The previous log showed
-  // `ownerUid: 'gIF9yBcLxFyYUDumlgyi'` (the eventId!) which means
-  // the segments array is shorter than expected OR has a different
-  // structure. Print the FULL path string + segments so we can see
-  // exactly what's being subscribed to.
-  if (typeof window !== 'undefined' && path) {
-    const fullPath = path?.path || (path?._query?.path?.canonicalString?.()) || '<unknown>';
-    const segments = path?._query?.path?.segments || [];
-    console.log('[ItemComments] path', {
-      fullPath,
-      pathId: path.id,
-      pathParentPath: path.parent?.path,
-      pathParentParentPath: path.parent?.parent?.path,
-      pathParentParentParentPath: path.parent?.parent?.parent?.path,
-      pathParentParentParentParentPath: path.parent?.parent?.parent?.parent?.path,
-      segments,
-      ownerUid: segments[3],
-      eventId: segments[5],
-      groupName: segments[6],
-      itemId: segments[7],
-    });
-  }
+  // (2026-08-11 — Diagnostic logging removed. Path resolution
+  //  confirmed correct; see savetheday.io-1786448088933.log for the
+  //  resolved path. Bug was in firestore.rules, not the client.)
 
   const sorted = useMemo(() => {
     return [...comments].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
