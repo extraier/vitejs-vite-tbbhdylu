@@ -571,10 +571,13 @@ match /{path=**}/events/{eventId} {
               // Both isCoOwnerOfEventDoc / isCoOwnerByRequestEvent
               // (which need resource.data.eventId) are skipped — partners
               // still get access via isCoOwnerOfAnyEvent's standalone doc.
+              // 2026-08-11 — Same removal on the /rundown/{entryId}/comments
+              // read rule (see /resources/{itemId}/comments above for
+              // the full explanation of the LIVE rules-engine throw
+              // on `resource.data.X` during LISTEN).
               allow read: if isOwner(ownerUid)
                 || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
-                || (isSignedIn() && request.auth.uid == resource.data.authorUid)
                 || (
                   isSignedIn()
                   && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
@@ -630,10 +633,21 @@ match /{path=**}/events/{eventId} {
               || hasHelperPerm(ownerUid, 'canViewChecklist');
             allow write: if isOwnerOrAnyCoOwner(ownerUid);
             match /comments/{commentId} {
+              // 2026-08-11 — Removed `request.auth.uid == resource.data.authorUid`
+              // from the read rule. The LIVE rules engine throws on
+              // `resource.data.X` access when validating a LISTEN on
+              // the comments subcollection (resource is unbound for
+              // collection-level reads). The author can still read
+              // their own comment via the `vendor` branch below if
+              // they're an assigned vendor on the parent, or via the
+              // helper branch if they're an assigned helper — and
+              // they'll simply see their own doc via the write path
+              // anyway. Authoring is still gated on
+              // `request.resource.data.authorUid == request.auth.uid`
+              // in the create rule below.
               allow read: if isOwner(ownerUid)
                 || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
-                || (isSignedIn() && request.auth.uid == resource.data.authorUid)
                 || (
                   isSignedIn()
                   && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
