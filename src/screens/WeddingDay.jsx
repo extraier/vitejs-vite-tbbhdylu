@@ -960,6 +960,8 @@ function RundownCard({
             currentUser={currentUser}
             currentRole="owner"
             label="大日流程留言"
+            parentAssignedVendorUid={entry?.assignedVendorUid || null}
+            parentAssignedHelperUid={entry?.assignedHelperUid || null}
           />
         </div>
       )}
@@ -1491,6 +1493,8 @@ function ResourcesTab({
                             currentUser={currentUser}
                             currentRole="owner"
                             label="物資留言"
+                            parentAssignedVendorUid={item.assignedVendorUid || null}
+                            parentAssignedHelperUid={item.assignedHelperUid || null}
                           />
                         </div>
                       )}
@@ -1575,6 +1579,8 @@ function ResourcesTab({
                       currentUser={currentUser}
                       currentRole="owner"
                       label="物資留言"
+                      parentAssignedVendorUid={item.assignedVendorUid || null}
+                      parentAssignedHelperUid={item.assignedHelperUid || null}
                     />
                   </div>
                 )}

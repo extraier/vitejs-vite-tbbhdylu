@@ -164,6 +164,8 @@ function VendorAssignedItem({ item, currentUser }) {
             currentRole="vendor"
             label="留言溝通"
             emptyHint="未有留言，可以留低第一句。"
+            parentAssignedVendorUid={item.assignedVendorUid || null}
+            parentAssignedHelperUid={item.assignedHelperUid || null}
           />
         </div>
       )}

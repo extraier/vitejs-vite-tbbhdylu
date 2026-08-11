@@ -76,6 +76,12 @@ export function ItemComments({
   readOnly = false,
   emptyHint = '未有留言',
   label = '留言',
+  // 2026-08-11 — Parent-item assignment fields. Stamped on the
+  // comment so the Firestore rules can authorize vendor/helper
+  // writes WITHOUT calling get(parentRundown/Resource). See the
+  // long note above the addDoc() call for why this is needed.
+  parentAssignedVendorUid = null,
+  parentAssignedHelperUid = null,
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -142,6 +148,24 @@ export function ItemComments({
     }
     setSending(true);
     try {
+      // 2026-08-11 — Stamp the parent's assignedVendorUid and
+      // assignedHelperUid onto the comment so the Firestore rules
+      // can authorize the vendor/helper write WITHOUT calling
+      // get(parentRundown/Resource). The LIVE rules engine has
+      // been denying these writes with `Missing or insufficient
+      // permissions` even though the local emulator allows them —
+      // most likely because of an evaluation quirk on the
+      // get(parentDoc) call inside the rule's vendor branch.
+      //
+      // By carrying the parent's assignment on the comment doc,
+      // the rule becomes a pure field comparison:
+      //   request.resource.data.parentAssignedVendorUid == request.auth.uid
+      // — no cross-doc lookup needed. The owner/co-owner/helper
+      // branches don't need it because they use pure UID
+      // comparisons or isCoOwnerOfAnyEvent standalone docs.
+      //
+      // Both fields are stamped even if null, so the rule can
+      // check them uniformly.
       await addDoc(path, {
         authorUid: currentUser.uid,
         authorName:
@@ -155,6 +179,8 @@ export function ItemComments({
         authorRole: currentRole,
         text: clean,
         createdAt: Date.now(),
+        parentAssignedVendorUid: parentAssignedVendorUid || null,
+        parentAssignedHelperUid: parentAssignedHelperUid || null,
       });
       setText('');
     } catch (err) {
