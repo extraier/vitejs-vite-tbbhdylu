@@ -104,18 +104,27 @@ export function ItemComments({
   // to across mounts, OR if multiple ItemComments instances are
   // opening different paths. Look for `[ItemComments] path` in
   // console to find the resolved path.
+  //
+  // 2026-08-11 — third diagnostic. The previous log showed
+  // `ownerUid: 'gIF9yBcLxFyYUDumlgyi'` (the eventId!) which means
+  // the segments array is shorter than expected OR has a different
+  // structure. Print the FULL path string + segments so we can see
+  // exactly what's being subscribed to.
   if (typeof window !== 'undefined' && path) {
+    const fullPath = path?.path || (path?._query?.path?.canonicalString?.()) || '<unknown>';
     const segments = path?._query?.path?.segments || [];
-    const ownerUid = segments[3];
-    const eventId = segments[5];
-    const groupName = segments[6];
-    const itemId = segments[7];
     console.log('[ItemComments] path', {
-      ownerUid,
-      eventId,
-      groupName,
-      itemId,
-      pathStringified: path && JSON.stringify(path),
+      fullPath,
+      pathId: path.id,
+      pathParentPath: path.parent?.path,
+      pathParentParentPath: path.parent?.parent?.path,
+      pathParentParentParentPath: path.parent?.parent?.parent?.path,
+      pathParentParentParentParentPath: path.parent?.parent?.parent?.parent?.path,
+      segments,
+      ownerUid: segments[3],
+      eventId: segments[5],
+      groupName: segments[6],
+      itemId: segments[7],
     });
   }
 
