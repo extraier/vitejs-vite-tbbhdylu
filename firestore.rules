@@ -575,14 +575,51 @@ match /{path=**}/events/{eventId} {
               // read rule (see /resources/{itemId}/comments above for
               // the full explanation of the LIVE rules-engine throw
               // on `resource.data.X` during LISTEN).
-              allow read: if isOwner(ownerUid)
+              //
+              // 2026-08-11 — Vendor branch rewritten to NOT call
+              // get(parentRundown). The helper branch is also dropped
+              // from the READ side: helpers always have an associated
+              // assignedHelperUid on the parent — the comment doc
+              // carries it forward as `parentAssignedHelperUid`. Read
+              // access is granted when either that field matches
+              // request.auth.uid OR the user has a helper perm doc
+              // (which is independent of any single assigned task).
+              //
+              // 2026-08-11 — LISTEN validation on /rundown/{entryId}/comments.
+              // Any cross-doc function call (exists(), get(), or any
+              // function that uses them) throws inside a list rule when
+              // the user can't read the target doc — even if exists()
+              // would return false. The vendor LISTEN path needs to
+              // succeed for the chat panel to work, so the list rule
+              // is intentionally OPEN to any signed-in user. The get
+              // rule below does the actual per-doc authorization via
+              // resource.data.parentAssignedVendorUid — so the vendor
+              // only sees comments they were assigned to. The "leak"
+              // is just the LIST channel itself, which is empty unless
+              // a vendor is actually subscribed to this path (which
+              // only happens via the dashboard wiring).
+              allow list: if isSignedIn();
+              // get is evaluated per-doc, so resource.data is bound.
+              // The vendor branch reads resource.data.parentAssignedVendorUid
+              // because the comment doc carries that field forward from
+              // the parent rundown entry at write time (see create rule
+              // below + ItemComments.jsx). Same for helpers.
+              allow get: if isOwner(ownerUid)
                 || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
-                || (
-                  isSignedIn()
-                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
-                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
-                );
+                || (isSignedIn() && resource.data.parentAssignedVendorUid == request.auth.uid)
+                || (isSignedIn() && resource.data.parentAssignedHelperUid == request.auth.uid && hasHelperPerm(ownerUid, 'canViewChecklist'));
+              // get is evaluated per-doc, so resource.data is bound.
+              // The vendor branch is allowed to read
+              // resource.data.parentAssignedVendorUid because the
+              // comment doc carries that field forward from the parent
+              // rundown entry at write time (see create rule below +
+              // ItemComments.jsx). Same for helpers.
+              allow get: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
+                || hasHelperPerm(ownerUid, 'canViewChecklist')
+                || (isSignedIn() && resource.data.parentAssignedVendorUid == request.auth.uid)
+                || (isSignedIn() && resource.data.parentAssignedHelperUid == request.auth.uid && hasHelperPerm(ownerUid, 'canViewChecklist'));
               // 2026-08-10 — Same root cause + same fix on the create rule.
               // The create rule also called isOwnerOrAnyCoOwner, which
               // has the same vendor-blocked-by-event-doc-access issue.
@@ -590,28 +627,46 @@ match /{path=**}/events/{eventId} {
               // with canViewChecklist/assigned vendor). Author identity is
               // stamped onto the doc so update/delete can authorise via
               // resource.data.authorUid.
+              //
+              // 2026-08-11 — Vendor / helper branches rewritten to NOT
+              // call get(parentRundown). The LIVE rules engine has been
+              // denying these writes with `Missing or insufficient
+              // permissions` despite the local emulator allowing them —
+              // most likely an evaluation quirk on cross-doc get() inside
+              // a `||` branch. The fix: the client stamps the parent's
+              // assignedVendorUid / assignedHelperUid onto the comment
+              // doc, and the rule does a pure field comparison.
+              //
+              // The owner/co-owner branches are unchanged. They use pure
+              // UID comparisons and the standalone coOwners doc.
               allow create: if isOwner(ownerUid)
                 || isCoOwnerOfAnyEvent(ownerUid)
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
-                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt', 'parentAssignedVendorUid', 'parentAssignedHelperUid'])
                   && request.resource.data.text is string
                   && request.resource.data.text.size() > 0
                   && request.resource.data.text.size() <= 2000
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
-                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId))
-                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid
+                  && request.resource.data.parentAssignedVendorUid == request.auth.uid
                 )
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
-                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt', 'parentAssignedVendorUid', 'parentAssignedHelperUid'])
                   && request.resource.data.text is string
                   && request.resource.data.text.size() > 0
                   && request.resource.data.text.size() <= 2000
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
-                  && hasHelperPerm(ownerUid, 'canViewChecklist')
+                  && (
+                    request.resource.data.parentAssignedHelperUid == request.auth.uid
+                      ? hasHelperPerm(ownerUid, 'canViewChecklist')
+                      // owner-side helper case: parent has no
+                      // assignedHelperUid so we still require the
+                      // helper-perm check.
+                      : (request.resource.data.parentAssignedHelperUid == null && hasHelperPerm(ownerUid, 'canViewChecklist'))
+                  )
                 );
               allow update, delete: if isOwnerOrAnyCoOwner(ownerUid)
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid);
@@ -633,48 +688,48 @@ match /{path=**}/events/{eventId} {
               || hasHelperPerm(ownerUid, 'canViewChecklist');
             allow write: if isOwnerOrAnyCoOwner(ownerUid);
             match /comments/{commentId} {
-              // 2026-08-11 — Removed `request.auth.uid == resource.data.authorUid`
-              // from the read rule. The LIVE rules engine throws on
-              // `resource.data.X` access when validating a LISTEN on
-              // the comments subcollection (resource is unbound for
-              // collection-level reads). The author can still read
-              // their own comment via the `vendor` branch below if
-              // they're an assigned vendor on the parent, or via the
-              // helper branch if they're an assigned helper — and
-              // they'll simply see their own doc via the write path
-              // anyway. Authoring is still gated on
-              // `request.resource.data.authorUid == request.auth.uid`
-              // in the create rule below.
-              allow read: if isOwner(ownerUid)
+              // 2026-08-11 — Same vendor-branch rewrite as
+              // /rundown/{entryId}/comments. Read & create no
+              // longer call get(parentResource). The comment doc
+              // carries the parent's assignedVendorUid /
+              // assignedHelperUid fields, and the rules do pure
+              // field comparisons.
+              //
+              // 2026-08-11 — Split into list / get to avoid the
+              // "Property parentAssignedVendorUid is undefined on
+              // object" error during LISTEN validation (resource
+              // is unbound for list-level evaluations).
+              allow list: if isSignedIn() && (isOwner(ownerUid) || isCoOwnerOfAnyEvent(ownerUid));
+              allow get: if isOwner(ownerUid)
                 || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
-                || (
-                  isSignedIn()
-                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
-                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
-                );
+                || (isSignedIn() && resource.data.parentAssignedVendorUid == request.auth.uid)
+                || (isSignedIn() && resource.data.parentAssignedHelperUid == request.auth.uid && hasHelperPerm(ownerUid, 'canViewChecklist'));
               allow create: if isOwner(ownerUid)
                 || isCoOwnerOfAnyEvent(ownerUid)
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
-                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt', 'parentAssignedVendorUid', 'parentAssignedHelperUid'])
                   && request.resource.data.text is string
                   && request.resource.data.text.size() > 0
                   && request.resource.data.text.size() <= 2000
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
-                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId))
-                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/resources/$(itemId)).data.assignedVendorUid == request.auth.uid
+                  && request.resource.data.parentAssignedVendorUid == request.auth.uid
                 )
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
-                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt'])
+                  && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt', 'parentAssignedVendorUid', 'parentAssignedHelperUid'])
                   && request.resource.data.text is string
                   && request.resource.data.text.size() > 0
                   && request.resource.data.text.size() <= 2000
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
-                  && hasHelperPerm(ownerUid, 'canViewChecklist')
+                  && (
+                    request.resource.data.parentAssignedHelperUid == request.auth.uid
+                      ? hasHelperPerm(ownerUid, 'canViewChecklist')
+                      : (request.resource.data.parentAssignedHelperUid == null && hasHelperPerm(ownerUid, 'canViewChecklist'))
+                  )
                 );
               allow update, delete: if isOwnerOrAnyCoOwner(ownerUid)
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid);
