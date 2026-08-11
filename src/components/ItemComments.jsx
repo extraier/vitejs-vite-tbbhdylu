@@ -89,6 +89,20 @@ export function ItemComments({
     path && JSON.stringify(path),
   ]);
 
+  // 2026-08-11 — TEMP DIAGNOSTIC for the rundown/comments bug.
+  // Prints the resolved path so we can see what the client is
+  // actually subscribing to. Remove once the bug is closed.
+  if (typeof window !== 'undefined') {
+    console.log('[ItemComments] mount', {
+      pathType: typeof path,
+      pathIsNull: path === null,
+      pathStringified: path && JSON.stringify(path),
+      currentUserUid: currentUser?.uid,
+      currentRole,
+      label,
+    });
+  }
+
   const sorted = useMemo(() => {
     return [...comments].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   }, [comments]);
