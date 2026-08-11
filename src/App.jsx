@@ -1390,17 +1390,26 @@ export default function App() {
             const list = snap.docs.map((d) => {
               // collectionGroup doc path:
               //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/{groupName}/{id}
-              // d.ref = .../{groupName}/{id}         (the doc itself)
-              // d.ref.parent = .../events/{eventId} → .id is eventId
-              // d.ref.parent.parent = .../users/{ownerUid} → .id is ownerUid
-              // d.ref.parent.parent.parent = .../artifacts/{appId} → .id is appId
-              // (Three-segment chain, NOT four — earlier versions had
-              // an extra .parent that walked up to the appId and
-              // silently stamped the appId string as the "ownerUid",
-              // which made the commentPath resolver target a
-              // non-existent user doc and silently fail.)
-              const ownerUid = d.ref.parent.parent?.id;
-              const eventId = d.ref.parent.id;
+              // d.ref = .../{groupName}/{id}         (the doc itself, 8 segments)
+              // d.ref.parent = .../{groupName}        (CollectionReference, 7 segments) → .id is groupName
+              // d.ref.parent.parent = .../events/{eventId}  (CollectionReference, 6 segments) → .id is eventId
+              // d.ref.parent.parent.parent = .../users/{ownerUid}  (4 segments) → .id is ownerUid
+              //
+              // 2026-08-11 — BUG FIX. The previous extraction was
+              //   const ownerUid = d.ref.parent.parent?.id;   // WRONG: returned eventId
+              //   const eventId  = d.ref.parent.id;          // WRONG: returned groupName
+              // which stamped the EVENT ID into the ownerUid slot
+              // and the groupName into the eventId slot of the
+              // vendor's commentPath. The path came out as
+              //   users/{eventId}/events/{groupName}/{groupName}/{itemId}/comments
+              // which targets a non-existent user doc and never
+              // matched the rules-engine write auth. The comment
+              // in this block previously claimed the issue was
+              // "three-segment chain, NOT four" — that was wrong;
+              // it IS three segments above .ref to get the ownerUid
+              // (ref → parent → parent → parent), not two.
+              const ownerUid = d.ref.parent.parent.parent?.id;
+              const eventId  = d.ref.parent.parent?.id;
               return {
                 id: d.id,
                 ...d.data(),
