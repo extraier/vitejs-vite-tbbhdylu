@@ -50,9 +50,7 @@ export default async function handler(req, res) {
   // arbitrary calls through this endpoint.
   const ALLOWED = new Set([
     'sendInvitationsV2',
-    'sendInvitations',
     'autoLinkVendorContactsV2',
-    'autoLinkVendorContacts',
     // 2026-07-23 — couples post 徵求報價 via this callable because
     // direct Firestore writes to /jobRequests hit the catch-all
     // deny (the rule match is under /artifacts/{appId}/jobRequests
