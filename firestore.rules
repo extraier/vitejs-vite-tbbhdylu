@@ -709,15 +709,13 @@ match /{path=**}/events/{eventId} {
               // "Property parentAssignedVendorUid is undefined on
               // object" error during LISTEN validation (resource
               // is unbound for list-level evaluations).
-              allow list: if isSignedIn() && (isOwner(ownerUid) || isCoOwnerOfAnyEvent(ownerUid));
+              allow list: if isSignedIn();
               allow get: if isOwner(ownerUid)
                 || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
                 || (isSignedIn() && resource.data.parentAssignedVendorUid == request.auth.uid)
                 || (isSignedIn() && resource.data.parentAssignedHelperUid == request.auth.uid && hasHelperPerm(ownerUid, 'canViewChecklist'));
-              allow create: if isOwner(ownerUid)
-                || isCoOwnerOfAnyEvent(ownerUid)
-                || (
+              allow create: if (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
                   && request.resource.data.keys().hasAll(['authorUid', 'authorRole', 'text', 'createdAt', 'parentAssignedVendorUid', 'parentAssignedHelperUid'])
@@ -727,6 +725,8 @@ match /{path=**}/events/{eventId} {
                   && request.resource.data.authorRole in ['owner', 'vendor', 'helper']
                   && request.resource.data.parentAssignedVendorUid == request.auth.uid
                 )
+                || isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
                 || (
                   isSignedIn()
                   && request.resource.data.authorUid == request.auth.uid
