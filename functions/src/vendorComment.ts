@@ -150,11 +150,19 @@ export const vendorPostComment = onCall(
       );
     }
 
+    // After the fieldErrors gate above, all four fields are
+    // guaranteed to be strings of the right length. Re-narrow
+    // locally so TS strict-null passes.
+    const ownerUidStr = ownerUid as string;
+    const eventIdStr = eventId as string;
+    const parentKindStr = parentKind as ParentKind;
+    const parentIdStr = parentId as string;
+
     const parentRef = db
       .collection('artifacts').doc(APP_ID)
-      .collection('users').doc(ownerUid)
-      .collection('events').doc(eventId)
-      .collection(parentKind).doc(parentId);
+      .collection('users').doc(ownerUidStr)
+      .collection('events').doc(eventIdStr)
+      .collection(parentKindStr).doc(parentIdStr);
 
     // Server-side verification: caller must be the assigned
     // vendor or assigned helper on this parent item. Read with
