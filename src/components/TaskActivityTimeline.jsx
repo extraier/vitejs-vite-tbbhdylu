@@ -103,10 +103,17 @@ export function TaskActivityTimeline({
           'statusUpdates',
         )
       : null;
-  const { data: comments = [] } = useFirestoreCollection(commentsPath, [ownerUid, taskId]);
+  // 2026-08-12 — include eventId in the dependency arrays so
+  // switching events triggers a re-subscribe. Without it, the
+  // collection reference is rebuilt on every render but the
+  // hook's internal subscribe still keys off the [ownerUid,
+  // taskId] tuple, which means navigating between events can
+  // surface stale data from a previous wedding. (Manus's
+  // re-review note 4.)
+  const { data: comments = [] } = useFirestoreCollection(commentsPath, [ownerUid, eventId, taskId]);
   const { data: statusUpdates = [], loading: loadingStatus } = useFirestoreCollection(
     statusPath,
-    [ownerUid, taskId],
+    [ownerUid, eventId, taskId],
   );
 
   const events = useMemo(

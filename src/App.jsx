@@ -1273,23 +1273,39 @@ export default function App() {
            tasksQuery,
            (snap) => {
              if (cancelled) return;
-             const list = snap.docs.map((d) => ({
-               id: d.id,
-               ...d.data(),
-               // collectionGroup doc path:
-               //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/tasks/{taskId}
-               // d.ref = tasks/{taskId}
-               // d.ref.parent = events/{eventId}    → id is eventId
-               // d.ref.parent.parent = users/{ownerUid} → id is ownerUid
-               ownerUid: d.ref.parent.parent?.id,
-               // 2026-08-09 — surface eventId from the parent path so
-               // the vendor dashboard can group / dedupe by wedding
-               // when the same vendor is assigned across multiple
-               // events. (eventName / eventDate come from the doc
-               // body via denormalized fields — see App.jsx upsert
-               // helpers.)
-               eventId: d.ref.parent.id,
-             }));
+             const list = snap.docs.map((d) => {
+                           // collectionGroup doc path:
+                           //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/tasks/{taskId}
+                           // d.ref.path = the full 8-segment path; d.id = taskId.
+                           //
+                           // 2026-08-12 — DO NOT use d.ref.parent.parent?.id to derive
+                           // ownerUid. In the modular SDK v10, parent.parent of a
+                           // tasks/{taskId} doc is the DocumentReference at
+                           // events/{eventId} (not the user doc). .id returns the
+                           // immediate segment, which is the eventId, not the
+                           // owner's UID. The original "d.ref.parent.parent?.id"
+                           // looked right but actually set ownerUid = eventId,
+                           // which then made downstream paths build
+                           // users/events/events/{eventId}/... with the literal
+                           // string 'events' in the owner slot. The CF rejected
+                           // those payloads because parentKind/'rundown' was
+                           // misaligned. Parse the path segments directly.
+                           const segs = d.ref.path.split('/');
+                           const usersIdx = segs.indexOf('users');
+                           const eventsIdx = segs.indexOf('events');
+                           return {
+                             id: d.id,
+                             ...d.data(),
+                             ownerUid: usersIdx >= 0 ? segs[usersIdx + 1] : null,
+                             // 2026-08-09 — surface eventId from the parent path so
+                             // the vendor dashboard can group / dedupe by wedding
+                             // when the same vendor is assigned across multiple
+                             // events. (eventName / eventDate come from the doc
+                             // body via denormalized fields — see App.jsx upsert
+                             // helpers.)
+                             eventId: eventsIdx >= 0 ? segs[eventsIdx + 1] : null,
+                           };
+                         });
              list.sort((a, b) => {
                // Incomplete first, then by dueDate asc, then most-recent
                if (!!a.isCompleted !== !!b.isCompleted) {

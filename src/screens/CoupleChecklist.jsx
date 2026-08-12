@@ -477,6 +477,16 @@ export function CoupleChecklist({
                 key={task.id}
                 task={task}
                 currentUser={currentUser}
+                // 2026-08-12 — thread currentEvent (and ownerNames
+                // helper) into TaskRow so the embedded
+                // TaskActivityTimeline inside the comments drawer
+                // receives a real eventId. Without this,
+                // currentEvent?.id evaluated to undefined inside
+                // the sibling function and the timeline silently
+                // fell back to the legacy path / no-path branch,
+                // which then mis-built the rundown comment path
+                // downstream. (Manus spotted this in his re-review.)
+                currentEvent={currentEvent}
                 isActive={activeCategory === task.category}
                 isEditing={editingTaskId === task.id}
                 vendorContacts={vendorContacts}
@@ -767,6 +777,11 @@ export function CoupleChecklist({
 function TaskRow({
   task,
   currentUser,
+  // 2026-08-12 — currentEvent (and ownerNames) must be threaded
+  // through to TaskRow so the embedded <TaskActivityTimeline/>
+  // in the comments drawer receives a real eventId. See the
+  // call site for the upstream rationale.
+  currentEvent,
   isActive,
   isEditing,
   onSelect,
