@@ -487,6 +487,11 @@ export function CoupleChecklist({
                 // which then mis-built the rundown comment path
                 // downstream. (Manus spotted this in his re-review.)
                 currentEvent={currentEvent}
+                // 2026-08-13 — pass ownerNames so TaskRow → TaskFullEditor
+                // can render the 「指派28兄弟姊妹」 optgroup. Without
+                // this, the prop reference at TaskRow:823 throws
+                // ReferenceError when the user enters edit mode.
+                ownerNames={ownerNames}
                 isActive={activeCategory === task.category}
                 isEditing={editingTaskId === task.id}
                 vendorContacts={vendorContacts}
@@ -777,6 +782,16 @@ export function CoupleChecklist({
 function TaskRow({
   task,
   currentUser,
+  // 2026-08-13 — ownerNames (couple's boy/girl name) must be
+  // threaded through to TaskRow so the <TaskFullEditor> it
+  // renders can offer 新人自己 as an optgroup in the
+  // 「指派28兄弟姊妹」 dropdown. Without this, ownerNames is
+  // undefined inside TaskRow's render and the prop expression
+  // at line 823 throws `ReferenceError: ownerNames is not
+  // defined`. (Manus's note 4 from the earlier review had
+  // flagged this; the original 2026-08-12 patch added
+  // currentEvent but missed ownerNames.)
+  ownerNames,
   // 2026-08-12 — currentEvent (and ownerNames) must be threaded
   // through to TaskRow so the embedded <TaskActivityTimeline/>
   // in the comments drawer receives a real eventId. See the
