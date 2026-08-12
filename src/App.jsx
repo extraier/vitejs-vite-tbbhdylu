@@ -1415,28 +1415,30 @@ export default function App() {
           (snap) => {
             if (cancelled) return;
             const list = snap.docs.map((d) => {
-              // collectionGroup doc path:
+              // collectionGroup doc path (assigned-rundown):
               //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/{groupName}/{id}
-              // d.ref = .../{groupName}/{id}         (the doc itself, 8 segments)
-              // d.ref.parent = .../{groupName}        (CollectionReference, 7 segments) → .id is groupName
-              // d.ref.parent.parent = .../events/{eventId}  (CollectionReference, 6 segments) → .id is eventId
-              // d.ref.parent.parent.parent = .../users/{ownerUid}  (4 segments) → .id is ownerUid
+              // d.ref = .../{groupName}/{id}         (DocumentReference)
+              // d.ref.parent = .../{groupName}        (CollectionReference → .id is 'rundown' literal)
+              // d.ref.parent.parent = .../events/{eventId}  (DocumentReference → .id is eventId ✓)
+              // d.ref.parent.parent.parent = .../events  (CollectionReference → .id is 'events' literal ✗)
+              // d.ref.parent.parent.parent.parent = .../users/{ownerUid} (DocumentReference → .id is ownerUid)
               //
-              // 2026-08-11 — BUG FIX. The previous extraction was
-              //   const ownerUid = d.ref.parent.parent?.id;   // WRONG: returned eventId
-              //   const eventId  = d.ref.parent.id;          // WRONG: returned groupName
-              // which stamped the EVENT ID into the ownerUid slot
-              // and the groupName into the eventId slot of the
-              // vendor's commentPath. The path came out as
-              //   users/{eventId}/events/{groupName}/{groupName}/{itemId}/comments
-              // which targets a non-existent user doc and never
-              // matched the rules-engine write auth. The comment
-              // in this block previously claimed the issue was
-              // "three-segment chain, NOT four" — that was wrong;
-              // it IS three segments above .ref to get the ownerUid
-              // (ref → parent → parent → parent), not two.
-              const ownerUid = d.ref.parent.parent.parent?.id;
-              const eventId  = d.ref.parent.parent?.id;
+              // 2026-08-12 — DO NOT use parent.parent.parent?.id for ownerUid
+              // and parent.parent?.id for eventId. In modular SDK v10,
+              // parent.parent of a rundown/{itemId} doc is a DocumentReference
+              // (events/{eventId}) so .id IS the eventId — but parent.parent.parent
+              // is a CollectionReference (events/) so .id is the literal
+              // 'events' segment, NOT the owner UID. The result was
+              // ownerUid='events', eventId=<the real eventId> — building
+              //   users/events/events/{eventId}/{groupName}/{itemId}/comments
+              // which is exactly the malformed path the CF rejected with
+              // `parentKind (got "{eventId}", must be 'rundown' or 'resources')`.
+              // Parse the path segments directly.
+              const segs = d.ref.path.split('/');
+              const usersIdx = segs.indexOf('users');
+              const eventsIdx = segs.indexOf('events');
+              const ownerUid = usersIdx >= 0 ? segs[usersIdx + 1] : null;
+              const eventId  = eventsIdx >= 0 ? segs[eventsIdx + 1] : null;
               return {
                 id: d.id,
                 ...d.data(),
