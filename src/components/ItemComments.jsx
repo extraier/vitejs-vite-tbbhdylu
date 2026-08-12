@@ -153,54 +153,27 @@ export function ItemComments({
       // state below adds a local fallback so the UI feels
       // instant.
       if (currentRole === 'vendor' || currentRole === 'helper') {
-        const parentKind = currentRole === 'vendor' ? 'rundown' : 'resources';
-        // The path is collection(artifacts/{appId}/users/{ownerUid}
-        //   /events/{eventId}/{parentKind}/{itemId}/comments).
-        // Extract segments by string parse (the CollectionReference
-        // doesn't expose its parent chain in the modular SDK v10,
-        // and the constructor had an off-by-one swap fixed in
-        // commit 4b8d7ec — parsing the segment after `comments`
-        // gives us parentKind + itemId + eventId + ownerUid in
-        // reverse).
-        const pathStr =
-          (path && (path._path?.toString?.() || path.path)) || '';
-        // pathStr format:
-        //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/{kind}/{itemId}/comments
-        const segs = pathStr.split('/');
+        // Parse the comment-path segments directly. In modular SDK v10
+        // a CollectionReference's `.parent` chain alternates between
+        // DocumentReference (where `.id` returns the doc ID) and
+        // CollectionReference (where `.id` returns the literal
+        // collection-name segment), so walking the chain to extract
+        // IDs is unreliable. Always parse the path string instead.
+        //
+        //   pathStr = artifacts/{appId}/users/{ownerUid}/events/{eventId}/{kind}/{itemId}/comments
+        const segs = (path?.path || '').split('/');
         const eventsIdx = segs.indexOf('events');
         const ownerUid = segs[segs.indexOf('users') + 1];
         const eventId = eventsIdx >= 0 ? segs[eventsIdx + 1] : null;
         const inferredKind = eventsIdx >= 0 ? segs[eventsIdx + 2] : null;
         const inferredItemId = eventsIdx >= 0 ? segs[eventsIdx + 3] : null;
-        // 2026-08-12 — vendor writes always go under /rundown/. If
-        // the user is in the resource section, this'll fail; we
-        // surface a clear error rather than mis-targeting.
         if (
           !ownerUid || !eventId || !inferredKind || !inferredItemId
         ) {
           throw new Error('Could not resolve comment-path components for the Cloud Function call.');
         }
-        // 2026-08-12 — Capture the extracted values for offline
-        // debugging. The CF error path doesn't surface which field
-        // was wrong; this console.log lets the user paste the
-        // exact body that landed in the request so the dev can
-        // trace the path extraction without DevTools network
-        // expertise. Removed in a later session once stable.
-        // eslint-disable-next-line no-console
-        console.log('[ItemComments→CF]', JSON.stringify({
-          pathStr,
-          ownerUid,
-          eventId,
-          parentKind: inferredKind,
-          parentId: inferredItemId,
-          text: clean,
-        }));
-        // Vendor and helper both use the same callable; the CF
-        // routes correctly based on the caller's claim. choose
-        // parentKind based on whether the caller is a vendor (rundown
-        // section) or a helper (helper section). For now vendorPostComment
-        // handles both — the inferredKind from the path determines
-        // which collection to write to.
+        // 2026-08-13 — debug console.log removed (vendor-comment
+        // round-trip verified end-to-end on commits f364f14 + 3cae1af).
         await callFirebaseFn(
           'vendorPostComment',
           {
