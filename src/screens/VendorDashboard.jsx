@@ -923,6 +923,7 @@ function VendorTaskCard({ task, onUpdateStatus, currentUser }) {
           <TaskActivityTimeline
             task={task}
             ownerUid={task.ownerUid}
+            eventId={task.eventId}
             currentUser={{ uid: currentUser?.uid || '', displayName: currentUser?.name || '商戶' }}
             currentRole="vendor"
           />

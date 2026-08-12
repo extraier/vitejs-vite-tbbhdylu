@@ -85,6 +85,7 @@ export function buildStatusUpdateDoc({
   byRole,
   reason,
   ownerUid,
+  eventId,
   assignedVendorUid,
   assignedHelperUid,
 }) {
@@ -98,10 +99,11 @@ export function buildStatusUpdateDoc({
     // 2026-08-09 — denormalize access-control fields for the top-level
     // /{path=**}/statusUpdates/{updateId} collectionGroup rule. See
     // TaskComments.jsx for the rationale. Caller MUST pass ownerUid +
-    // assignedVendorUid + assignedHelperUid from the parent task — the
-    // rule reads these fields to gate reads without having to walk back
-    // to the parent task.
+    // assignedVendorUid + assignedHelperUid from the parent task —
+    // the rule reads these fields to gate reads without having to
+    // walk back to the parent task.
     ownerUid: ownerUid || null,
+    eventId: eventId || null,
     assignedVendorUid: assignedVendorUid || null,
     assignedHelperUid: assignedHelperUid || null,
     createdAt: Date.now(),

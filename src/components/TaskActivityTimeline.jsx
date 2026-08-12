@@ -53,25 +53,55 @@ import {
 export function TaskActivityTimeline({
   task,
   ownerUid: ownerUidProp,
+  eventId: eventIdProp,
   currentUser,
   currentRole = 'owner',
   readOnly = false,
 }) {
-  // 2026-07-19 — explicit prop wins, fall back to task.ownerUid for
-  // any older code path that still denormalizes the field. Without
-  // this, every "send" silently bailed with the silent message
-  // "no permission", which the user sees as "nothing happens".
+  // 2026-08-12 — MIGRATION to event-scoped task path. The canonical
+  // task location is
+  //   /users/{ownerUid}/events/{eventId}/tasks/{taskId}/{comments|statusUpdates}
+  // (see firestore.rules L787-863). Tasks previously denormalized
+  // ownerUid onto the doc, but never eventId, so we used a legacy
+  // path /users/{ownerUid}/tasks/{taskId}/comments that the rules
+  // no longer authorize. The explicit `eventId` prop wins, falling
+  // back to task.eventId for any caller that still has the field
+  // wired. The prior fallback to `task.ownerUid` is dropped — that
+  // field is no longer reliable on newer writes.
   const ownerUid = ownerUidProp ?? task?.ownerUid;
+  const eventId = eventIdProp ?? task?.eventId;
   const taskId = task?.id;
 
   // Subscribe to both subcollections, parallel.
   const commentsPath =
-    ownerUid && taskId
-      ? collection(db, 'artifacts', appId, 'users', ownerUid, 'tasks', taskId, 'comments')
+    ownerUid && eventId && taskId
+      ? collection(
+          db,
+          'artifacts',
+          appId,
+          'users',
+          ownerUid,
+          'events',
+          eventId,
+          'tasks',
+          taskId,
+          'comments',
+        )
       : null;
   const statusPath =
-    ownerUid && taskId
-      ? collection(db, 'artifacts', appId, 'users', ownerUid, 'tasks', taskId, 'statusUpdates')
+    ownerUid && eventId && taskId
+      ? collection(
+          db,
+          'artifacts',
+          appId,
+          'users',
+          ownerUid,
+          'events',
+          eventId,
+          'tasks',
+          taskId,
+          'statusUpdates',
+        )
       : null;
   const { data: comments = [] } = useFirestoreCollection(commentsPath, [ownerUid, taskId]);
   const { data: statusUpdates = [], loading: loadingStatus } = useFirestoreCollection(
@@ -182,14 +212,25 @@ export function TaskActivityTimeline({
       showToast?.('⚠ 請輸入留言內容');
       return;
     }
-    if (!ownerUid || !taskId || !currentUser?.uid) {
+    if (!ownerUid || !eventId || !taskId || !currentUser?.uid) {
       showToast?.('⚠ 任務資料遺失，請重新整理再試');
       return;
     }
     setSending(true);
     try {
       await addDoc(
-        collection(db, 'artifacts', appId, 'users', ownerUid, 'tasks', taskId, 'comments'),
+        collection(
+          db,
+          'artifacts',
+          appId,
+          'users',
+          ownerUid,
+          'events',
+          eventId,
+          'tasks',
+          taskId,
+          'comments',
+        ),
         {
           authorUid: currentUser.uid,
           authorName:
@@ -203,6 +244,7 @@ export function TaskActivityTimeline({
           // top-level /{path=**}/comments/{commentId} collectionGroup rule.
           // See TaskComments.jsx for the rationale.
           ownerUid,
+          eventId,
           assignedVendorUid: task?.assignedVendorUid || null,
           assignedHelperUid: task?.assignedHelperUid || null,
           createdAt: Date.now(),
@@ -221,10 +263,22 @@ export function TaskActivityTimeline({
   };
 
   const handleDelete = async (c) => {
-    if (!ownerUid || !taskId || !c?.id) return;
+    if (!ownerUid || !eventId || !taskId || !c?.id) return;
     if (!confirm('刪除呢條留言？')) return;
     await deleteDoc(
-      doc(db, 'artifacts', appId, 'users', ownerUid, 'tasks', taskId, 'comments', c.id),
+      doc(
+        db,
+        'artifacts',
+        appId,
+        'users',
+        ownerUid,
+        'events',
+        eventId,
+        'tasks',
+        taskId,
+        'comments',
+        c.id,
+      ),
     );
   };
 
@@ -430,6 +484,7 @@ function formatRelativeTime(ms) {
  */
 export async function recordTaskStatusUpdate({
   ownerUid,
+  eventId,
   taskId,
   fromStatus,
   toStatus,
@@ -440,7 +495,7 @@ export async function recordTaskStatusUpdate({
   assignedVendorUid,
   assignedHelperUid,
 }) {
-  if (!ownerUid || !taskId || !byUid || !toStatus) return;
+  if (!ownerUid || !eventId || !taskId || !byUid || !toStatus) return;
   try {
     await addDoc(
       collection(
@@ -449,6 +504,8 @@ export async function recordTaskStatusUpdate({
         appId,
         'users',
         ownerUid,
+        'events',
+        eventId,
         'tasks',
         taskId,
         'statusUpdates',
@@ -465,6 +522,7 @@ export async function recordTaskStatusUpdate({
         byRole,
         reason,
         ownerUid,
+        eventId,
         assignedVendorUid,
         assignedHelperUid,
       }),

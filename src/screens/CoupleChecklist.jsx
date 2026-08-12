@@ -1006,6 +1006,7 @@ function TaskRow({
         <TaskActivityTimeline
           task={task}
           ownerUid={currentUser?.uid}
+          eventId={currentEvent?.id}
           currentUser={currentUser}
           currentRole="owner"
         />

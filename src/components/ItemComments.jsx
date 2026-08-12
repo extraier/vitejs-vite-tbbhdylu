@@ -180,6 +180,21 @@ export function ItemComments({
         ) {
           throw new Error('Could not resolve comment-path components for the Cloud Function call.');
         }
+        // 2026-08-12 — Capture the extracted values for offline
+        // debugging. The CF error path doesn't surface which field
+        // was wrong; this console.log lets the user paste the
+        // exact body that landed in the request so the dev can
+        // trace the path extraction without DevTools network
+        // expertise. Removed in a later session once stable.
+        // eslint-disable-next-line no-console
+        console.log('[ItemComments→CF]', JSON.stringify({
+          pathStr,
+          ownerUid,
+          eventId,
+          parentKind: inferredKind,
+          parentId: inferredItemId,
+          text: clean,
+        }));
         // Vendor and helper both use the same callable; the CF
         // routes correctly based on the caller's claim. choose
         // parentKind based on whether the caller is a vendor (rundown

@@ -1327,8 +1327,18 @@ export default function App() {
   // checklist checkbox stays the single source of truth (the couple can
   // still override by un-checking).
   const handleUpdateAssignedTaskStatus = async (task, newStatusId, statusNote) => {
-    if (!user || !task?.ownerUid || !task?.id) return;
-    const ref = doc(db, 'artifacts', appId, 'users', task.ownerUid, 'tasks', task.id);
+    if (!user || !task?.ownerUid || !task?.eventId || !task?.id) return;
+    const ref = doc(
+      db,
+      'artifacts',
+      appId,
+      'users',
+      task.ownerUid,
+      'events',
+      task.eventId,
+      'tasks',
+      task.id,
+    );
     const update = {
       status: newStatusId,
       statusUpdatedAt: Date.now(),
@@ -1344,6 +1354,7 @@ export default function App() {
     // handler is only mounted on the vendor dashboard.
     recordTaskStatusUpdate({
       ownerUid: task.ownerUid,
+      eventId: task.eventId,
       taskId: task.id,
       fromStatus: task.status || null,
       toStatus: newStatusId,

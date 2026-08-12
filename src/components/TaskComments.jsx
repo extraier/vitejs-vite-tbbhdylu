@@ -45,6 +45,7 @@ import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 export function TaskComments({
   task,
   ownerUid: ownerUidProp,
+  eventId: eventIdProp,
   currentUser,
   currentRole = 'owner',
   onClose,
@@ -54,7 +55,10 @@ export function TaskComments({
   // 2026-07-19 — see TaskActivityTimeline for the rationale. Same
   // bug existed here: tasks have no `ownerUid` field. Without this
   // fallback line, every send returned "no ownerUid" silently.
+  // 2026-08-12 — eventId now required for the canonical path
+  // /users/{ownerUid}/events/{eventId}/tasks/{taskId}/comments.
   const ownerUid = ownerUidProp ?? task?.ownerUid;
+  const eventId = eventIdProp ?? task?.eventId;
   const [text, setText] = useState('');
   const [replyTo, setReplyTo] = useState(null); // comment object or null
   const [sending, setSending] = useState(false);
@@ -62,13 +66,15 @@ export function TaskComments({
   const prevCountRef = useRef(0);
 
   const path =
-    ownerUid && task?.id
+    ownerUid && eventId && task?.id
       ? collection(
           db,
           'artifacts',
           appId,
           'users',
           ownerUid,
+          'events',
+          eventId,
           'tasks',
           task.id,
           'comments',
@@ -76,6 +82,7 @@ export function TaskComments({
       : null;
   const { data: comments = [], loading } = useFirestoreCollection(path, [
     ownerUid,
+    eventId,
     task?.id,
   ]);
 
@@ -134,7 +141,7 @@ export function TaskComments({
       window.alert && window.alert('⚠ 請輸入留言內容');
       return;
     }
-    if (!currentUser?.uid || !task?.ownerUid || !task?.id) {
+    if (!currentUser?.uid || !ownerUid || !eventId || !task?.id) {
       window.alert && window.alert('⚠ 任務資料遺失，請重新整理再試');
       return;
     }
@@ -146,6 +153,8 @@ export function TaskComments({
         appId,
         'users',
         ownerUid,
+        'events',
+        eventId,
         'tasks',
         task.id,
         'comments',
@@ -164,16 +173,11 @@ export function TaskComments({
         text: clean,
         // Optional: only set if the sender actually clicked "reply".
         parentCommentId: replyTo?.id || null,
-        // 2026-08-09 — denormalize the access-control fields so the
-        // top-level /{path=**}/comments/{commentId} collectionGroup rule
-        // can gate reads without having to walk back to the parent task.
-        // The owner (resource.data.ownerUid == auth.uid) and any vendor
-        // /helper currently assigned to the task (matching their role)
-        // are allowed to read. Legacy comments written before this field
-        // was added won't have it, and the rule will silently fail for
-        // those — but the owner-side nested rule still works (see
-        // firestore.rules L480).
-        ownerUid: task.ownerUid,
+        // 2026-08-12 — denormalize ownerUid + eventId so the
+        // /{path=**}/comments/{commentId} collectionGroup rule can
+        // gate reads without walking back to the parent task.
+        ownerUid,
+        eventId,
         assignedVendorUid: task.assignedVendorUid || null,
         assignedHelperUid: task.assignedHelperUid || null,
         createdAt: Date.now(),
@@ -190,7 +194,7 @@ export function TaskComments({
   };
 
   const handleDelete = async (c) => {
-    if (!ownerUid || !task?.id || !c?.id) return;
+    if (!ownerUid || !eventId || !task?.id || !c?.id) return;
     if (!confirm('刪除呢條留言？')) return;
     await deleteDoc(
       doc(
@@ -199,6 +203,8 @@ export function TaskComments({
         appId,
         'users',
         ownerUid,
+        'events',
+        eventId,
         'tasks',
         task.id,
         'comments',

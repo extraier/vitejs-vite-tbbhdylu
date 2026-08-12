@@ -79,25 +79,48 @@ export function HelperDashboard({
   }
 
   // Tasks tab subscription: `assignedHelperUid == auth.uid` so the
-  // firestore rule gates it server-side.
+  // firestore rule gates it server-side. 2026-08-12 — migrated to
+  // the event-scoped path /users/{ownerUid}/events/{eventId}/tasks/
+  // matching the canonical task location that the rules now
+  // authorize. helperAssignment.eventId is the helper's single
+  // active event; helpers don't multi-event like vendors do.
   const tasksPath =
-    ownerUid && currentUser?.uid
+    ownerUid && helperAssignment?.eventId && currentUser?.uid
       ? query(
-          collection(db, 'artifacts', appId, 'users', ownerUid, 'tasks'),
+          collection(
+            db,
+            'artifacts',
+            appId,
+            'users',
+            ownerUid,
+            'events',
+            helperAssignment.eventId,
+            'tasks',
+          ),
           where('assignedHelperUid', '==', currentUser.uid),
         )
       : null;
   const { data: tasks = [], loading: tasksLoading } = useFirestoreCollection(tasksPath, [
     ownerUid,
+    helperAssignment?.eventId,
     currentUser?.uid,
   ]);
 
   // Budget summary — only loaded if canViewBudget.
   const { data: budgetTasks = [] } = useFirestoreCollection(
-    ownerUid && perms.canViewBudget
-      ? collection(db, 'artifacts', appId, 'users', ownerUid, 'tasks')
+    ownerUid && helperAssignment?.eventId && perms.canViewBudget
+      ? collection(
+          db,
+          'artifacts',
+          appId,
+          'users',
+          ownerUid,
+          'events',
+          helperAssignment.eventId,
+          'tasks',
+        )
       : null,
-    [ownerUid, perms.canViewBudget],
+    [ownerUid, helperAssignment?.eventId, perms.canViewBudget],
   );
   const totalBudget = useMemo(
     () => budgetTasks.reduce((sum, t) => sum + Number(t.estimatedCost || 0), 0),
@@ -286,7 +309,21 @@ function HelperTaskCard({ task, ownerUid, currentUser, showToast }) {
     }
     setSaving(true);
     try {
-      const ref = doc(db, 'artifacts', appId, 'users', ownerUid, 'tasks', task.id);
+      // 2026-08-12 — migrated to event-scoped path. The task was
+      // queried via collectionGroup on /events/{eventId}/tasks/, so
+      // task.eventId is present. Without this, the rules reject
+      // the write with PERMISSION_DENIED.
+      const ref = doc(
+        db,
+        'artifacts',
+        appId,
+        'users',
+        ownerUid,
+        'events',
+        task.eventId,
+        'tasks',
+        task.id,
+      );
       await updateDoc(ref, {
         status: newStatusId,
         statusUpdatedAt: Date.now(),
@@ -297,6 +334,7 @@ function HelperTaskCard({ task, ownerUid, currentUser, showToast }) {
       });
       recordTaskStatusUpdate({
         ownerUid,
+        eventId: task.eventId,
         taskId: task.id,
         fromStatus: task.status || null,
         toStatus: newStatusId,
@@ -402,6 +440,7 @@ function HelperTaskCard({ task, ownerUid, currentUser, showToast }) {
         <TaskActivityTimeline
           task={task}
           ownerUid={task.ownerUid}
+          eventId={task.eventId}
           currentUser={currentUser}
           currentRole="helper"
         />

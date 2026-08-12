@@ -111,16 +111,31 @@ export const vendorPostComment = onCall(
     // subscribe doesn't care which path wrote the doc, but
     // keeping shape parity means existing GET rules + the
     // collectionGroup catch-all continue to work uniformly.
-    if (
-      typeof ownerUid !== 'string' || ownerUid.length < 4 ||
-      typeof eventId !== 'string' || eventId.length < 4 ||
-      typeof parentId !== 'string' || parentId.length < 2 ||
-      typeof parentKind !== 'string' ||
-      !PARENT_KINDS.has(parentKind as ParentKind)
-    ) {
+    // 2026-08-13 — Per-field validation. The combined "ownerUid,
+    // eventId, parentKind, parentId required" message that we had
+    // before was masking which field was the problem — callers
+    // were seeing it from the proxy with no way to tell which
+    // ID was malformed. This is the same shape the live rules
+    // expect, so the doc still validates on write either way.
+    const fieldErrors: string[] = [];
+    if (typeof ownerUid !== 'string' || ownerUid.length < 4) {
+      fieldErrors.push(`ownerUid (got ${typeof ownerUid}, ${ownerUid?.length || 0} chars)`);
+    }
+    if (typeof eventId !== 'string' || eventId.length < 4) {
+      fieldErrors.push(`eventId (got ${typeof eventId}, ${eventId?.length || 0} chars)`);
+    }
+    if (typeof parentId !== 'string' || parentId.length < 2) {
+      fieldErrors.push(`parentId (got ${typeof parentId}, ${parentId?.length || 0} chars)`);
+    }
+    if (typeof parentKind !== 'string' || !PARENT_KINDS.has(parentKind as ParentKind)) {
+      fieldErrors.push(`parentKind (got ${JSON.stringify(parentKind)}, must be 'rundown' or 'resources')`);
+    }
+    if (fieldErrors.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error('[vendorPostComment] bad input:', { ownerUid, eventId, parentKind, parentId });
       throw new HttpsError(
         'invalid-argument',
-        'ownerUid, eventId, parentKind (rundown|resources), parentId required.',
+        `bad input: ${fieldErrors.join('; ')}.`,
       );
     }
     const cleanText = (text || '').trim();
