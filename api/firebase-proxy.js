@@ -18,6 +18,17 @@
 //
 // Returns: Firebase callable response — { data: ..., result?: ... }
 //          or { error: { code, message, details } }
+//
+// 2026-08-13 — H-04 (HIGH) fix: previously this function logged the
+// first 20 chars of the Authorization header AND the first 100 chars
+// of every forwarded request body. Forwarded bodies can include
+// vendor invitationToken, comment text, contact data, etc. — so
+// those logs were leaking secrets into Vercel's log stream. Logging
+// is now reduced to { traceId, fn, status, durationMs, bodyBytes }
+// — enough to diagnose routing/timeout/upstream-5xx without leaking
+// auth headers or payload contents.
+
+import { randomUUID } from 'node:crypto';
 
 const PROJECT_ID = 'savetheday-2377a';
 const REGION = 'us-central1';
@@ -106,7 +117,10 @@ export default async function handler(req, res) {
   }
 
   // Forward the Authorization header (if any) so Firebase Functions
-  // receives the user's ID token.
+  // receives the user's ID token. NEVER log this header or the body
+  // content — the body can carry invitationToken / vendor claims /
+  // contact data, and the header carries the user's Firebase ID
+  // token. See H-04 fix note at the top of this file.
   const authHeader = req.headers.authorization || '';
   const body = typeof req.body === 'string'
     ? req.body
@@ -114,12 +128,22 @@ export default async function handler(req, res) {
 
   const targetUrl = `https://${REGION}-${PROJECT_ID}.cloudfunctions.net/${fnName}`;
 
-  // 2026-07-22 — Debug: log what we're forwarding.
-  console.log('[firebase-proxy]', {
+  // 2026-08-13 — H-04 fix. Trace id ties the request log to any
+  // downstream Cloud Function log without needing to echo payload
+  // content. The caller passes `x-trace-id` if it has one (so logs
+  // align across browser → proxy → CF); otherwise we mint a fresh
+  // UUID for this proxy invocation.
+  const traceId = (req.headers['x-trace-id'] && typeof req.headers['x-trace-id'] === 'string')
+    ? req.headers['x-trace-id']
+    : randomUUID();
+  const bodyBytes = Buffer.byteLength(body, 'utf8');
+  const startedAt = Date.now();
+
+  console.log('[firebase-proxy] request', {
+    traceId,
     fn: fnName,
     hasAuthHeader: !!authHeader,
-    authHeaderPrefix: authHeader.slice(0, 20),
-    bodyPreview: body.slice(0, 100),
+    bodyBytes,
   });
 
   try {
@@ -136,21 +160,38 @@ export default async function handler(req, res) {
         // can't tell the difference between a Firebase ID
         // token and a Google OAuth access token.
         'User-Agent': req.headers['user-agent'] || 'savetheday-proxy/1.0',
+        'x-trace-id': traceId,
       },
       body,
     });
     const text = await upstream.text();
-    console.log('[firebase-proxy] upstream response', {
+    console.log('[firebase-proxy] response', {
+      traceId,
       fn: fnName,
       status: upstream.status,
-      bodyPreview: text.slice(0, 200),
+      durationMs: Date.now() - startedAt,
+      responseBytes: Buffer.byteLength(text, 'utf8'),
     });
     let json;
     try {
       json = JSON.parse(text);
     } catch {
+      // Upstream returned non-JSON. Don't echo the raw body back to
+      // the caller (it can contain stack traces with secrets) — log
+      // only the trace id + size so we can find the body in Vercel's
+      // logs if we really need it.
+      console.error('[firebase-proxy] upstream-not-json', {
+        traceId,
+        fn: fnName,
+        status: upstream.status,
+        responseBytes: Buffer.byteLength(text, 'utf8'),
+      });
       json = {
-        error: { code: 'UPSTREAM_NOT_JSON', message: text.slice(0, 500) },
+        error: {
+          code: 'UPSTREAM_NOT_JSON',
+          message: 'Upstream returned non-JSON response',
+          traceId,
+        },
       };
     }
     // Firebase callable protocol: server returns
@@ -171,11 +212,17 @@ export default async function handler(req, res) {
     }
     return res.status(upstream.status).json(json);
   } catch (err) {
-    console.log('[firebase-proxy] fetch failed', { fn: fnName, err: err?.message });
+    console.error('[firebase-proxy] fetch-failed', {
+      traceId,
+      fn: fnName,
+      durationMs: Date.now() - startedAt,
+      err: err?.message,
+    });
     return res.status(502).json({
       error: {
         code: 'PROXY_FAILED',
         message: err?.message || String(err),
+        traceId,
       },
     });
   }
