@@ -924,7 +924,7 @@ export {
 // _listProposalsForJob (couple-side read; future-proofing). See
 // functions/src/jobBoard.ts for the full rationale on why these
 // go through a CF instead of direct Firestore.
-export { postJobRequest, submitProposal, _listProposalsForJob } from './jobBoard';
+export { postJobRequest, submitProposal, listProposalsForJob } from './jobBoard';
 
 // 2026-07-26 — Co-owners (couples / partners). The sendPartnerInviteV2
 // callable sends a magic-link email to a partner; redeemPartnerInviteV2
@@ -1005,3 +1005,15 @@ export { getUploadPreferencesToken } from './uploadPreferencesToken';
 // for the auth rules; see deploy/photo_upload_server.py
 // _handle_delete_path for the NAS receiver.
 export { mintPhotoDeleteToken } from './photoDeleteToken';
+
+// 2026-08-12 — Vendor-side comment write via Cloud Function.
+// Vendor/helper chat writes have been silently failing on the
+// vendor's Incognito tab despite the live rules verifying OK on
+// REST probes. Rather than chase the rules-engine quirk
+// further, this gives the browser a server-side path that
+// verifies caller authorization via Admin SDK and writes the
+// comment via Admin SDK (rules always allow admin writes). The
+// vendor's existing onSnapshot subscribe picks up the new doc
+// on the next tick, no UI changes required. See
+// functions/src/vendorComment.ts for the auth + write shape.
+export { vendorPostComment, vendorPostCommentHelper } from './vendorComment';

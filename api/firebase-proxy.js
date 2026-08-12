@@ -86,6 +86,18 @@ export default async function handler(req, res) {
     'submitSocialProof',
     'listSocialProofs',
     'adminVerifySocialProof',
+    // 2026-08-12 — Vendor-side comment write via Cloud Function.
+    // Vendor/helper chat writes have been silently failing on the
+    // vendor's Incognito tab despite the live rules verifying OK on
+    // REST probes — most likely a runQuery-vs-listDocuments divergence
+    // in the rules engine on collectionGroup LISTEN channels. This
+    // routes around the rules layer entirely: the CF verifies caller
+    // authorization via Admin SDK and writes the comment via Admin
+    // SDK. Without these two entries, vendor / helper chat stays
+    // stuck on the rules-engine quirk indefinitely. See
+    // functions/src/vendorComment.ts for the auth shape.
+    'vendorPostComment',
+    'vendorPostCommentHelper',
   ]);
   if (!ALLOWED.has(fnName)) {
     return res.status(403).json({

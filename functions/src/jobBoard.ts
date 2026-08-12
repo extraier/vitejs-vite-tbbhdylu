@@ -312,8 +312,8 @@ export const submitProposal = onCall(
  * client. The Vendors page uses the live query path.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-export const _listProposalsForJob = onCall(
-  { cors: true, region: 'us-central1' },
+export const listProposalsForJob = onCall(
+  { cors: true, region: "us-central1" },
   async (req) => {
     if (!req.auth) {
       throw new HttpsError('unauthenticated', 'Sign in first.');
