@@ -294,7 +294,10 @@ async function _handler(req, res) {
     const decoded = await admin.auth.verifyIdToken(idToken, /* checkRevoked */ false);
     callerUid = decoded.uid;
   } catch (err) {
-    log('bad-token', { code: err && err.code ? err.code : 'unknown' });
+    // 2026-08-13 — log the full error message for diagnosis
+    // (the bad-token path is where "what env var is missing"
+    // shows up as auth/argument-error or credential errors).
+    log('bad-token', { code: err && err.code ? err.code : 'unknown', err: err && err.message ? err.message : String(err) });
     res.status(401).json({ error: 'invalid or expired Firebase ID token' });
     return;
   }
