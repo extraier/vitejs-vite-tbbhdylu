@@ -24,7 +24,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { X, MapPin, Star, Loader2 } from 'lucide-react';
-import { collection, getDocs, limit } from 'firebase/firestore';
+import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { VENDOR_CATEGORIES } from '../../lib/config';
 import { TrendingVendors } from '../TrendingVendors';
@@ -67,7 +67,11 @@ export function PickExistingVendor({
     (async () => {
       try {
         // Pull from root-level /vendors collection. We currently have ~700.
-        const snap = await getDocs(collection(db, 'vendors'), limit(2000));
+        // 2026-08-13 — M-02 audit fix. getDocs() does not accept a second
+        // limit() argument; the limit was being silently dropped and the
+        // whole /vendors collection was being read. Wrap in query() so
+        // the limit actually applies on the server side.
+        const snap = await getDocs(query(collection(db, 'vendors'), limit(2000)));
         if (cancelled) return;
         const list = snap.docs.map((d) => {
           const data = d.data() || {};
