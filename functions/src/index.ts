@@ -1017,3 +1017,103 @@ export { mintPhotoDeleteToken } from './photoDeleteToken';
 // on the next tick, no UI changes required. See
 // functions/src/vendorComment.ts for the auth + write shape.
 export { vendorPostComment, vendorPostCommentHelper } from './vendorComment';
+
+// 2026-08-13 — H-03 audit follow-up. Backfills the `vendor: true`
+// custom claim for every existing /vendors/{authUid} doc whose
+// user lacks it. The H-03 root-cause fix (commit before) routes
+// new vendors through `setVendorClaim`, but vendors created
+// before that fix have docs but no claim — this CF repairs them.
+//
+// Caller must have the `admin` custom claim. Accepts:
+//   { dryRun?: boolean, limit?: number, startAfter?: string }
+// Returns:
+//   { scanned, flipped, skipped, errors, dryRun, nextStartAfter }
+//
+// Idempotent by design — re-running is safe. The chokepoint
+// (vendors.ts#setVendorClaim) preserves existing claims
+// (admin, helper, etc.), so a user who already has the claim
+// is reported as `skipped` with no writes.
+export const admin_backfillVendorClaims = onCall(
+  { cors: true, region: 'us-central1', timeoutSeconds: 540, memory: '512MiB' },
+  async (req) => {
+    if (!req.auth) {
+      throw new HttpsError('unauthenticated', 'Sign in first.');
+    }
+    const callerClaims = (req.auth.token as { admin?: boolean }) || {};
+    if (!callerClaims.admin) {
+      throw new HttpsError('permission-denied', 'Admin only.');
+    }
+    const data = (req.data || {}) as {
+      dryRun?: boolean;
+      limit?: number;
+      startAfter?: string;
+    };
+    const dryRun = data.dryRun !== false; // default true
+    const limit = Math.min(Math.max(data.limit ?? 200, 1), 1000);
+
+    const db = getFirestore();
+    const auth = getAdminAuth();
+    const { setVendorClaim } = await import('./vendors');
+
+    let query = db.collection('vendors').orderBy('__name__').limit(limit);
+    if (data.startAfter) {
+      query = query.startAfter(data.startAfter);
+    }
+    const snap = await query.get();
+
+    let scanned = 0;
+    let flipped = 0;
+    let skipped = 0;
+    const errors: Array<{ slug: string; error: string }> = [];
+
+    for (const doc of snap.docs) {
+      scanned += 1;
+      const slug = doc.id;
+      const data = doc.data() as {
+        vendorUid?: string;
+        ownerUid?: string;
+        signupStatus?: string;
+      };
+
+      // Only backfill claimants — seeded but unclaimed entries
+      // have no auth uid to grant the claim to.
+      const authUid = data.vendorUid || data.ownerUid;
+      if (!authUid || data.signupStatus !== 'claimed') {
+        skipped += 1;
+        continue;
+      }
+
+      try {
+        const user = await auth.getUser(authUid);
+        const claims = (user.customClaims || {}) as { vendor?: boolean };
+        if (claims.vendor === true) {
+          skipped += 1;
+          continue;
+        }
+
+        if (dryRun) {
+          // Pretend we flipped it for the counter, but make no writes.
+          flipped += 1;
+        } else {
+          await setVendorClaim(authUid, true);
+          flipped += 1;
+        }
+      } catch (e) {
+        const msg = (e as Error)?.message || String(e);
+        errors.push({ slug, error: msg });
+      }
+    }
+
+    const nextStartAfter =
+      snap.docs.length === limit ? snap.docs[snap.docs.length - 1].id : null;
+
+    return {
+      scanned,
+      flipped,
+      skipped,
+      errors,
+      dryRun,
+      nextStartAfter,
+    };
+  },
+);
