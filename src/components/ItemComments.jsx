@@ -38,6 +38,7 @@ import { MessageCircle, Send, Trash2, Loader2 } from 'lucide-react';
 import { addDoc, deleteDoc, doc } from 'firebase/firestore';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { callFirebaseFn } from '../lib/firebaseFn';
+import { parseCommentPath } from '../lib/firestorePaths';
 
 function formatTimeAgo(ts) {
   if (!ts) return '剛剛';
@@ -160,13 +161,16 @@ export function ItemComments({
         // collection-name segment), so walking the chain to extract
         // IDs is unreliable. Always parse the path string instead.
         //
-        //   pathStr = artifacts/{appId}/users/{ownerUid}/events/{eventId}/{kind}/{itemId}/comments
-        const segs = (path?.path || '').split('/');
-        const eventsIdx = segs.indexOf('events');
-        const ownerUid = segs[segs.indexOf('users') + 1];
-        const eventId = eventsIdx >= 0 ? segs[eventsIdx + 1] : null;
-        const inferredKind = eventsIdx >= 0 ? segs[eventsIdx + 2] : null;
-        const inferredItemId = eventsIdx >= 0 ? segs[eventsIdx + 3] : null;
+        // 2026-08-13 — LOW audit refactor: replaced inline parsing
+        // with parseCommentPath helper. Path convention is
+        //   artifacts/{appId}/users/{ownerUid}/events/{eventId}/{kind}/{itemId}/comments/{commentId}
+        // The helper returns {ownerUid, eventId, kind, itemId, commentId}
+        // or null if the path doesn't match.
+        const parsed = parseCommentPath(path?.path || '');
+        if (!parsed) {
+          throw new Error('Could not resolve comment-path components for the Cloud Function call.');
+        }
+        const { ownerUid, eventId, kind: inferredKind, itemId: inferredItemId } = parsed;
         if (
           !ownerUid || !eventId || !inferredKind || !inferredItemId
         ) {

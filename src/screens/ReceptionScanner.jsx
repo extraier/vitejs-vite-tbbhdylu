@@ -19,6 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import QrScanner from 'qr-scanner';
+import { parseGuestQrToken } from '../lib/firestorePaths';
 import {
   ScanLine,
   Clock,
@@ -129,19 +130,12 @@ export function ReceptionScanner({
   function handleScanResult(data) {
     // QR tokens look like "https://savetheday.io/?q=<eventId>/<guestId>"
     // or just "<eventId>/<guestId>" raw. Parse defensively.
-    let guestId = null;
-    let eventId = null;
-    const qParamMatch = data.match(/[?&]q=([^&]+)/);
-    const raw = qParamMatch
-      ? decodeURIComponent(qParamMatch[1])
-      : data;
-    const parts = raw.split('/').filter(Boolean);
-    if (parts.length === 2) {
-      eventId = parts[0];
-      guestId = parts[1];
-    } else if (parts.length === 1) {
-      guestId = parts[0];
-    }
+    // 2026-08-13 — LOW audit refactor: replaced inline parsing with the
+    // shared parseGuestQrToken helper. Behavior is identical: accepts
+    // raw, URL with ?q=, or single-guestId forms; returns null if empty.
+    const parsed = parseGuestQrToken(data);
+    const eventId = parsed?.eventId ?? null;
+    const guestId = parsed?.guestId ?? null;
     if (!guestId) return;
     const guest = eventGuests.find(
       (g) => g.guestId === guestId || g.id === guestId,

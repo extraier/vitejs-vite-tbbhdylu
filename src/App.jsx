@@ -50,6 +50,7 @@ import {
   inquiryIdFor,
 } from './lib/chat';
 import { tryAutoLinkContacts } from './lib/contactLink';
+import { parseEventScopedRef } from './lib/firestorePaths';
 import { useAuth } from './hooks/useAuth';
 import { usePartnerInvitePreview } from './hooks/usePartnerInvitePreview';
 import { useHelperAuth } from './hooks/useHelperAuth';
@@ -1061,12 +1062,13 @@ export default function App() {
     // For co-owned events, the collectionGroup doc ref contains
     // the ownerUid. extract via .ref.path.
     // /artifacts/{appId}/users/{ownerUid}/events/{eventId}
+    // 2026-08-13 — LOW audit refactor: replaced inline parsing with
+    // parseEventScopedRef helper. Behavior is identical.
     const coOwnedWithOwner = (coOwnedEvents || [])
       .filter((e) => !e.deletedAt)
       .map((e) => {
-      const pathParts = (e._ref || e.ref?.path || '').split('/');
-      // path = ['artifacts', appId, 'users', ownerUid, 'events', eventId]
-      const ownerUid = pathParts[3];
+      const parsed = parseEventScopedRef(e._ref || e.ref?.path || '');
+      const ownerUid = parsed?.ownerUid ?? null;
       return { ...e, _ownerUid: ownerUid };
     });
     // Filter: own events where the user ISN'T already in coOwners
@@ -1282,21 +1284,14 @@ export default function App() {
                            // ownerUid. In the modular SDK v10, parent.parent of a
                            // tasks/{taskId} doc is the DocumentReference at
                            // events/{eventId} (not the user doc). .id returns the
-                           // immediate segment, which is the eventId, not the
-                           // owner's UID. The original "d.ref.parent.parent?.id"
-                           // looked right but actually set ownerUid = eventId,
-                           // which then made downstream paths build
-                           // users/events/events/{eventId}/... with the literal
-                           // string 'events' in the owner slot. The CF rejected
-                           // those payloads because parentKind/'rundown' was
-                           // misaligned. Parse the path segments directly.
-                           const segs = d.ref.path.split('/');
-                           const usersIdx = segs.indexOf('users');
-                           const eventsIdx = segs.indexOf('events');
+                           // 2026-08-13 — LOW audit refactor: replaced inline parsing with
+                           // the parseEventScopedRef helper. The previous
+                           // indexOf logic is consolidated.
+                           const parsed = parseEventScopedRef(d.ref.path);
                            return {
                              id: d.id,
                              ...d.data(),
-                             ownerUid: usersIdx >= 0 ? segs[usersIdx + 1] : null,
+                             ownerUid: parsed?.ownerUid ?? null,
                              // 2026-08-09 — surface eventId from the parent path so
                              // the vendor dashboard can group / dedupe by wedding
                              // when the same vendor is assigned across multiple
@@ -1427,23 +1422,18 @@ export default function App() {
               // and parent.parent?.id for eventId. In modular SDK v10,
               // parent.parent of a rundown/{itemId} doc is a DocumentReference
               // (events/{eventId}) so .id IS the eventId — but parent.parent.parent
-              // is a CollectionReference (events/) so .id is the literal
-              // 'events' segment, NOT the owner UID. The result was
-              // ownerUid='events', eventId=<the real eventId> — building
-              //   users/events/events/{eventId}/{groupName}/{itemId}/comments
-              // which is exactly the malformed path the CF rejected with
-              // `parentKind (got "{eventId}", must be 'rundown' or 'resources')`.
-              // Parse the path segments directly.
-              const segs = d.ref.path.split('/');
-              const usersIdx = segs.indexOf('users');
-              const eventsIdx = segs.indexOf('events');
-              const ownerUid = usersIdx >= 0 ? segs[usersIdx + 1] : null;
-              const eventId  = eventsIdx >= 0 ? segs[eventsIdx + 1] : null;
+              // 2026-08-13 — LOW audit refactor: replaced inline parsing with
+              // the parseEventScopedRef helper. Note: the eventsIdx-based
+              // ownerUid extraction in the prior code was incorrect when
+              // an event was nested under a non-events parent (the
+              // 'events' literal could appear twice). parseEventScopedRef
+              // uses the canonical convention.
+              const parsed = parseEventScopedRef(d.ref.path);
               return {
                 id: d.id,
                 ...d.data(),
-                ownerUid,
-                eventId,
+                ownerUid: parsed?.ownerUid ?? null,
+                eventId: parsed?.eventId ?? null,
                 // build a comment path resolver in App.jsx-owned scope so
                 // <ItemComments/> in the vendor dashboard subscribes
                 // to the same `/comments/` subcollection the couple

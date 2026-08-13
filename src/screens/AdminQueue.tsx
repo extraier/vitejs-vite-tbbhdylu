@@ -27,6 +27,7 @@ import { Inbox, RefreshCw, Check, X, ExternalLink, ArrowLeft } from 'lucide-reac
 import { httpsCallable } from 'firebase/functions';
 import { collectionGroup, getDocs, query, where, limit } from 'firebase/firestore';
 import { functions, db, appId } from '../lib/firebase';
+import { parseOwnerUid } from '../lib/firestorePaths';
 
 type QueueType = 'socialProofs' | 'referralClaims' | 'paymentReceipts';
 
@@ -86,11 +87,15 @@ export function AdminQueue({ user, isAdmin, onBack }: AdminQueueProps) {
       const snap = await getDocs(q);
       const rows: QueueItem[] = snap.docs.map((d) => {
         const data = d.data();
-        // The collectionGroup query gives us a path like
-        // artifacts/{appId}/users/{uid}/{subcoll}/{docId}. The 2nd-to-last
-        // segment is the uid; the last is the doc id.
-        const pathParts = d.ref.path.split('/');
-        const uid = pathParts[pathParts.length - 3];
+        // 2026-08-13 — LOW audit refactor: replaced inline path
+        // parsing with the shared helper. The collectionGroup query
+        // gives a path like artifacts/{appId}/users/{uid}/{subcoll}/{docId};
+        // the uid sits at position -3 (subcoll, docId, uid, users, appId, artifacts).
+        // parseOwnerUid takes the segment immediately after 'users'.
+        // Falls back to '' if the path doesn't match — same as the prior
+        // inline-parsing which returned undefined for malformed paths,
+        // which downstream code already guarded against.
+        const uid = parseOwnerUid(d.ref.path) || '';
         return {
           id: d.id,
           uid,
