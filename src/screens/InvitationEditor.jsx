@@ -10,6 +10,10 @@ import { InvitationCard } from '../components/invitation/InvitationCard';
 import { UpgradeModal } from '../components/modals/UpgradeModal';
 import { db, functions, auth, appId } from '../lib/firebase';
 import { callFirebaseFn } from '../lib/firebaseFn';
+// 2026-08-13 — H-01: helper for attaching the Firebase ID token
+// as Authorization: Bearer on same-origin upload calls. The proxy
+// verifyIdToken's this header before minting a NAS HMAC.
+import { buildUploadAuthHeader } from '../lib/uploadAuthHeader';
 
 // 2026-07-22 — Calling sendInvitationsV2 via the Vercel proxy
 // to bypass Cloud Run's CORS preflight rejection. See
@@ -160,6 +164,12 @@ export function InvitationEditor({
       // UIDs are 28 chars, fits).
       fd.append('eventId', 'inv-bg');
       fd.append('guestId', ownerUid);
+      // 2026-08-13 — H-01: include ownerUid so the proxy can look
+      // up the event doc and confirm the caller is a member of this
+      // owner's event. For invitation-bg uploads, the event is the
+      // designer's own pseudo-event "inv-bg" — the proxy treats
+      // that case as "ownerUid === caller" (special-case).
+      fd.append('ownerUid', ownerUid);
       fd.append('uploaderName', ownerUid); // vendor's uid as uploader name
       fd.append('file', file);
       const res = await fetch('/api/photo-upload', {
@@ -167,6 +177,12 @@ export function InvitationEditor({
         // No X-Upload-Token / X-Upload-Expires — the proxy mints
         // them server-side now. Removing the literal placeholder
         // closes the prior leak. Client never sees the secret.
+        //
+        // 2026-08-13 — H-01: attach Authorization Bearer. The
+        // signed-in designer's Firebase ID token. The proxy
+        // verifies the token, then special-cases eventId='inv-bg'
+        // to allow only when request.auth.uid === ownerUid.
+        headers: await buildAuthHeaders(),
         body: fd,
       });
       const json = await res.json();

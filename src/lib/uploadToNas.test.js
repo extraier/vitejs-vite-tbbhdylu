@@ -99,12 +99,21 @@ describe('uploadToNas', () => {
   // the proxy expects (multipart body with the named fields,
   // POSTed to /api/photo-upload) and that NO auth headers leak
   // out of the client bundle.
-  test('posts multipart to /api/photo-upload with no auth headers', async () => {
+  //
+  // 2026-08-13 — H-01: ownerUid is now required so the proxy can
+  // look up the event doc and verify the caller is a member.
+  // (The actual ID-token / Authorization header check is now
+  // exercised end-to-end via live curl probes against Vercel —
+  // see scripts/probe-h01-*.sh. The unit tests just verify the
+  // CLIENT sends the right shape; the server-side verify is a
+  // Vercel-only concern.)
+  test('posts multipart to /api/photo-upload with no HMAC headers', async () => {
     const file = new File(['fake-bytes'], 'photo.jpg', { type: 'image/jpeg' });
     const promise = uploadPhotoToNas({
       file,
       eventId: 'evtTEST',
       guestId: 'gT',
+      ownerUid: 'fakeOwnerUid12345678901234567890',
       uploaderName: 'Tester',
     });
     const xhr = await waitForXhr();
@@ -123,7 +132,12 @@ describe('uploadToNas', () => {
   // Header-free body
   test('sends only Content-Type; no auth headers', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({
+      file,
+      eventId: 'e1',
+      guestId: 'g1',
+      ownerUid: 'fakeOwnerUid12345678901234567890',
+    });
     const xhr = await waitForXhr();
     xhr._respond(200, { url: 'http://example.com/x.jpg', bytes: 1 });
     await p;
@@ -132,7 +146,7 @@ describe('uploadToNas', () => {
   });
 
   // ---------- Multipart body ----------
-  test('includes eventId, guestId, uploaderName, and file in FormData', async () => {
+  test('includes eventId, guestId, ownerUid, uploaderName, and file in FormData', async () => {
     const file = new File(['fake-jpeg-bytes'], 'photo.jpg', {
       type: 'image/jpeg',
     });
@@ -140,6 +154,7 @@ describe('uploadToNas', () => {
       file,
       eventId: 'evtABC',
       guestId: 'gXYZ',
+      ownerUid: 'fakeOwnerUid12345678901234567890',
       uploaderName: 'Alice',
     });
     const xhr = await waitForXhr();
@@ -151,14 +166,28 @@ describe('uploadToNas', () => {
     for (const [k, v] of xhr._body.entries()) entries[k] = v;
     expect(entries.eventId).toBe('evtABC');
     expect(entries.guestId).toBe('gXYZ');
+    expect(entries.ownerUid).toBe('fakeOwnerUid12345678901234567890');
     expect(entries.uploaderName).toBe('Alice');
     expect(entries.file).toBe(file);
+  });
+
+  // ---------- ownerUid is required (H-01) ----------
+  test('rejects synchronously when ownerUid is missing', async () => {
+    const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
+    await expect(
+      uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' })
+    ).rejects.toThrow(/缺少 ownerUid/);
   });
 
   // ---------- Success path ----------
   test('resolves with {url, bytes} on 200 response', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({
+      file,
+      eventId: 'e1',
+      guestId: 'g1',
+      ownerUid: 'fakeOwnerUid12345678901234567890',
+    });
     const xhr = await waitForXhr();
     xhr._respond(200, { url: 'http://example.com/photos/x.jpg', thumbnailUrl: 'http://example.com/photos/thumb_x.jpg', bytes: 99 });
     const result = await p;
@@ -172,15 +201,34 @@ describe('uploadToNas', () => {
   // ---------- Error mapping ----------
   test('rejects with friendly message on 401 (token expired)', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({
+      file,
+      eventId: 'e1',
+      guestId: 'g1',
+      ownerUid: 'fakeOwnerUid12345678901234567890',
+    });
     const xhr = await waitForXhr();
     xhr._respond(401, { error: 'unauthorized: token expired' });
     await expect(p).rejects.toThrow(/授權失敗/);
   });
 
+  // 2026-08-13 — H-01: new 403 branch ("not a member of this event")
+  test('rejects with friendly message on 403 (not a member)', async () => {
+    const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
+    const p = uploadPhotoToNas({
+      file,
+      eventId: 'e1',
+      guestId: 'g1',
+      ownerUid: 'fakeOwnerUid12345678901234567890',
+    });
+    const xhr = await waitForXhr();
+    xhr._respond(403, { error: 'not a member of this event' });
+    await expect(p).rejects.toThrow(/上載權限不足/);
+  });
+
   test('rejects with friendly message on 413 (too large)', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     xhr._respond(413, { error: 'too large' });
     await expect(p).rejects.toThrow(/相片太大/);
@@ -188,7 +236,7 @@ describe('uploadToNas', () => {
 
   test('rejects with friendly message on 415 (unsupported type)', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     xhr._respond(415, { error: 'unsupported type' });
     await expect(p).rejects.toThrow(/格式不支援/);
@@ -196,7 +244,7 @@ describe('uploadToNas', () => {
 
   test('rejects with friendly message on 429 (rate limited)', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     xhr._respond(429, { error: 'too many' });
     await expect(p).rejects.toThrow(/太頻密/);
@@ -204,7 +252,7 @@ describe('uploadToNas', () => {
 
   test('rejects with friendly message on 507 (event quota full)', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     xhr._respond(507, { error: 'storage full' });
     await expect(p).rejects.toThrow(/儲存空間已滿/);
@@ -212,7 +260,7 @@ describe('uploadToNas', () => {
 
   test('rejects with server error message on 500', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     xhr._respond(500, { error: 'disk write failed' });
     // Server-supplied error message overrides the generic HTTP msg.
@@ -222,7 +270,7 @@ describe('uploadToNas', () => {
   // ---------- Network errors ----------
   test('rejects on network error', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     xhr._failWithError();
     await expect(p).rejects.toThrow(/網絡錯誤/);
@@ -230,7 +278,7 @@ describe('uploadToNas', () => {
 
   test('rejects on timeout', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     xhr._failWithTimeout();
     await expect(p).rejects.toThrow(/上載逾時/);
@@ -239,27 +287,27 @@ describe('uploadToNas', () => {
   // ---------- Input validation ----------
   test('rejects if file is missing', async () => {
     await expect(
-      uploadPhotoToNas({ file: null, eventId: 'e1', guestId: 'g1' }),
+      uploadPhotoToNas({ file: null, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' }),
     ).rejects.toThrow(/未揀選相片/);
   });
 
   test('rejects if eventId is missing', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
     await expect(
-      uploadPhotoToNas({ file, eventId: '', guestId: 'g1' }),
+      uploadPhotoToNas({ file, eventId: '', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' }),
     ).rejects.toThrow(/缺少 eventId/);
   });
 
   test('rejects if guestId is missing', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
     await expect(
-      uploadPhotoToNas({ file, eventId: 'e1', guestId: '' }),
+      uploadPhotoToNas({ file, eventId: 'e1', guestId: '', ownerUid: 'fakeOwnerUid12345678901234567890' }),
     ).rejects.toThrow(/缺少 guestId/);
   });
 
   test('default uploaderName is Anonymous', async () => {
     const file = new File(['x'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     xhr._respond(200, { url: 'http://example.com/x.jpg', bytes: 1 });
     await p;
@@ -276,6 +324,7 @@ describe('uploadToNas', () => {
       file,
       eventId: 'e1',
       guestId: 'g1',
+      ownerUid: 'fakeOwnerUid12345678901234567890',
       onProgress,
     });
     const xhr = await waitForXhr();
@@ -313,7 +362,7 @@ describe('configured constants', () => {
     // If this test ever sees the raw NAS URL leak through,
     // the browser preflight will start failing again.
     const file = new File(['hello'], 'a.jpg', { type: 'image/jpeg' });
-    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1' });
+    const p = uploadPhotoToNas({ file, eventId: 'e1', guestId: 'g1', ownerUid: 'fakeOwnerUid12345678901234567890' });
     const xhr = await waitForXhr();
     expect(xhr.url).toBe('/api/photo-upload');
     xhr._respond(200, { url: 'http://example.com/x.jpg', bytes: 5 });

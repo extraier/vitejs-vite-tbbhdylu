@@ -21,15 +21,117 @@
  * case is "watermark keeps showing on real premium uploads", which
  * is hard to detect in production. Easier to catch it here.
  *
+ * 2026-08-13 — H-01 added. Every existing test now needs:
+ *   - `ownerUid` in the multipart (new required field).
+ *   - `Authorization: Bearer <fake>` header (proxy now verifyIdTokens).
+ *   - A mocked __getAdmin__ stub via vi.mock so the handler can
+ *     decode the fake token + look up a fake event doc. We stub
+ *     the firebase-admin layer at the __getAdmin__ boundary — no
+ *     real Firebase calls in unit tests.
+ *
  * What we DON'T test here:
  *   - The full upload handler's NAS forwarding (mocked via
  *     globalThis.fetch — we just verify the headers we forwarded).
  *   - The NAS-side Pillow step (Python smoke test in deploy/).
- *   - The auth bypass path (out of scope for this test).
+ *   - End-to-end auth — covered by live curl probes against Vercel.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-import handler from './photo-upload.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// ---- Mock firebase-admin via vi.mock ----
+// We stub the __getAdmin__ export so tests can control what
+// verifyIdToken returns + what the event-doc lookup returns.
+// Mocked module shape:
+//   export async function __getAdmin__() { return { auth, db }; }
+// where auth.verifyIdToken(token) returns { uid } or throws,
+// and db.doc(path).get() returns { exists, data() }.
+const mockState = {
+  uidByToken: new Map(),       // token → uid (or absent → throws)
+  events: new Map(),           // path → { exists, data }
+  guestLinks: new Map(),       // path → { exists, data }
+  rateCounters: new Map(),     // path → count
+  firebaseAdminImportable: true,
+};
+
+vi.mock('./photo-upload.js', async (importOriginal) => {
+  // We don't actually mock the proxy module — we just expose a
+  // way for the test to set up the mock state and then re-import
+  // the proxy. The "trick" is that the proxy itself doesn't
+  // import firebase-admin until __getAdmin__() is called, so we
+  // can intercept by replacing the dynamic import via vi.doMock.
+  return await importOriginal();
+});
+
+// Helper to install a fake firebase-admin before each test.
+async function installFakeAdmin() {
+  // Reset module-level cache so __getAdmin__ picks up the new
+  // firebase-admin replacement.
+  vi.resetModules();
+  // Stub the dynamic import of firebase-admin inside __getAdmin__.
+  vi.doMock('firebase-admin', () => {
+    const fakeFieldValue = {
+      increment: (n) => ({ increment: n, _isFieldValue: true }),
+      serverTimestamp: () => ({ _isServerTimestamp: true }),
+    };
+    const fakeAuth = {
+      verifyIdToken: async (token) => {
+        if (mockState.uidByToken.has(token)) {
+          return { uid: mockState.uidByToken.get(token) };
+        }
+        const err = new Error('auth/argument-error: invalid token');
+        err.code = 'auth/argument-error';
+        throw err;
+      },
+    };
+    const fakeFirestore = {
+      doc: (path) => ({
+        get: async () => {
+          if (mockState.events.has(path)) {
+            const d = mockState.events.get(path);
+            return { exists: true, data: () => d };
+          }
+          if (mockState.guestLinks.has(path)) {
+            const d = mockState.guestLinks.get(path);
+            return { exists: true, data: () => d };
+          }
+          if (mockState.rateCounters.has(path)) {
+            return { exists: true, data: () => ({ count: mockState.rateCounters.get(path) }) };
+          }
+          return { exists: false, data: () => undefined };
+        },
+        set: async (val, opts) => {
+          const prev = mockState.rateCounters.get(path) || 0;
+          // FieldValue.increment(1) → { increment: 1, _isFieldValue: true }
+          // We treat it as +1; any other numeric count value replaces.
+          let inc;
+          if (val && val.count && val.count._isFieldValue && typeof val.count.increment === 'number') {
+            inc = val.count.increment;
+          } else if (typeof val?.count === 'number') {
+            inc = val.count;
+          } else {
+            inc = 0;
+          }
+          mockState.rateCounters.set(path, prev + inc);
+        },
+      }),
+      FieldValue: fakeFieldValue,
+    };
+    return {
+      default: {
+        apps: [],
+        initializeApp: () => {},
+        credential: { cert: () => ({}), applicationDefault: () => ({}) },
+        auth: () => fakeAuth,
+        firestore: Object.assign(() => fakeFirestore, { FieldValue: fakeFieldValue }),
+      },
+      apps: [],
+      initializeApp: () => {},
+      credential: { cert: () => ({}), applicationDefault: () => ({}) },
+      auth: () => fakeAuth,
+      firestore: Object.assign(() => fakeFirestore, { FieldValue: fakeFieldValue }),
+    };
+  });
+}
 
 // The proxy reads these env vars at module-load time. We set them
 // via vi.hoisted() so they're set BEFORE the import statement
@@ -81,7 +183,23 @@ function base64UrlEncodeBuffer(bytes) {
   return btoa(bin).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
 }
 
-async function invokeWithPrefsToken({ prefsToken, eventId = 'ev1', guestId = 'g1', body = 'fakebody', _handler = handler }) {
+// 2026-08-13 — H-01 defaults. Tests should use a stable owner uid
+// + a fake ID token that the mock verifies to that uid. The mock
+// looks up tokens in mockState.uidByToken, so callers can either
+// pass `bearerToken` explicitly or use this default.
+const DEFAULT_OWNER_UID = 'fakeOwnerUid00000000000000000000';
+const DEFAULT_BEARER = 'fake-bearer-token-for-vitest';
+// 2026-08-13 — H-01: the proxy module is re-imported by beforeEach
+// after vi.doMock('firebase-admin', ...). Store it here so
+// invokeWithPrefsToken picks it up without each caller having to
+// pass it explicitly. The "missing secret" test overrides by
+// passing _handler directly.
+let __proxyHandler = null;
+async function invokeWithPrefsToken({ prefsToken, eventId = 'ev1', guestId = 'g1', ownerUid = DEFAULT_OWNER_UID, bearerToken = DEFAULT_BEARER, body = 'fakebody', _handler }) {
+  const handler = _handler || __proxyHandler;
+  if (!handler) {
+    throw new Error('invokeWithPrefsToken: no _handler and __proxyHandler is null — beforeEach not run?');
+  }
   const boundary = '----test-boundary-XYZ';
   const parts = [];
   if (prefsToken !== undefined) {
@@ -89,6 +207,8 @@ async function invokeWithPrefsToken({ prefsToken, eventId = 'ev1', guestId = 'g1
   }
   parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="eventId"\r\n\r\n${eventId}\r\n`);
   parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="guestId"\r\n\r\n${guestId}\r\n`);
+  // 2026-08-13 — H-01: ownerUid is now required.
+  parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="ownerUid"\r\n\r\n${ownerUid}\r\n`);
   parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="test.jpg"\r\nContent-Type: image/jpeg\r\n\r\n${body}\r\n`);
   parts.push(`--${boundary}--\r\n`);
   const reqBody = Buffer.from(parts.join(''), 'utf-8');
@@ -99,6 +219,8 @@ async function invokeWithPrefsToken({ prefsToken, eventId = 'ev1', guestId = 'g1
     method: 'POST',
     headers: {
       'content-type': `multipart/form-data; boundary=${boundary}`,
+      // 2026-08-13 — H-01: Authorization Bearer is required.
+      'authorization': `Bearer ${bearerToken}`,
     },
     [Symbol.asyncIterator]() {
       let emitted = false;
@@ -135,7 +257,7 @@ async function invokeWithPrefsToken({ prefsToken, eventId = 'ev1', guestId = 'g1
   };
 
   try {
-    await _handler(payload, res);
+    await handler(payload, res);
   } finally {
     globalThis.fetch = origFetch;
   }
@@ -143,6 +265,144 @@ async function invokeWithPrefsToken({ prefsToken, eventId = 'ev1', guestId = 'g1
 }
 
 describe('photo-upload proxy — verifyUploadPreferencesToken', () => {
+  let handler;
+  beforeEach(async () => {
+    // Reset mocks between tests so each one starts clean.
+    mockState.uidByToken.clear();
+    mockState.events.clear();
+    mockState.guestLinks.clear();
+    mockState.rateCounters.clear();
+    // Default: the DEFAULT_BEARER token verifies to the DEFAULT_OWNER_UID.
+    mockState.uidByToken.set(DEFAULT_BEARER, DEFAULT_OWNER_UID);
+    // Default: the event doc exists with the DEFAULT_OWNER_UID as owner.
+    mockState.events.set(
+      `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/events/ev1`,
+      { _ownerUid: DEFAULT_OWNER_UID, coOwners: [], assignedVendorUid: null },
+    );
+    await installFakeAdmin();
+    // Re-import the proxy module so __getAdmin__ picks up the
+    // mocked firebase-admin.
+    const mod = await import('./photo-upload.js?bust=' + Math.random());
+    handler = mod.default;
+    __proxyHandler = handler;
+  });
+
+  // ---- H-01 auth tests (2026-08-13) ----
+
+  it('rejects with 401 when Authorization header is missing', async () => {
+    // Build a custom request without the Bearer header.
+    const boundary = '----test-boundary-XYZ';
+    const parts = [
+      `--${boundary}\r\nContent-Disposition: form-data; name="eventId"\r\n\r\nev1\r\n`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="guestId"\r\n\r\ng1\r\n`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="ownerUid"\r\n\r\n${DEFAULT_OWNER_UID}\r\n`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="test.jpg"\r\nContent-Type: image/jpeg\r\n\r\nx\r\n`,
+      `--${boundary}--\r\n`,
+    ];
+    const reqBody = Buffer.from(parts.join(''), 'utf-8');
+    const req = {
+      method: 'POST',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      [Symbol.asyncIterator]() {
+        let emitted = false;
+        return { async next() { if (emitted) return { value: undefined, done: true }; emitted = true; return { value: reqBody, done: false }; } };
+      },
+    };
+    let captured;
+    const res = {
+      statusCode: 200,
+      setHeader() {},
+      status(c) { captured = c; return this; },
+      json(o) { this._body = o; return this; },
+    };
+    await handler(req, res);
+    expect(captured).toBe(401);
+    expect(res._body.error).toMatch(/missing Authorization/);
+  });
+
+  it('rejects with 401 when Firebase ID token is invalid', async () => {
+    const { res } = await invokeWithPrefsToken({
+      prefsToken: undefined,
+      bearerToken: 'totally-not-a-real-token',
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res._body.error).toMatch(/invalid or expired/);
+  });
+
+  it('rejects with 403 when caller is not a member of the event', async () => {
+    // Set up the default event for one owner, then call with a
+    // token that verifies to a DIFFERENT uid.
+    const otherUid = 'otherUid99999999999999999999';
+    mockState.uidByToken.set('token-other', otherUid);
+    const { res } = await invokeWithPrefsToken({
+      prefsToken: undefined,
+      bearerToken: 'token-other',
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res._body.error).toMatch(/not a member/);
+  });
+
+  it('accepts a caller who is in the event coOwners array', async () => {
+    const coOwner = 'coOwner99999999999999999999';
+    mockState.uidByToken.set('token-coowner', coOwner);
+    // Add co-owner to the event.
+    mockState.events.set(
+      `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/events/ev1`,
+      { _ownerUid: DEFAULT_OWNER_UID, coOwners: [coOwner], assignedVendorUid: null },
+    );
+    const { res } = await invokeWithPrefsToken({
+      prefsToken: undefined,
+      bearerToken: 'token-coowner',
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('accepts a guest caller with a non-expired guestLinks doc', async () => {
+    const guestUid = 'guestUid00000000000000000000';
+    mockState.uidByToken.set('token-guest', guestUid);
+    // guestLinks/{guestUid} exists with expiresAt in the future.
+    const futureExpires = Date.now() + 24 * 60 * 60 * 1000;
+    mockState.guestLinks.set(
+      `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/guestLinks/${guestUid}`,
+      { expiresAt: { toMillis: () => futureExpires } },
+    );
+    const { res } = await invokeWithPrefsToken({
+      prefsToken: undefined,
+      bearerToken: 'token-guest',
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('rejects a guest caller whose guestLinks doc is expired', async () => {
+    const guestUid = 'expiredGuest0000000000000000000';
+    mockState.uidByToken.set('token-expired', guestUid);
+    const pastExpires = Date.now() - 24 * 60 * 60 * 1000;
+    mockState.guestLinks.set(
+      `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/guestLinks/${guestUid}`,
+      { expiresAt: { toMillis: () => pastExpires } },
+    );
+    const { res } = await invokeWithPrefsToken({
+      prefsToken: undefined,
+      bearerToken: 'token-expired',
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('rejects with 429 when event exceeds daily rate limit', async () => {
+    // Pre-populate the rate counter to the cap so the next
+    // increment trips the limit.
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    mockState.rateCounters.set(
+      `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/events/ev1/uploadRateLimit/${today}`,
+      200, // already at cap
+    );
+    const { res } = await invokeWithPrefsToken({ prefsToken: undefined });
+    expect(res.statusCode).toBe(429);
+    expect(res._body.error).toMatch(/exceeded/);
+  });
+
+  // ---- Existing prefsToken tests (now with auth) ----
+
   it('forwards X-Watermark-Disabled: true when token verifies + flag set', async () => {
     const expiresAt = Date.now() + 60 * 60 * 1000;
     const token = await mintToken({ ownerUid: 'u1', watermarkDisabled: true, expiresAt });

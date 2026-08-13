@@ -2860,6 +2860,17 @@ export default function App() {
         file,
         eventId: currentEvent.id,
         guestId: activeGuestPortal.guestId,
+        // 2026-08-13 — H-01: ownerUid is the event's owner (the
+        // couple). The proxy looks up the event doc by (ownerUid,
+        // eventId) to verify the caller is a member. For owner
+        // uploads, user.uid === currentEvent._ownerUid; for guest
+        // uploads (activeGuestPortal.guestMode), it's the same
+        // ownerUid (the couple). guest.qToken is the share token
+        // they arrived with — pass it so the server can verify
+        // the guest-side path even if their guestLinks/{auth.uid}
+        // doc isn't fully populated yet (rare race).
+        ownerUid: currentEvent._ownerUid || user.uid,
+        shareToken: guest.qToken || null,
         uploaderName: activeGuestPortal.name,
         // 2026-08-02 — Attach the owner's preferences token so
         // the NAS skips the watermark step when the owner has

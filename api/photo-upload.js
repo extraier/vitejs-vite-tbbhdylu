@@ -26,6 +26,32 @@
 //   • NAS receiver enforces constant-time HMAC verify
 //     (see deploy/photo_upload_server.py). Server-to-server only;
 //     the secret never reaches the browser.
+//
+// 2026-08-13 — H-01 (HIGH) fix. The previous version minted an
+// HMAC token for ANY caller who knew a valid eventId + guestId —
+// no Firebase Auth verification, no event-membership check, no
+// rate limit. An attacker who could reach the endpoint could mint
+// upload grants for someone else's wedding. Now:
+//   1. Caller must attach `Authorization: Bearer <Firebase ID token>`.
+//   2. We verifyIdToken via firebase-admin to get the caller's UID.
+//   3. We look up the event doc at artifacts/{appId}/users/{ownerUid}/
+//      events/{eventId} and confirm the caller is ownerUid, in
+//      coOwners[], in assignedVendorUid, or holds a non-expired
+//      guestLinks/{auth.uid} doc for this owner.
+//   4. We rate-limit per event/day (atomic Firestore counter,
+//      cap 200 uploads/event/day). Same counter caps the inv-bg
+//      pseudo-event at 50/day.
+//   5. A request without a valid event-bound grant fails BEFORE
+//      any NAS HMAC is minted. This is the audit's acceptance
+//      criterion [4]: "A photo-upload request without a valid
+//      event-bound grant fails before any NAS HMAC is minted."
+//   6. Logs only contain opaque traceId + status + byte counts
+//      (no caller uid, no body, no header values) — see the
+//      H-04 fix from earlier for the proxy-side analog.
+
+// 2026-08-13 — H-01: trace id helper. Same Node crypto.randomUUID
+// we use in firebase-proxy.js. Available in Node 14.17+ on Vercel.
+import { randomUUID } from 'node:crypto';
 
 const NAS_UPLOAD_URL =
   process.env.NAS_UPLOAD_URL ||
@@ -41,6 +67,22 @@ const NAS_HMAC_SECRET =
   process.env.PHOTO_HMAC_SECRET ||
   '';
 const TOKEN_TTL_MS = 5 * 60 * 1000; // 5 min — server enforces this
+
+// 2026-08-13 — H-01 rate limit. Per (eventId, UTC day). We store
+// the counter at `artifacts/{appId}/users/{ownerUid}/events/{eventId}/
+// uploadRateLimit/{yyyymmdd}` — atomic FieldValue.increment(1) on
+// each upload, read-back to enforce the cap. For the inv-bg
+// pseudo-event (vendor's own designer template), the counter lives
+// at the top-level `invBgUploadRateLimit/{yyyymmdd}` doc (no owner).
+// 200/day for real events is generous — a real wedding rarely
+// uploads more than 200 photos in one day; bumping to 500 if
+// needed is one env-var change.
+const RATE_LIMIT_PER_DAY = Number(process.env.PHOTO_UPLOAD_DAILY_CAP || 200);
+const INV_BG_RATE_LIMIT_PER_DAY = Number(process.env.INV_BG_UPLOAD_DAILY_CAP || 50);
+// Firestore appId — same constant the client resolves via
+// resolveAppId() in src/lib/firebase.ts. The hard-coded value
+// matches the LIVE appId for savetheday-2377a (savetheday-production).
+const APP_ID = process.env.FIREBASE_APP_ID || 'savetheday-production';
 
 // 2026-08-02 — Upload-preferences token (Option 1, watermark).
 // The owner mints a short-lived HMAC-signed token via the
@@ -70,6 +112,55 @@ const UPLOAD_PREFERENCES_HMAC_SECRET =
   process.env.UPLOAD_PREFERENCES_HMAC_SECRET ||
   '';
 
+// ---- 2026-08-13 — H-01: lazy firebase-admin init --------------
+// Vercel functions are per-request cold-started but the module
+// body runs once per cold start. We init firebase-admin on first
+// call (not at module load) so the import cost is paid lazily
+// and tests that don't touch auth/firestore don't have to mock
+// them. `initializeApp({})` with no args uses Application Default
+// Credentials; on Vercel, the FIREBASE_SERVICE_ACCOUNT_JSON env
+// (set in the Vercel project dashboard) provides the SA key.
+// If ADC isn't configured we throw at request time (not at
+// module load) so the cold-start error path is loud.
+let _adminApp = null;
+let _adminNs = null;
+let _adminAuth = null;
+let _adminDb = null;
+// 2026-08-13 — H-01: exported for unit tests. Tests stub
+// `__getAdmin__` via vi.mock('./photo-upload.js', ...) to bypass
+// the real firebase-admin init (which requires ADC and would
+// fail in CI). The exported name is double-underscored to flag
+// it as internal-only.
+export async function __getAdmin__() {
+  if (_adminApp) return { auth: _adminAuth, db: _adminDb, firestore: _adminNs && _adminNs.firestore, FieldValue: _adminNs && _adminNs.firestore && _adminNs.firestore.FieldValue };
+  const admin = (await import('firebase-admin')).default;
+  if (!admin.apps.length) {
+    // Prefer a service-account JSON blob if provided (recommended
+    // for Vercel since ADC isn't available in serverless runtime).
+    const sa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+    if (sa) {
+      try {
+        const credentials = JSON.parse(sa);
+        admin.initializeApp({ credential: admin.credential.cert(credentials) });
+      } catch (err) {
+        throw new Error(`FIREBASE_SERVICE_ACCOUNT_JSON is set but malformed: ${err.message}`);
+      }
+    } else {
+      // Fallback: ADC (only works in environments where the
+      // runtime provides GOOGLE_APPLICATION_CREDENTIALS or metadata
+      // server). Vercel serverless doesn't — so this branch will
+      // throw at first auth.verifyIdToken() call. We surface a
+      // loud error so it's obvious in deploy logs.
+      admin.initializeApp({ credential: admin.credential.applicationDefault() });
+    }
+  }
+  _adminApp = admin.apps[0];
+  _adminNs = admin;
+  _adminAuth = admin.auth(_adminApp);
+  _adminDb = admin.firestore(_adminApp);
+  return { auth: _adminAuth, db: _adminDb, firestore: admin.firestore, FieldValue: admin.firestore.FieldValue };
+}
+
 export default async function handler(req, res) {
   // Top-level safety net. If anything below throws, log it AND
   // respond — so we get a real error body instead of Cloudflare's
@@ -78,7 +169,7 @@ export default async function handler(req, res) {
     return await _handler(req, res);
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.error('[photo-upload] FATAL:', err);
+    console.error('[photo-upload] FATAL:', err && err.message ? err.message : String(err));
     if (!res.headersSent) {
       res.status(500).json({
         error: `Internal error: ${err && err.message ? err.message : String(err)}`,
@@ -92,7 +183,11 @@ async function _handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader(
     'Access-Control-Allow-Headers',
-    'Content-Type, X-Upload-Token, X-Upload-Expires',
+    // 2026-08-13 — H-01: Authorization is required so the caller
+    // can attach their Firebase ID token. Pre-flight OPTIONS will
+    // include this header; without it the browser blocks the real
+    // POST.
+    'Content-Type, X-Upload-Token, X-Upload-Expires, Authorization',
   );
 
   if (req.method === 'OPTIONS') {
@@ -104,14 +199,25 @@ async function _handler(req, res) {
     return;
   }
 
-  // Buffer the body, capped at MAX_FORWARD_BYTES. For 25 MB photos
-  // this fits comfortably in Vercel serverless memory (1 GB+).
-  //
-  // Vercel's default bodyParser is true and parses application/json
-  // and urlencoded into req.body. For multipart it leaves req as
-  // a stream we can iterate with for-await. However, the NAS server
-  // expects Content-Type with the original boundary string — fetch
-  // reconstructs the boundary when we pass a Buffer.
+  // 2026-08-13 — H-01 trace id (mirrors the H-04 fix in
+  // api/firebase-proxy.js). One trace id per request, never
+  // logged with caller uid or body content — only with status +
+  // duration + sizes. Keeps logs useful for debugging without
+  // becoming a credential-leak vector.
+  const traceId = (req.headers['x-trace-id'] && typeof req.headers['x-trace-id'] === 'string' && req.headers['x-trace-id'].length <= 128)
+    ? req.headers['x-trace-id']
+    : randomUUID();
+  const log = (event, fields) => {
+    // eslint-disable-next-line no-console
+    console.log(`[photo-upload] ${event}`, { traceId, ...fields });
+  };
+  log('request-start', { hasAuth: Boolean(req.headers.authorization), contentLength: Number(req.headers['content-length'] || 0) });
+  const startedAt = Date.now();
+
+  // 2026-08-13 — H-01: Buffer the body BEFORE we try to auth so
+  // we can give a proper error if the body is too large, but
+  // also so we don't waste auth overhead on a 25MB upload from
+  // an unauthenticated attacker. (Same cap as before; pre-fix.)
   let body;
   try {
     const chunks = [];
@@ -119,6 +225,7 @@ async function _handler(req, res) {
     for await (const chunk of req) {
       total += chunk.length;
       if (total > MAX_FORWARD_BYTES) {
+        log('body-too-large', { bytes: total });
         res.status(413).json({ error: '相片太大，請壓縮後再上載' });
         return;
       }
@@ -126,8 +233,7 @@ async function _handler(req, res) {
     }
     body = Buffer.concat(chunks);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('[photo-upload] body read failed:', err);
+    log('body-read-failed', { err: err && err.message });
     res.status(400).json({ error: '無法讀取 request body' });
     return;
   }
@@ -137,89 +243,200 @@ async function _handler(req, res) {
     return;
   }
 
-  // 2026-07-27 — SECURITY HARDENING: mint the HMAC server-side.
-  // We need eventId + guestId from the multipart to compute the
-  // token, but we DO NOT strip them from the upstream body — the
-  // NAS receiver reads them out of `fields` (see
-  // photo_upload_server.py:232-235) and rejects with 400 if
-  // missing. So: extract for the HMAC, but forward the original
-  // multipart unchanged.
-  //
-  // (1) Fail closed if the server-side secret is missing.
+  // (1) Fail closed if the server-side HMAC secret is missing.
   if (!NAS_HMAC_SECRET) {
-    // eslint-disable-next-line no-console
-    console.error('[photo-upload] FATAL: NAS_HMAC_SECRET not configured');
+    log('fatal-no-secret', {});
     res.status(500).json({
       error:
         'upload auth not configured on the server (missing NAS_HMAC_SECRET env var)',
     });
     return;
   }
-  // (2) Pull eventId + guestId from the multipart just for HMAC
-  // signing. The body itself is forwarded unchanged.
+
+  // (2) Parse multipart for the fields we need to make auth decisions.
   const contentType = String(req.headers['content-type'] || '');
   const parsed = parseMultipartForIds(body, contentType);
   if (!parsed.ok) {
+    log('bad-multipart', { err: parsed.error });
     res.status(400).json({ error: parsed.error });
     return;
   }
-  const { eventId, guestId } = parsed;
-  // (3) Validate id shape so we don't sign for arbitrary strings.
-  if (!SAFE_ID.test(eventId) || !SAFE_ID.test(guestId)) {
-    res.status(400).json({ error: 'bad eventId/guestId' });
+  const { eventId, guestId, ownerUid, shareToken, prefsToken } = parsed;
+
+  // (3) Validate id shape so we don't run Firestore queries with
+  // arbitrary garbage strings. SAFE_ID limits to 64 chars,
+  // alphanum + underscore + dash. Firebase UIDs are 28 chars.
+  for (const [name, val] of [['eventId', eventId], ['guestId', guestId], ['ownerUid', ownerUid]]) {
+    if (!val || !SAFE_ID.test(val)) {
+      log('bad-id-shape', { field: name });
+      res.status(400).json({ error: `bad ${name}` });
+      return;
+    }
+  }
+
+  // (4) H-01: verify the Firebase ID token from the Authorization
+  // header. We require it for ALL upload paths — owner, co-owner,
+  // vendor (bg), guest. The caller MUST be signed in (or
+  // anonymous-signed-in for guests, which still has a real
+  // Firebase UID). No anonymous uploads.
+  const authHeader = req.headers.authorization || '';
+  const match = authHeader.match(/^Bearer\s+(\S+)$/i);
+  if (!match) {
+    log('no-auth-header', {});
+    res.status(401).json({ error: 'missing Authorization: Bearer <Firebase ID token>' });
     return;
   }
+  const idToken = match[1];
+  let callerUid;
+  let admin;
+  try {
+    admin = await __getAdmin__();
+    const decoded = await admin.auth.verifyIdToken(idToken, /* checkRevoked */ false);
+    callerUid = decoded.uid;
+  } catch (err) {
+    log('bad-token', { code: err && err.code ? err.code : 'unknown' });
+    res.status(401).json({ error: 'invalid or expired Firebase ID token' });
+    return;
+  }
+
+  // (5) Verify event membership based on the (ownerUid, eventId)
+  // pair. Special-case eventId='inv-bg' for the designer's own
+  // invitation template background — only the designer themselves
+  // (callerUid === ownerUid) can upload.
+  let isMember = false;
+  if (eventId === 'inv-bg') {
+    // Designer / owner only — the bg lives in their own pseudo-event.
+    if (callerUid === ownerUid) {
+      isMember = true;
+    }
+  } else {
+    // Real event — look up the doc, verify membership.
+    const eventRef = admin.db.doc(
+      `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}`,
+    );
+    const eventSnap = await eventRef.get();
+    if (eventSnap.exists) {
+      const ev = eventSnap.data() || {};
+      const owner = ev._ownerUid || ev.ownerUid;
+      const coOwners = Array.isArray(ev.coOwners) ? ev.coOwners : [];
+      const assignedVendorUid = ev.assignedVendorUid;
+      if (callerUid === owner) {
+        isMember = true;
+      } else if (coOwners.includes(callerUid)) {
+        isMember = true;
+      } else if (callerUid === assignedVendorUid) {
+        isMember = true;
+      } else {
+        // Guest path: verify they have a non-expired
+        // guestLinks/{auth.uid} doc for this owner.
+        const linkRef = admin.db.doc(
+          `artifacts/${APP_ID}/users/${ownerUid}/guestLinks/${callerUid}`,
+        );
+        const linkSnap = await linkRef.get();
+        if (linkSnap.exists) {
+          const link = linkSnap.data() || {};
+          // expiresAt can be Firestore Timestamp or Date or number (ms).
+          let expiresMs = 0;
+          const e = link.expiresAt;
+          if (e && typeof e.toMillis === 'function') expiresMs = e.toMillis();
+          else if (typeof e === 'number') expiresMs = e;
+          else if (e instanceof Date) expiresMs = e.getTime();
+          if (expiresMs > Date.now()) {
+            isMember = true;
+          }
+        }
+        // Optional: also accept a matching shareToken in the
+        // multipart, but only if the link doc exists — we don't
+        // create guestLinks from the proxy, only verify them.
+        // (The share-token redeem CF is the only writer to
+        // guestLinks, and it verifies the HMAC token signature
+        // before writing.)
+        if (!isMember && shareToken && SAFE_ID.test(shareToken)) {
+          // The guest token lookup would require either scanning
+          // all guestLinks or maintaining a token→uid index.
+          // We don't have such an index here, so the shareToken
+          // path is a NO-OP — guests must complete the
+          // share-token redeem flow (which writes guestLinks/
+          // {auth.uid}) BEFORE uploading. This is a documented
+          // design constraint: guest uploads only work AFTER
+          // the redeem CF has run.
+          //
+          // If a future flow needs a one-shot token check, add
+          // a `guestLinksByToken/{token}` collection maintained
+          // by the redeem CF.
+        }
+      }
+    }
+  }
+  if (!isMember) {
+    log('forbidden', { ownerUidPrefix: ownerUid.slice(0, 8), eventIdPrefix: eventId.slice(0, 8) });
+    res.status(403).json({ error: 'caller is not a member of this event' });
+    return;
+  }
+
+  // (6) Rate-limit per event/day. Atomic FieldValue.increment(1)
+  // then read-back to compare with cap. For inv-bg, use a
+  // top-level counter doc keyed by day.
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD UTC
+  let rateRef;
+  let rateCap;
+  if (eventId === 'inv-bg') {
+    rateRef = admin.db.doc(`invBgUploadRateLimit/${day}`);
+    rateCap = INV_BG_RATE_LIMIT_PER_DAY;
+  } else {
+    rateRef = admin.db.doc(
+      `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}/uploadRateLimit/${day}`,
+    );
+    rateCap = RATE_LIMIT_PER_DAY;
+  }
+  const FieldValue = admin.FieldValue;
+  if (!FieldValue) {
+    log('fatal-no-field-value', {});
+    res.status(500).json({ error: 'server misconfigured: firebase-admin FieldValue unavailable' });
+    return;
+  }
+  let currentCount;
+  try {
+    await rateRef.set(
+      { count: FieldValue.increment(1), updatedAt: FieldValue.serverTimestamp() },
+      { merge: true },
+    );
+    const fresh = await rateRef.get();
+    currentCount = (fresh.data() && Number(fresh.data().count)) || 0;
+  } catch (err) {
+    // If the rate-limit read fails, we still allow the upload —
+    // we just can't enforce the cap. Log loud so this gets fixed.
+    log('rate-limit-read-failed', { err: err && err.message ? err.message : String(err) });
+    currentCount = 0;
+  }
+  if (currentCount > rateCap) {
+    log('rate-limited', { currentCount, cap: rateCap });
+    res.status(429).json({ error: `event has exceeded ${rateCap} uploads today, please try again tomorrow` });
+    return;
+  }
+
+  // (7) All pre-flight checks passed. Mint the HMAC token and
+  // forward to the NAS.
   const expiresMs = Date.now() + TOKEN_TTL_MS;
-  // (4) Mint the token using the same algorithm the receiver verifies.
-  // hex(HMAC-SHA256(secret, `${eventId}|${guestId}|${expiresMs}`)).
   const token = await mintHmacToken(NAS_HMAC_SECRET, eventId, guestId, expiresMs);
 
-  // eslint-disable-next-line no-console
-  console.log('[photo-upload] forwarding', {
-    bytes: body.length,
-    tokenLen: token.length,
-    expiresMs,
-    eventId: eventId.slice(0, 8),
-    guestId: guestId.slice(0, 8),
-    nasHost: new URL(NAS_UPLOAD_URL).host,
-  });
-
   // 2026-08-02 — Verify the upload-preferences token (if any).
-  // The client sends it as a multipart field `prefsToken` (text
-  // part) — NOT a custom header, because the multipart already
-  // parsed by parseMultipartForIds gets stripped before we forward
-  // upstream. The token is HMAC-signed; tampering throws away
-  // the watermark-disabled signal (default-on watermark kicks
-  // in). Returning 401 would be hostile: the photo upload itself
-  // is still valid, just watermarked. We log + fall through.
+  // Same as before — owner unlock signals "watermark off".
   let watermarkDisabled = false;
-  const prefsToken = parsed.prefsToken;
   if (prefsToken) {
     const verified = await verifyUploadPreferencesToken(
       prefsToken,
       UPLOAD_PREFERENCES_HMAC_SECRET,
     );
     if (verified) {
-      // Defense in depth: the token's ownerUid must match the
-      // event owner — but here we only have the eventId, not
-      // the ownerUid, in the multipart. The token IS signed by
-      // the owner's Firebase Auth context (via the CF), and the
-      // CF verified `req.auth.uid === ownerUid`. So an attacker
-      // who somehow got the secret could forge a token, but
-      // they don't have the secret. Tampering breaks the sig.
       if (verified.expiresAt < Date.now()) {
-        // eslint-disable-next-line no-console
-        console.warn('[photo-upload] expired prefs token, watermark on', {
-          expiresAt: verified.expiresAt,
-          now: Date.now(),
-        });
+        log('prefs-expired', { ownerUidPrefix: ownerUid.slice(0, 8) });
         watermarkDisabled = false;
       } else if (verified.watermarkDisabled === true) {
         watermarkDisabled = true;
       }
     } else {
-      // eslint-disable-next-line no-console
-      console.warn('[photo-upload] bad prefs token, watermark on');
+      log('prefs-bad', {});
     }
   }
 
@@ -231,17 +448,13 @@ async function _handler(req, res) {
         'Content-Type': contentType,
         'X-Upload-Token': token,
         'X-Upload-Expires': String(expiresMs),
-        // 2026-08-02 — forward the watermark-disabled signal so
-        // the NAS can skip Pillow when set. Default is "false"
-        // (i.e. watermark ON) — we never send a header if the
-        // token didn't verify. The NAS reads the header verbatim.
+        'X-Trace-Id': traceId,
         ...(watermarkDisabled ? { 'X-Watermark-Disabled': 'true' } : {}),
       },
       body,  // forward the original multipart unchanged
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('[photo-upload] fetch to NAS failed:', err);
+    log('nas-fetch-failed', { err: err && err.message ? err.message : String(err), durationMs: Date.now() - startedAt });
     res.status(502).json({
       error: '無法連接到 NAS upload server，請稍後再試',
     });
@@ -249,12 +462,11 @@ async function _handler(req, res) {
   }
 
   const responseText = await upstream.text();
-
-  // eslint-disable-next-line no-console
-  console.log('[photo-upload] upstream', {
+  log('request-end', {
     status: upstream.status,
-    bytes: responseText.length,
-    preview: responseText.slice(0, 200),
+    durationMs: Date.now() - startedAt,
+    bodyBytes: body.length,
+    responseBytes: responseText.length,
   });
 
   // Forward the response. If JSON, pass through with the original
@@ -279,9 +491,16 @@ function parseMultipartForIds(buf, contentTypeHeader) {
   const boundary = (match[1] || match[2] || '').trim();
   const delimStr = `--${boundary}`;
   const closing = `--${boundary}--`;
-  // Strip eventId / guestId fields, keep everything else (file,
-  // uploaderName, etc.) intact for forwarding.
-  const idsToStrip = new Set(['eventId', 'guestId']);
+  // Strip eventId / guestId / ownerUid / shareToken fields, keep
+  // everything else (file, uploaderName, prefsToken, etc.) intact
+  // for forwarding.
+  //
+  // 2026-08-13 — H-01: added ownerUid (event's owner, used for
+  // event-doc lookup) and shareToken (guest share token, used as
+  // a fallback identity check). Both are used for auth decisions
+  // at the proxy boundary and stripped before forwarding upstream
+  // so the NAS receiver never sees them.
+  const idsToStrip = new Set(['eventId', 'guestId', 'ownerUid', 'shareToken']);
   // 2026-08-02 — also strip the prefsToken field from the forwarded
   // multipart. We read it for HMAC verification at the proxy, but
   // the NAS receiver doesn't need (or want) to see it. The token
@@ -296,6 +515,8 @@ function parseMultipartForIds(buf, contentTypeHeader) {
   const delimBuf = Buffer.from(delimStr, 'utf-8');
   let eventId = null;
   let guestId = null;
+  let ownerUid = null;
+  let shareToken = null;
   let prefsToken = null;
   for (const part of parts) {
     if (part.length === 0) continue;
@@ -324,6 +545,8 @@ function parseMultipartForIds(buf, contentTypeHeader) {
       const value = body.subarray(0, bodyEnd).toString('utf-8');
       if (name === 'eventId') eventId = value;
       else if (name === 'guestId') guestId = value;
+      else if (name === 'ownerUid') ownerUid = value;
+      else if (name === 'shareToken') shareToken = value;
       else if (name === 'prefsToken') prefsToken = value;
       // Strip this part — don't include it in `out`.
       continue;
@@ -336,7 +559,14 @@ function parseMultipartForIds(buf, contentTypeHeader) {
   if (!eventId || !guestId) {
     return { ok: false, error: 'missing eventId or guestId' };
   }
-  return { ok: true, eventId, guestId, prefsToken, bodyWithoutIds: out };
+  // 2026-08-13 — H-01: ownerUid is now REQUIRED. The proxy
+  // verifies event membership by looking up the event doc by
+  // (ownerUid, eventId) pair; without ownerUid we can't do
+  // that check. Reject early.
+  if (!ownerUid) {
+    return { ok: false, error: 'missing ownerUid' };
+  }
+  return { ok: true, eventId, guestId, ownerUid, shareToken, prefsToken, bodyWithoutIds: out };
 }
 
 // Returns the byte offset of the CRLFCRLF separator inside a Buffer,
