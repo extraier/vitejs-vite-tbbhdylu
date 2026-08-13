@@ -34,3 +34,4 @@ vercel.json.bak
 
 # Hermes agent local planning / cache
 .hermes/
+coverage/
