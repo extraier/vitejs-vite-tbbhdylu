@@ -129,16 +129,10 @@ const mockFirebaseAdminFs = vi.hoisted(() => {
 });
 
 const mockFirebaseAdmin = vi.hoisted(() => {
-  // 2026-08-13 — H-01: the firestore namespace has TWO meanings:
-  //   1. `firestore.FieldValue` is a STATIC property on the
-  //      firebase-admin namespace itself (proxy reads
-  //      `adminFirestore.FieldValue`).
-  //   2. `firestore(app)` is a FACTORY that returns an instance
-  //      with `.doc()` / `.collection()` (proxy reads
-  //      `admin.db.doc(path)`).
-  // Mirror both.
-  const firestoreFn = () => mockFirebaseAdminFs;
-  firestoreFn.FieldValue = mockFieldValue;
+  // 2026-08-13 — H-01: tests mock the three sub-modules
+  // (firebase-admin/app, /auth, /firestore), not the top-level
+  // package. The shape here is the "logical admin" view used by
+  // the mock factory wrapper below.
   return {
     apps: [],
     getApps: () => [],
@@ -146,7 +140,7 @@ const mockFirebaseAdmin = vi.hoisted(() => {
     cert: () => ({}),
     applicationDefault: () => ({}),
     auth: () => mockFirebaseAdminAuth,
-    firestore: firestoreFn,
+    firestore: () => mockFirebaseAdminFs,
     FieldValue: mockFieldValue,
     initializeAppCalls: 0,
     certCalls: 0,
