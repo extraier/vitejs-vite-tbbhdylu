@@ -43,6 +43,10 @@ import {
   History,
   // 2026-07-18 — batch CSV import CTA inside the header.
   FileSpreadsheet,
+  // 2026-08-14 — H-03 audit follow-up. One-click "Backfill vendor
+  // claims" button for admins to repair legacy seeded-slot vendors
+  // whose `vendor: true` custom claim was never set.
+  Wand2,
 } from 'lucide-react';
 
 import { VendorModal } from '../components/modals/VendorModal';
@@ -220,6 +224,12 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
   const [selection, setSelection] = useState(() => new Set());
   const [bulkInviteOpen, setBulkInviteOpen] = useState(false);
   const [signUpFilter, setSignUpFilter] = useState('all'); // 'all' | 'uninvited' | 'invited' | 'claimed'
+  // 2026-08-14 — H-03 audit follow-up. UI state for the one-click
+  // vendor-claim backfill: in-flight, last dryRun result, last
+  // real-flip result, and an error banner if the call rejects.
+  const [backfillBusy, setBackfillBusy] = useState(false);
+  const [backfillResult, setBackfillResult] = useState(null);
+  const [backfillError, setBackfillError] = useState(null);
   const { showToast } = useToast();
 
   const loadPage = useCallback(async (token) => {
@@ -242,6 +252,42 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
   useEffect(() => {
     if (isAdmin) loadPage(null);
   }, [isAdmin, loadPage]);
+
+  // 2026-08-14 — H-03 audit follow-up. Handler for the
+  // "Backfill vendor claims" button. Default dryRun = true so
+  // accidentally clicking is harmless. Two-step workflow:
+  //   1. Click without confirming → dryRun counts flip=null
+  //   2. Click with shift/checkbox → dryRun:false actually flips
+  // Concurrency-safe: stores the running call so a second click
+  // while busy is ignored. Surfaces the callable's count triplet
+  // (scanned / flipped / skipped) so we can verify it without
+  // leaving the admin UI.
+  const runBackfill = useCallback(async (dryRun) => {
+    if (backfillBusy) return;
+    setBackfillBusy(true);
+    setBackfillError(null);
+    try {
+      const fn = httpsCallable(getFunctions(), 'admin_backfillVendorClaims');
+      // One page at a time — pagination happens via startAfter,
+      // but for an admin UI one button click runs ONE page and
+      // surfaces nextStartAfter so the admin can keep paginating.
+      const res = await fn({ dryRun, limit: 200 });
+      const data = res.data || {};
+      setBackfillResult({
+        ...data,
+        ranAt: new Date().toISOString(),
+      });
+      showToast?.(
+        dryRun
+          ? `Dry-run: scanned ${data.scanned}, would flip ${data.flipped}, skipped ${data.skipped}.`
+          : `Backfill: flipped ${data.flipped}, skipped ${data.skipped} (${data.errors.length} errors).`
+      );
+    } catch (err) {
+      setBackfillError(err?.message || String(err));
+    } finally {
+      setBackfillBusy(false);
+    }
+  }, [backfillBusy, showToast]);
 
   const filteredVendors = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -512,6 +558,39 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           重新整理
         </button>
+        {/* 2026-08-14 — H-03 audit follow-up. One-click
+            backfill of the `vendor: true` custom claim for
+            legacy seeded-slot vendors (see
+            functions/src/index.ts#admin_backfillVendorClaims).
+            Two buttons side by side: dryRun (default safe) +
+            the real flip gated by an extra confirm. */}
+        <button
+          onClick={() => runBackfill(true)}
+          disabled={backfillBusy}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50"
+          title="Dry-run: count how many vendors would be claimed without writing."
+        >
+          <Wand2 className="w-4 h-4 text-slate-500" />
+          {backfillBusy ? '…' : '回填商戶授權 (dry-run)'}
+        </button>
+        <button
+          onClick={() => {
+            const flipped = backfillResult?.scanned ?? 0;
+            const msg = window.confirm(
+              `確定要回填所有未持有 vendor 授權的商戶嗎？\n\n` +
+                `最近一次 dry-run: ${flipped} 個商戶會被更新成 vendor claim.\n` +
+                `（每個商戶會需要重新登入以取得新 claim。）\n\n` +
+                `按 OK 執行，或 Cancel 返回 dry-run。`,
+            );
+            if (msg) runBackfill(false);
+          }}
+          disabled={backfillBusy}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-300 text-amber-800 rounded-lg hover:bg-amber-100 disabled:opacity-50"
+          title="真正回填 — 為未持有 vendor 授權的商戶加上 vendor: true 自訂聲明。"
+        >
+          <Wand2 className="w-4 h-4" />
+          回填商戶授權 (執行)
+        </button>
       </div>
 
       {error && (
@@ -531,6 +610,83 @@ export function AdminVendors({ user, isAdmin, onOpenImportVendors }) {
               如果係「&quot;internal&quot;」通常係 (a) Firebase API key 無效 / 被封 / (b) Cloud Function
               部署失敗。請用 <code>firebase functions:log --only admin_listVendors</code> 查
               server-side stack trace。
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2026-08-14 — H-03 audit follow-up. Result banner for
+          the vendor-claim backfill. Shows scanned / flipped /
+          skipped / errors and the next-startAfter cursor so the
+          admin can chain runs if /vendors grows past the page
+          size. */}
+      {backfillResult && (
+        <div
+          className={
+            'mb-4 p-4 rounded-lg border flex items-start gap-3 ' +
+            (backfillResult.errors && backfillResult.errors.length
+              ? 'bg-amber-50 border-amber-200'
+              : 'bg-emerald-50 border-emerald-200')
+          }
+        >
+          <CheckCircle2
+            className={
+              backfillResult.errors && backfillResult.errors.length
+                ? 'w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5'
+                : 'w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5'
+            }
+          />
+          <div className="flex-1">
+            <div className="font-semibold text-slate-900">
+              {backfillResult.dryRun ? 'Vendor 授權回填 — Dry-run' : 'Vendor 授權回填 — 已執行'}
+            </div>
+            <div className="text-sm text-slate-700 mt-1">
+              <span className="font-mono">scanned</span>{' '}
+              <span className="font-semibold">{backfillResult.scanned}</span>{' '}
+              &nbsp;·&nbsp;
+              <span className="font-mono">flipped</span>{' '}
+              <span className="font-semibold">{backfillResult.flipped}</span>{' '}
+              &nbsp;·&nbsp;
+              <span className="font-mono">skipped</span>{' '}
+              <span className="font-semibold">{backfillResult.skipped}</span>{' '}
+              &nbsp;·&nbsp;
+              <span className="font-mono">errors</span>{' '}
+              <span className="font-semibold">
+                {(backfillResult.errors || []).length}
+              </span>
+            </div>
+            {(backfillResult.errors || []).length > 0 && (
+              <ul className="text-xs text-amber-800 mt-2 list-disc list-inside">
+                {backfillResult.errors.slice(0, 5).map((e, i) => (
+                  <li key={i}>
+                    {e.slug}: <code>{e.error}</code>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {backfillResult.nextStartAfter && (
+              <div className="text-xs text-slate-600 mt-2">
+                還有未處理的分頁 —{' '}
+                <code className="bg-slate-100 px-1 rounded">
+                  startAfter: {backfillResult.nextStartAfter}
+                </code>{' '}
+                。請再撳一次按鈕繼續。
+              </div>
+            )}
+            <div className="text-xs text-slate-500 mt-2">
+              此次執行於 {new Date(backfillResult.ranAt).toLocaleString()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {backfillError && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <div className="font-semibold text-red-900">回填失敗</div>
+            <div className="text-sm text-red-700 whitespace-pre-wrap">
+              {backfillError}
             </div>
           </div>
         </div>
