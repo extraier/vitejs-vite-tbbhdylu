@@ -49,9 +49,14 @@
 //      (no caller uid, no body, no header values) — see the
 //      H-04 fix from earlier for the proxy-side analog.
 
-// 2026-08-13 — H-01: trace id helper. Same Node crypto.randomUUID
-// we use in firebase-proxy.js. Available in Node 14.17+ on Vercel.
 import { randomUUID } from 'node:crypto';
+// 2026-08-13 — H-01: firebase-admin is a CommonJS module. Node's
+// ESM interop does NOT expose its functions as named imports
+// (`import { auth } from 'firebase-admin'` throws SyntaxError).
+// Use the default import and destructure. Vite's bundler
+// tolerates the named-import form but Vercel's esbuild does not.
+import admin from 'firebase-admin';
+const { initializeApp, getApps, cert, applicationDefault, auth: adminAuth, firestore: adminFirestore } = admin;
 
 const NAS_UPLOAD_URL =
   process.env.NAS_UPLOAD_URL ||
@@ -132,39 +137,30 @@ let _adminDb = null;
 // fail in CI). The exported name is double-underscored to flag
 // it as internal-only.
 export async function __getAdmin__() {
-  if (_adminApp) return { auth: _adminAuth, db: _adminDb, firestore: _adminNs && _adminNs.firestore, FieldValue: _adminNs && _adminNs.firestore && _adminNs.firestore.FieldValue };
-  // firebase-admin is a CommonJS module. Under ESM dynamic
-  // import, the namespace IS the module wrapper — but it doesn't
-  // expose `apps` (that's a getter on the default export). We need
-  // `admin.default` to get the real module object with `getApps`,
-  // `credential`, `auth`, `firestore`, etc.
-  const adminNs = await import('firebase-admin');
-  const admin = adminNs.default || adminNs;
-  if (admin.getApps().length === 0) {
-    // Prefer a service-account JSON blob if provided (recommended
-    // for Vercel since ADC isn't available in serverless runtime).
+  if (_adminApp) return { auth: _adminAuth, db: _adminDb, firestore: adminFirestore, FieldValue: adminFirestore.FieldValue };
+  // 2026-08-13 — H-01: use STATIC imports above (`initializeApp`,
+  // `getApps`, `cert`, etc.) instead of `await import('firebase-admin')`.
+  // Vercel's bundler tree-shakes unused CJS namespace exports, so
+  // dynamic-import reads like `admin.credential.cert` returned
+  // undefined at runtime. Static named imports force the bundler
+  // to keep the bindings.
+  if (getApps().length === 0) {
     const sa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
     if (sa) {
       try {
         const credentials = JSON.parse(sa);
-        admin.initializeApp({ credential: admin.credential.cert(credentials) });
+        initializeApp({ credential: cert(credentials) });
       } catch (err) {
         throw new Error(`FIREBASE_SERVICE_ACCOUNT_JSON is set but malformed: ${err.message}`);
       }
     } else {
-      // Fallback: ADC (only works in environments where the
-      // runtime provides GOOGLE_APPLICATION_CREDENTIALS or metadata
-      // server). Vercel serverless doesn't — so this branch will
-      // throw at first auth.verifyIdToken() call. We surface a
-      // loud error so it's obvious in deploy logs.
-      admin.initializeApp({ credential: admin.credential.applicationDefault() });
+      initializeApp({ credential: applicationDefault() });
     }
   }
-  _adminApp = admin.getApp();
-  _adminNs = admin;
-  _adminAuth = admin.auth(_adminApp);
-  _adminDb = admin.firestore(_adminApp);
-  return { auth: _adminAuth, db: _adminDb, firestore: admin.firestore, FieldValue: admin.firestore.FieldValue };
+  _adminApp = getApps()[0];
+  _adminAuth = adminAuth(_adminApp);
+  _adminDb = adminFirestore(_adminApp);
+  return { auth: _adminAuth, db: _adminDb, firestore: adminFirestore, FieldValue: adminFirestore.FieldValue };
 }
 
 export default async function handler(req, res) {
@@ -297,16 +293,10 @@ async function _handler(req, res) {
   let admin;
   try {
     admin = await __getAdmin__();
-    if (!admin) throw new Error('admin is null after __getAdmin__');
-    if (!admin.auth) throw new Error('admin.auth is null');
-    log('pre-verify', { idTokenType: typeof idToken, idTokenLen: idToken ? idToken.length : 'undef' });
     const decoded = await admin.auth.verifyIdToken(idToken, /* checkRevoked */ false);
     callerUid = decoded.uid;
   } catch (err) {
-    // 2026-08-13 — log the full error message for diagnosis
-    // (the bad-token path is where "what env var is missing"
-    // shows up as auth/argument-error or credential errors).
-    log('bad-token', { code: err && err.code ? err.code : 'unknown', err: err && err.message ? err.message : String(err), stack: err && err.stack ? err.stack.split('\n').slice(0,3).join(' | ') : 'no-stack' });
+    log('bad-token', { code: err && err.code ? err.code : 'unknown', err: err && err.message ? err.message : String(err) });
     res.status(401).json({ error: 'invalid or expired Firebase ID token' });
     return;
   }
@@ -401,7 +391,7 @@ async function _handler(req, res) {
     );
     rateCap = RATE_LIMIT_PER_DAY;
   }
-  const FieldValue = admin.FieldValue;
+  const FieldValue = adminFirestore.FieldValue;
   if (!FieldValue) {
     log('fatal-no-field-value', {});
     res.status(500).json({ error: 'server misconfigured: firebase-admin FieldValue unavailable' });

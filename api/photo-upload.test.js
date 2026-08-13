@@ -68,76 +68,110 @@ async function installFakeAdmin() {
   // firebase-admin replacement.
   vi.resetModules();
   // Stub the dynamic import of firebase-admin inside __getAdmin__.
-  vi.doMock('firebase-admin', () => {
-    const fakeFieldValue = {
-      increment: (n) => ({ increment: n, _isFieldValue: true }),
-      serverTimestamp: () => ({ _isServerTimestamp: true }),
-    };
-    const fakeAuth = {
-      verifyIdToken: async (token) => {
-        if (mockState.uidByToken.has(token)) {
-          return { uid: mockState.uidByToken.get(token) };
+  // 2026-08-13 — H-01: vi.hoisted() runs before vi.doMock. Each
+// constant must be defined as its own hoisted block because
+// vi.hoisted() doesn't run the closures lazily.
+const mockFieldValue = vi.hoisted(() => ({
+  increment: (n) => ({ increment: n, _isFieldValue: true }),
+  serverTimestamp: () => ({ _isServerTimestamp: true }),
+}));
+
+const mockFirebaseAdminAuth = vi.hoisted(() => ({
+  verifyIdToken: async (token) => {
+    console.log('[mock-verify]', { token, size: mockState.uidByToken.size, keys: Array.from(mockState.uidByToken.keys()) });
+    if (mockState.uidByToken.has(token)) {
+      return { uid: mockState.uidByToken.get(token) };
+    }
+    const err = new Error('auth/argument-error: invalid token');
+    err.code = 'auth/argument-error';
+    throw err;
+  },
+}));
+
+const mockFirebaseAdminFs = vi.hoisted(() => {
+  // 2026-08-13 — H-01: in real firebase-admin, `firestore(app)` returns
+  // a Firestore *instance* with methods like .doc(), .collection(),
+  // and .FieldValue (static property). The proxy reads
+  // `admin.db.doc(path)` — so the factory must return an object
+  // with `.doc`. FieldValue is hung off the returned object too.
+  const fsInstance = {
+    doc: (path) => ({
+      get: async () => {
+        if (mockState.events.has(path)) {
+          const d = mockState.events.get(path);
+          return { exists: true, data: () => d };
         }
-        const err = new Error('auth/argument-error: invalid token');
-        err.code = 'auth/argument-error';
-        throw err;
+        if (mockState.guestLinks.has(path)) {
+          const d = mockState.guestLinks.get(path);
+          return { exists: true, data: () => d };
+        }
+        if (mockState.rateCounters.has(path)) {
+          return { exists: true, data: () => ({ count: mockState.rateCounters.get(path) }) };
+        }
+        return { exists: false, data: () => undefined };
       },
-    };
-    const fakeFirestore = {
-      doc: (path) => ({
-        get: async () => {
-          if (mockState.events.has(path)) {
-            const d = mockState.events.get(path);
-            return { exists: true, data: () => d };
-          }
-          if (mockState.guestLinks.has(path)) {
-            const d = mockState.guestLinks.get(path);
-            return { exists: true, data: () => d };
-          }
-          if (mockState.rateCounters.has(path)) {
-            return { exists: true, data: () => ({ count: mockState.rateCounters.get(path) }) };
-          }
-          return { exists: false, data: () => undefined };
-        },
-        set: async (val, opts) => {
-          const prev = mockState.rateCounters.get(path) || 0;
-          // FieldValue.increment(1) → { increment: 1, _isFieldValue: true }
-          // We treat it as +1; any other numeric count value replaces.
-          let inc;
-          if (val && val.count && val.count._isFieldValue && typeof val.count.increment === 'number') {
-            inc = val.count.increment;
-          } else if (typeof val?.count === 'number') {
-            inc = val.count;
-          } else {
-            inc = 0;
-          }
-          mockState.rateCounters.set(path, prev + inc);
-        },
-      }),
-      FieldValue: fakeFieldValue,
-    };
-    return {
-      // 2026-08-13 — H-01 ESM/CJS interop. Under Node ESM dynamic
-      // import('firebase-admin'), `.default` is the real module.
-      // The proxy reads `adminNs.default.getApps()` etc., so the
-      // mock has to expose the same shape.
-      default: {
-        apps: [],
-        getApps: () => [],
-        getApp: () => ({ name: 'mock-app' }),
-        initializeApp: () => {},
-        credential: { cert: () => ({}), applicationDefault: () => ({}) },
-        auth: () => fakeAuth,
-        firestore: Object.assign(() => fakeFirestore, { FieldValue: fakeFieldValue }),
+      set: async (val, opts) => {
+        const prev = mockState.rateCounters.get(path) || 0;
+        let inc;
+        if (val && val.count && val.count._isFieldValue && typeof val.count.increment === 'number') {
+          inc = val.count.increment;
+        } else if (typeof val?.count === 'number') {
+          inc = val.count;
+        } else {
+          inc = 0;
+        }
+        mockState.rateCounters.set(path, prev + inc);
       },
-      apps: [],
-      getApps: () => [],
-      initializeApp: () => {},
-      credential: { cert: () => ({}), applicationDefault: () => ({}) },
-      auth: () => fakeAuth,
-      firestore: Object.assign(() => fakeFirestore, { FieldValue: fakeFieldValue }),
-    };
-  });
+    }),
+    FieldValue: mockFieldValue,
+  };
+  return fsInstance;
+});
+
+const mockFirebaseAdmin = vi.hoisted(() => {
+  // 2026-08-13 — H-01: the firestore namespace has TWO meanings:
+  //   1. `firestore.FieldValue` is a STATIC property on the
+  //      firebase-admin namespace itself (proxy reads
+  //      `adminFirestore.FieldValue`).
+  //   2. `firestore(app)` is a FACTORY that returns an instance
+  //      with `.doc()` / `.collection()` (proxy reads
+  //      `admin.db.doc(path)`).
+  // Mirror both.
+  const firestoreFn = () => mockFirebaseAdminFs;
+  firestoreFn.FieldValue = mockFieldValue;
+  return {
+    apps: [],
+    getApps: () => [],
+    initializeApp: () => {},
+    cert: () => ({}),
+    applicationDefault: () => ({}),
+    auth: () => mockFirebaseAdminAuth,
+    firestore: firestoreFn,
+    FieldValue: mockFieldValue,
+    initializeAppCalls: 0,
+    certCalls: 0,
+  };
+});
+
+vi.doMock('firebase-admin', () => {
+  // Track that initializeApp / cert are actually called so the
+  // test can verify SA flow vs ADC fallback.
+  const origInit = mockFirebaseAdmin.initializeApp;
+  const origCert = mockFirebaseAdmin.cert;
+  mockFirebaseAdmin.initializeApp = (...args) => {
+    mockFirebaseAdmin.initializeAppCalls += 1;
+    return origInit(...args);
+  };
+  mockFirebaseAdmin.cert = (...args) => {
+    mockFirebaseAdmin.certCalls += 1;
+    return origCert(...args);
+  };
+  // 2026-08-13 — H-01: vitest's CJS interop expects the mock
+  // factory to expose a `default` field for default-import form.
+  // (Production uses `import admin from 'firebase-admin'` then
+  // destructures, so the mock has to mirror that shape.)
+  return { default: mockFirebaseAdmin, ...mockFirebaseAdmin };
+});
 }
 
 // The proxy reads these env vars at module-load time. We set them

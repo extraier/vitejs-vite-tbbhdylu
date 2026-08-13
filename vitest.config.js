@@ -25,6 +25,11 @@ export default defineConfig({
       '**/node_modules/**',
       '**/dist/**',
       'functions/test/**',
+      // 2026-08-13 — H-01: vercel build emits .vercel/output/ which
+      // contains a build of api/photo-upload.test.js. That nested
+      // copy used to break the test run with "duplicate suite"
+      // errors and stale state from a different module cache.
+      '.vercel/**',
     ],
   },
   define: {
