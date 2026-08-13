@@ -27,6 +27,12 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import * as crypto from 'crypto';
 import { sendViaSendgrid } from './sendgridMailer';
+// 2026-08-13 — C-01 (CRITICAL) fix. Invitation state used to live on
+// the public /vendors/{slug} doc, which let anyone read the token
+// via the open `allow read: if true` rule. Now minted into
+// /vendorInvites/{slug}, which is deny-all on the client. See
+// vendorInvites.ts for the full rationale.
+import { issueInvite } from './vendorInvites';
 
 try {
   initializeApp();
@@ -184,22 +190,23 @@ async function processPendingInvite(
     return { sent: false, reason: 'vendor already onboarded' };
   }
 
-  // Mint a fresh token and stamp the vendor doc.
+  // Mint a fresh token and stamp the invite collection.
+  // 2026-08-13 — C-01 fix: was writing invitationToken onto the
+  // public /vendors/{slug} doc. Now writes to /vendorInvites/{slug}
+  // which is deny-all for clients (see vendorInvites.ts).
   const token = genToken(INVITE_TOKEN_LEN);
   const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
   const baseUrl = (process.env.APP_BASE_URL || '').replace(/\/+$/, '');
   const signupUrl = `${baseUrl || 'https://savetheday.io'}/?signup&venue=${encodeURIComponent(slug)}&token=${token}`;
 
-  await vendorRef.set(
-    {
-      signupStatus: 'invited',
-      invitationToken: token,
-      invitationExpiresAt: expiresAt,
-      invitedEmail: email,
-      invitedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
+  await issueInvite({
+    slug,
+    token,
+    expiresAt,
+    invitedEmail: email,
+    invitedBy: null, // fired by a Firestore trigger from a couple's pendingInvite — not an admin action
+    source: 'pending_invite',
+  });
 
   // SMTP
   const smtpUrl = process.env.SMTP_URL;

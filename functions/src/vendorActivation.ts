@@ -33,6 +33,19 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import * as crypto from 'crypto';
 import { sendViaSendgrid } from './sendgridMailer';
+// 2026-08-13 — C-01 (CRITICAL) fix. All four writers (activateSeededVendor,
+// sendVendorInviteEmail, bulkActivateVendors, plus the helper path) used
+// to stamp `invitationToken` onto the public /vendors/{slug} doc.
+// Now routed through vendorInvites.{issueInvite,readInvite,deleteInvite}
+// so the token lives only in /vendorInvites/{slug} which is deny-all
+// for clients (see firestore.rules).
+import {
+  issueInvite,
+  readInvite,
+  deleteInvite,
+  stripInviteFieldsFromVendorDoc,
+  expiresAtMillis,
+} from './vendorInvites';
 // 2026-08-09 — shared contact-linker from vendors.ts. Wired into
 // claimAndApplyAsVendor so a claimed seeded vendor links to any
 // pre-existing unlinked contacts.
@@ -188,16 +201,17 @@ export const activateSeededVendor = onCall(
 
     const token = genToken(INVITE_TOKEN_LEN);
     const expiresAt = Date.now() + (ttlMs && ttlMs > 0 ? ttlMs : INVITE_TTL_MS);
-    await found.ref.set(
-      {
-        signupStatus: 'invited',
-        invitationToken: token,
-        invitationExpiresAt: new Date(expiresAt),
-        invitedAt: FieldValue.serverTimestamp(),
-        invitedBy: req.auth!.uid,
-      },
-      { merge: true },
-    );
+    // 2026-08-13 — C-01 fix: was writing invitationToken onto the
+    // public /vendors/{slug} doc. Now writes to /vendorInvites/{slug}
+    // which is deny-all for clients.
+    await issueInvite({
+      slug,
+      token,
+      expiresAt: new Date(expiresAt),
+      invitedEmail: null,
+      invitedBy: req.auth!.uid,
+      source: 'admin_console',
+    });
     // Analytics — note the admin actor so we can attribute later.
     await logActivationEvent({
       type: 'token_issued',
@@ -259,14 +273,22 @@ export const claimSeededVendor = onCall(
     }
     const data = slugSnap.data() as any;
 
-    // Token check + expiry
-    if (data.invitationToken !== invitationToken) {
+    // 2026-08-13 — C-01 fix: invitation state now lives in
+    // /vendorInvites/{slug} (deny-all for clients), not on the
+    // public /vendors/{slug} doc. Read from the dedicated collection.
+    const invite = await readInvite(slug);
+    if (!invite) {
+      throw new HttpsError('not-found', 'Invitation no longer valid — ask admin to re-issue.');
+    }
+
+    // Token check + expiry (against the /vendorInvites doc).
+    if (invite.invitationToken !== invitationToken) {
       throw new HttpsError('permission-denied', 'Invitation token 不正確 (token mismatch).');
     }
-    if (data.signupStatus === 'claimed') {
+    if (invite.signupStatus === 'claimed') {
       throw new HttpsError('failed-precondition', 'Invitation already used.');
     }
-    const expires = data.invitationExpiresAt?.toMillis?.() || 0;
+    const expires = expiresAtMillis(invite.invitationExpiresAt);
     if (!expires || expires < Date.now()) {
       throw new HttpsError('failed-precondition', 'Invitation expired — ask admin to re-issue.');
     }
@@ -284,6 +306,9 @@ export const claimSeededVendor = onCall(
     }
 
     // Copy doc fields, drop slug-specific transient fields, mark as claimed.
+    // The transient fields are now in /vendorInvites/{slug} (separate doc),
+    // so we only need to scrub them from the directory copy defensively —
+    // belt-and-braces in case a pre-fix migration left any behind.
     const {
       invitationToken: _t,
       invitationExpiresAt: _e,
@@ -344,6 +369,17 @@ export const claimSeededVendor = onCall(
     batch.set(existingAuthRef, newDoc);
     batch.delete(slugRef);
     await batch.commit();
+
+    // 2026-08-13 — C-01 cleanup: the invite is now a separate doc
+    // under /vendorInvites/{slug}, and we also want to belt-and-braces
+    // strip any residual invitation fields from the slug doc before
+    // it's deleted (defensive: pre-fix docs may have had them).
+    // Both operations are idempotent and independent of the main
+    // transaction; if either fails the claim itself still succeeded.
+    await Promise.allSettled([
+      deleteInvite(slug),
+      stripInviteFieldsFromVendorDoc(slug),
+    ]);
 
     // Analytics — log the success path. We log AFTER the commit so we
     // never write a "success" event for a transaction that actually
@@ -491,7 +527,20 @@ export const claimAndApplyAsVendor = onCall(
       throw new HttpsError('not-found', 'Invitation no longer valid — vendor was claimed by another path.');
     }
     const slugData = slugSnap.data() as any;
-    if (slugData.invitationToken !== data.invitationToken) {
+    // 2026-08-13 — C-01 fix: read token + expiry + signupStatus from
+    // the dedicated /vendorInvites/{slug} doc, not from the public
+    // /vendors/{slug} doc.
+    const invite = await readInvite(data.slug);
+    if (!invite) {
+      await logActivationEvent({
+        type: 'apply_failed',
+        slug: data.slug,
+        authUid,
+        errorMessage: 'Invitation no longer valid — ask admin to re-issue.',
+      });
+      throw new HttpsError('not-found', 'Invitation no longer valid — ask admin to re-issue.');
+    }
+    if (invite.invitationToken !== data.invitationToken) {
       await logActivationEvent({
         type: 'apply_failed',
         slug: data.slug,
@@ -500,7 +549,7 @@ export const claimAndApplyAsVendor = onCall(
       });
       throw new HttpsError('permission-denied', 'Invitation token 不正確 (token mismatch).');
     }
-    if (slugData.signupStatus === 'claimed') {
+    if (invite.signupStatus === 'claimed') {
       await logActivationEvent({
         type: 'apply_failed',
         slug: data.slug,
@@ -509,7 +558,7 @@ export const claimAndApplyAsVendor = onCall(
       });
       throw new HttpsError('failed-precondition', 'Invitation already used.');
     }
-    const expires = slugData.invitationExpiresAt?.toMillis?.() || 0;
+    const expires = expiresAtMillis(invite.invitationExpiresAt);
     if (!expires || expires < Date.now()) {
       await logActivationEvent({
         type: 'apply_failed',
@@ -600,6 +649,15 @@ export const claimAndApplyAsVendor = onCall(
     batch.delete(slugRef);
     await batch.commit();
 
+    // 2026-08-13 — C-01 cleanup: delete the now-consumed invite doc
+    // and belt-and-braces strip any residual invitation fields from
+    // the slug doc before deletion (defensive: pre-fix docs may have
+    // had them). Both idempotent and independent of the main tx.
+    await Promise.allSettled([
+      deleteInvite(data.slug),
+      stripInviteFieldsFromVendorDoc(data.slug),
+    ]);
+
     // 2026-08-09 — Link any pre-existing unlinked vendorContacts whose
     // (name + category) matches this newly-claimed vendor. See
     // linkMatchingVendorContacts in vendors.ts for the rationale.
@@ -685,17 +743,16 @@ export const sendVendorInviteEmail = onCall(
       // email leak the same URL to anyone who has it.
       const token = genToken(INVITE_TOKEN_LEN);
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
-      await found.ref.set(
-        {
-          signupStatus: 'invited',
-          invitationToken: token,
-          invitationExpiresAt: expiresAt,
-          invitedEmail: email,
-          invitedAt: FieldValue.serverTimestamp(),
-          invitedBy: req.auth!.uid,
-        },
-        { merge: true },
-      );
+      // 2026-08-13 — C-01 fix: was writing invitationToken onto the
+      // public /vendors/{slug} doc. Now writes to /vendorInvites/{slug}.
+      await issueInvite({
+        slug,
+        token,
+        expiresAt,
+        invitedEmail: email,
+        invitedBy: req.auth!.uid,
+        source: 'send_vendor_invite',
+      });
       const baseUrl = (process.env.APP_BASE_URL || '').replace(/\/+$/, '');
       signupUrl = `${baseUrl || 'https://savetheday.io'}/?signup&venue=${encodeURIComponent(slug)}&token=${token}`;
     }
@@ -888,17 +945,16 @@ export const bulkActivateSeededVendors = onCall(
         // vendor callable so behavior is identical.
         const token = genToken(INVITE_TOKEN_LEN);
         const expiresAt = new Date(Date.now() + expiresMs);
-        await found.ref.set(
-          {
-            signupStatus: 'invited',
-            invitationToken: token,
-            invitationExpiresAt: expiresAt,
-            invitedAt: FieldValue.serverTimestamp(),
-            invitedBy: req.auth!.uid,
-            ...(item.email ? { invitedEmail: item.email } : {}),
-          },
-          { merge: true },
-        );
+        // 2026-08-13 — C-01 fix: was writing invitationToken onto the
+        // public /vendors/{slug} doc. Now writes to /vendorInvites/{slug}.
+        await issueInvite({
+          slug: item.slug,
+          token,
+          expiresAt,
+          invitedEmail: item.email ?? null,
+          invitedBy: req.auth!.uid,
+          source: 'bulk_activate',
+        });
         const signupUrl = `${fallbackBase}/?signup&venue=${encodeURIComponent(item.slug)}&token=${encodeURIComponent(token)}`;
         minted++;
 

@@ -1416,6 +1416,27 @@ match /{path=**}/events/{eventId} {
     }
 
     match /vendors/{vendorUid} {
+      // 2026-08-13 — C-01 (CRITICAL) fix: invitation-only fields
+      // (invitationToken, invitationExpiresAt, invitedEmail, invitedAt,
+      // invitedBy, signupStatus, claimedByUid, claimedAt, source) used
+      // to live on the public /vendors/{slug} doc. Anyone — signed in
+      // or not — could `GET /vendors/{slug}` and harvest the token,
+      // then call `claimSeededVendor` to take over the vendor profile.
+      //
+      // The public vendor doc now ONLY carries directory fields
+      // (name, category, contact, serviceArea, portfolio, etc.).
+      // Invitation state lives under /vendorInvites/{slug}, which is
+      // fully deny-all on the client and only ever read/written by
+      // Cloud Functions running with Admin SDK credentials.
+      //
+      // The `allow read: if true` here is therefore safe: even if a
+      // leaked invitationToken *was* somehow still present in a stale
+      // doc, the client SDK would still be able to read it — so this
+      // rule alone isn't sufficient. The actual safety guarantee
+      // comes from (a) all writers no longer writing the token here
+      // (vendorInviteTrigger.ts / vendorActivation.ts), and (b) the
+      // one-shot migration in scripts/migrate-vendor-invites-2026-08-13
+      // that strips any residual fields from existing docs.
       allow read: if true;
       // 2026-07-19 — Vendor CSV import (admin batch) writes here with
       // either: (a) derived ids like 'imp-...', or (b) explicit vendor
@@ -1556,6 +1577,25 @@ match /{path=**}/events/{eventId} {
         && request.resource.data.timestamp == request.time;
       allow read: if isAdmin();
       allow update, delete: if false;
+    }
+
+    // ---- Vendor invitations (root-level collection) ---------------------
+    // 2026-08-13 — C-01 (CRITICAL) fix. Used to live as fields on the
+    // public /vendors/{slug} doc, which meant anyone (signed in or not)
+    // could GET the doc and harvest invitationToken, then call
+    // claimSeededVendor to hijack the seeded vendor profile. Moved
+    // here so the token never touches a public doc.
+    //
+    // Doc id is the slug (matches /vendors/{slug}). Lifecycle:
+    //   created by vendorInviteTrigger on /vendors/{slug}/pendingInvites
+    //   re-issued by vendorActivation.activateSeededVendor / bulk
+    //   consumed by claimSeededVendor + claimAndApplyAsVendor
+    //   deleted by vendorActivation after successful claim
+    // Cloud Functions write/read with Admin SDK and bypass these
+    // rules — so this deny-all is what guarantees the token never
+    // leaves the server side.
+    match /vendorInvites/{slug} {
+      allow read, write: if false;
     }
 
     // ---- Default deny everything else --------------------------------
