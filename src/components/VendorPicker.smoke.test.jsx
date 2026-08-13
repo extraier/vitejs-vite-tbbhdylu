@@ -21,8 +21,18 @@ import { ItemComments } from './ItemComments';
 // Mock the firebase firestore module so ItemComments doesn't try to
 // actually open a socket during the test. We capture the onSnapshot
 // callback and replay it manually with a fake comments array.
-vi.mock('firebase/firestore', () => {
+//
+// 2026-08-13 — M-03 audit fix. Switched from a total mock to
+// `importOriginal` partial mocking. The previous full mock didn't
+// export `getFirestore` (which src/lib/firebase.ts imports
+// transitively via src/lib/firebaseFn.js), so the test file
+// failed to load before any test ran. Partial mocking forwards
+// the real exports for everything we don't override, so the
+// bootstrap path stays functional.
+vi.mock('firebase/firestore', async (importOriginal) => {
+  const actual = await importOriginal();
   return {
+    ...actual,
     onSnapshot: (q, onNext) => {
       // Expose the most recent onNext for the test to invoke.
       globalThis.__lastCommentsCb = onNext;
@@ -30,7 +40,6 @@ vi.mock('firebase/firestore', () => {
     },
     addDoc: vi.fn(async () => ({ id: 'fake-comment-id' })),
     deleteDoc: vi.fn(async () => {}),
-    serverTimestamp: () => ({ _isServerTimestamp: true }),
     collection: vi.fn((db, ...segments) => ({ __segments: segments })),
   };
 });
