@@ -33,6 +33,14 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import * as crypto from 'crypto';
 import { sendViaSendgrid } from './sendgridMailer';
+// 2026-08-13 — H-03 audit fix. Vendor activation paths now
+// funnel through the canonical `setVendorClaim` chokepoint
+// (defined in vendors.ts). Previously only `applyAsVendor`
+// set the `vendor: true` custom claim; `claimSeededVendor`
+// and `claimAndApplyAsVendor` skipped this step, leaving
+// seeded-slot vendors un-routed in App.jsx (its auto-route
+// only fires when `useAuth().isVendor` flips true).
+import { setVendorClaim } from './vendors';
 // 2026-08-13 — C-01 (CRITICAL) fix. All four writers (activateSeededVendor,
 // sendVendorInviteEmail, bulkActivateVendors, plus the helper path) used
 // to stamp `invitationToken` onto the public /vendors/{slug} doc.
@@ -391,6 +399,15 @@ export const claimSeededVendor = onCall(
       detail: { migratedStorageObjects: movedCount },
     });
 
+    // 2026-08-13 — H-03 audit fix. Set the `vendor: true` custom claim
+    // AFTER the doc commit so a partial-write never yields a
+    // "vendor with no profile" state. The chokepoint merges with
+    // existing claims (admin, helper) and revokes refresh tokens
+    // so the user's next getIdTokenResult({forceRefresh: true})
+    // reflects the change immediately — which App.jsx watches to
+    // auto-route them to the vendor dashboard.
+    await setVendorClaim(authUid, true);
+
     return { ok: true, authUid, migratedStorageObjects: movedCount };
   },
 );
@@ -681,6 +698,13 @@ export const claimAndApplyAsVendor = onCall(
         wizardSubcategory: sanitized.subcategory,
       },
     });
+
+    // 2026-08-13 — H-03 audit fix. Funnel through the canonical
+    // chokepoint so seeded-slot AND wizard applicants both get
+    // the `vendor: true` custom claim. Without this claim
+    // App.jsx's auto-route never fires (its gating reads
+    // useAuth().isVendor, which is bound to the claim).
+    await setVendorClaim(authUid, true);
 
     return { ok: true, vendorUid: authUid, status: 'pending', migratedStorageObjects: movedCount };
   },

@@ -48,6 +48,77 @@ const db = getFirestore();
 // For /vendors/* we use the flat path (no appId prefix) — see firestore.rules.
 const APP_ID = 'savetheday-production';
 
+/**
+ * 2026-08-13 — H-03 audit fix.
+ *
+ * Pure-logic version of the vendor claim flip. Returns the new
+ * claims object given the existing claims and the requested value.
+ * Extracted from `setVendorClaim` (below) so it can be unit-tested
+ * without the firebase-admin SDK.
+ *
+ * Why export this as its own function: the audit requires one
+ * named canonical pathway for vendor activation. The only thing
+ * that's *actually canonical* about that pathway is "this is the
+ * place that decides what the new claims object looks like". Pulling
+ * the decision out of the I/O wrapper means a future migration (e.g.
+ * a new "vip" role) can update this single 6-line function instead
+ * of touching every callsite that mints a vendor claim.
+ *
+ * Invariants enforced here:
+ *  - Existing claims are always preserved (helper, admin, etc.)
+ *  - When value is true: set `vendor: true` explicitly
+ *  - When value is false: REMOVE the `vendor` key (NOT set false —
+ *    firebase-admin treats absent as undefined and reads it as
+ *    falsy, but a literal `false` survives token round-trips and
+ *    can surprise later `claims.vendor === true` checks).
+ */
+export function mergeVendorClaim(
+  existingClaims: Record<string, unknown>,
+  value: boolean,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...existingClaims };
+  if (value) {
+    next.vendor = true;
+  } else {
+    delete next.vendor;
+  }
+  return next;
+}
+
+/**
+ * 2026-08-13 — H-03 audit fix.
+ *
+ * Canonical chokepoint for setting the `vendor: true` custom claim on
+ * a Firebase Auth user. Every code path that creates/claims a vendor
+ * profile MUST funnel through this helper so the claim-set is
+ * consistent across `applyAsVendor` (free-form wizard) and the two
+ * seeded-slot paths (`claimSeededVendor`, `claimAndApplyAsVendor`).
+ *
+ * Why a helper instead of inline `setCustomUserClaims` at each callsite:
+ *  - One place to enforce "claim preserved alongside other roles"
+ *    (we always MERGE with existing claims; we NEVER touch admin).
+ *  - One place to call `revokeRefreshTokens` after the claim flip —
+ *    missing this is why seeded-slot vendors never get the
+ *    refreshed token that App.jsx's auto-route watches for.
+ *  - One place to update later when we add `vip`, `enterprise`,
+ *    or any other role-as-claim.
+ *
+ * @param uid   Firebase Auth uid of the user.
+ * @param value true to set `vendor: true`, false to clear the claim.
+ */
+export async function setVendorClaim(uid: string, value: boolean): Promise<void> {
+  const auth = getAdminAuth();
+  const existingClaims = (await auth.getUser(uid)).customClaims || {};
+  // Defer the decision to the pure helper so the merge logic is
+  // unit-testable without a firebase-admin mock.
+  const nextClaims = mergeVendorClaim(existingClaims, value);
+  await auth.setCustomUserClaims(uid, nextClaims as Record<string, boolean>);
+  // Force a token refresh — without this the user must wait for
+  // the 1-hour token cache to expire before App.jsx sees the
+  // updated claim.
+  await auth.revokeRefreshTokens(uid);
+}
+
 // --- Whitelisted fields for both apply + update ------------------------------
 // Anything outside this list is silently dropped. Prevents accidental shape
 // drift between client and server, and gives us a single place to evolve the
@@ -249,17 +320,14 @@ export const applyAsVendor = onCall(
 
     await vendorRef.set(vendorDoc);
 
-    // Set the `vendor` custom claim so the routing logic in App.jsx sees
-    // this user as a vendor on next sign-in / token refresh.
-    const auth = getAdminAuth();
-    const existingClaims = (await auth.getUser(vendorUid)).customClaims || {};
-    await auth.setCustomUserClaims(vendorUid, {
-      ...existingClaims,
-      vendor: true,
-      // Note: do NOT auto-set admin:true. Admin is a separate role.
-    });
-    // Force a token refresh so the claim is available on the next request.
-    await auth.revokeRefreshTokens(vendorUid);
+    // 2026-08-13 — H-03 audit fix: route the claim-set through
+    // the canonical chokepoint `setVendorClaim` (defined below).
+    // Previously only applyAsVendor set the claim; claimSeededVendor
+    // and claimAndApplyAsVendor skipped this step, leaving seeded
+    // vendors un-routed in App.jsx (App.jsx's vendor auto-route
+    // only fires when useAuth's `isVendor` claim is true). All
+    // three entry points now converge here.
+    await setVendorClaim(vendorUid, true);
 
     // Best-effort: also write a minimal profile entry under
     // artifacts/{appId}/users/{uid} so future queries that expect a
