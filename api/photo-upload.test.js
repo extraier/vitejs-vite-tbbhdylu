@@ -117,14 +117,21 @@ async function installFakeAdmin() {
       FieldValue: fakeFieldValue,
     };
     return {
+      // 2026-08-13 — H-01 ESM/CJS interop. Under Node ESM dynamic
+      // import('firebase-admin'), `.default` is the real module.
+      // The proxy reads `adminNs.default.getApps()` etc., so the
+      // mock has to expose the same shape.
       default: {
         apps: [],
+        getApps: () => [],
+        getApp: () => ({ name: 'mock-app' }),
         initializeApp: () => {},
         credential: { cert: () => ({}), applicationDefault: () => ({}) },
         auth: () => fakeAuth,
         firestore: Object.assign(() => fakeFirestore, { FieldValue: fakeFieldValue }),
       },
       apps: [],
+      getApps: () => [],
       initializeApp: () => {},
       credential: { cert: () => ({}), applicationDefault: () => ({}) },
       auth: () => fakeAuth,

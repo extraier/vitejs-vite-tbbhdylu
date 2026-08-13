@@ -134,28 +134,21 @@ let _adminDb = null;
 export async function __getAdmin__() {
   if (_adminApp) return { auth: _adminAuth, db: _adminDb, firestore: _adminNs && _adminNs.firestore, FieldValue: _adminNs && _adminNs.firestore && _adminNs.firestore.FieldValue };
   // firebase-admin is a CommonJS module. Under ESM dynamic
-  // import, the namespace IS the module — `.default` is undefined.
-  // Use the namespace directly.
-  const admin = await import('firebase-admin');
-  if (!admin.apps.length) {
+  // import, the namespace IS the module wrapper — but it doesn't
+  // expose `apps` (that's a getter on the default export). We need
+  // `admin.default` to get the real module object with `getApps`,
+  // `credential`, `auth`, `firestore`, etc.
+  const adminNs = await import('firebase-admin');
+  const admin = adminNs.default || adminNs;
+  if (admin.getApps().length === 0) {
     // Prefer a service-account JSON blob if provided (recommended
     // for Vercel since ADC isn't available in serverless runtime).
     const sa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
-    // eslint-disable-next-line no-console
-    console.log('[photo-upload] admin init', {
-      hasServiceAccountJson: Boolean(sa),
-      saPrefix: sa ? sa.slice(0, 40) : null,
-      saLen: sa ? sa.length : 0,
-    });
     if (sa) {
       try {
         const credentials = JSON.parse(sa);
-        // eslint-disable-next-line no-console
-        console.log('[photo-upload] admin init', { projectId: credentials.project_id, clientEmail: credentials.client_email });
         admin.initializeApp({ credential: admin.credential.cert(credentials) });
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('[photo-upload] admin init failed', err && err.message ? err.message : String(err));
         throw new Error(`FIREBASE_SERVICE_ACCOUNT_JSON is set but malformed: ${err.message}`);
       }
     } else {
@@ -164,16 +157,10 @@ export async function __getAdmin__() {
       // server). Vercel serverless doesn't — so this branch will
       // throw at first auth.verifyIdToken() call. We surface a
       // loud error so it's obvious in deploy logs.
-      try {
-        admin.initializeApp({ credential: admin.credential.applicationDefault() });
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.error('[photo-upload] ADC init failed', err && err.message ? err.message : String(err));
-        throw err;
-      }
+      admin.initializeApp({ credential: admin.credential.applicationDefault() });
     }
   }
-  _adminApp = admin.apps[0];
+  _adminApp = admin.getApp();
   _adminNs = admin;
   _adminAuth = admin.auth(_adminApp);
   _adminDb = admin.firestore(_adminApp);
