@@ -153,25 +153,21 @@ const mockFirebaseAdmin = vi.hoisted(() => {
   };
 });
 
-vi.doMock('firebase-admin', () => {
-  // Track that initializeApp / cert are actually called so the
-  // test can verify SA flow vs ADC fallback.
-  const origInit = mockFirebaseAdmin.initializeApp;
-  const origCert = mockFirebaseAdmin.cert;
-  mockFirebaseAdmin.initializeApp = (...args) => {
-    mockFirebaseAdmin.initializeAppCalls += 1;
-    return origInit(...args);
-  };
-  mockFirebaseAdmin.cert = (...args) => {
-    mockFirebaseAdmin.certCalls += 1;
-    return origCert(...args);
-  };
-  // 2026-08-13 — H-01: vitest's CJS interop expects the mock
-  // factory to expose a `default` field for default-import form.
-  // (Production uses `import admin from 'firebase-admin'` then
-  // destructures, so the mock has to mirror that shape.)
-  return { default: mockFirebaseAdmin, ...mockFirebaseAdmin };
-});
+vi.doMock('firebase-admin/app', () => ({
+  initializeApp: (...args) => mockFirebaseAdmin.initializeApp(...args),
+  getApps: () => mockFirebaseAdmin.getApps(),
+  cert: (...args) => mockFirebaseAdmin.cert(...args),
+  applicationDefault: (...args) => mockFirebaseAdmin.applicationDefault(...args),
+}));
+
+vi.doMock('firebase-admin/auth', () => ({
+  getAuth: (app) => mockFirebaseAdminAuth,
+}));
+
+vi.doMock('firebase-admin/firestore', () => ({
+  getFirestore: (app) => mockFirebaseAdminFs,
+  FieldValue: mockFieldValue,
+}));
 }
 
 // The proxy reads these env vars at module-load time. We set them

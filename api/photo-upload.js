@@ -137,13 +137,13 @@ let _adminDb = null;
 // fail in CI). The exported name is double-underscored to flag
 // it as internal-only.
 export async function __getAdmin__() {
-  if (_adminApp) return { auth: _adminAuth, db: _adminDb, firestore: adminFirestore, FieldValue: adminFirestore.FieldValue };
-  // 2026-08-13 — H-01: use STATIC imports above (`initializeApp`,
-  // `getApps`, `cert`, etc.) instead of `await import('firebase-admin')`.
-  // Vercel's bundler tree-shakes unused CJS namespace exports, so
-  // dynamic-import reads like `admin.credential.cert` returned
-  // undefined at runtime. Static named imports force the bundler
-  // to keep the bindings.
+  if (_adminApp) return { auth: _adminAuth, db: _adminDb, firestore: undefined, FieldValue };
+  // 2026-08-13 — H-01: use STATIC sub-module imports above
+  // (`firebase-admin/app`, `firebase-admin/auth`, `firebase-admin/firestore`).
+  // These work on Vercel's Node runtime. Vercel's bundler tree-shakes
+  // unused CJS namespace exports, so dynamic-import reads like
+  // `admin.credential.cert` returned undefined at runtime. Static
+  // sub-module imports force the bundler to keep the bindings.
   if (getApps().length === 0) {
     const sa = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
     if (sa) {
@@ -158,9 +158,9 @@ export async function __getAdmin__() {
     }
   }
   _adminApp = getApps()[0];
-  _adminAuth = adminAuth(_adminApp);
-  _adminDb = adminFirestore(_adminApp);
-  return { auth: _adminAuth, db: _adminDb, firestore: adminFirestore, FieldValue: adminFirestore.FieldValue };
+  _adminAuth = getAuth(_adminApp);
+  _adminDb = getFirestore(_adminApp);
+  return { auth: _adminAuth, db: _adminDb, firestore: undefined, FieldValue };
 }
 
 export default async function handler(req, res) {
@@ -391,7 +391,7 @@ async function _handler(req, res) {
     );
     rateCap = RATE_LIMIT_PER_DAY;
   }
-  const FieldValue = adminFirestore.FieldValue;
+  // FieldValue is imported statically above from firebase-admin/firestore.
   if (!FieldValue) {
     log('fatal-no-field-value', {});
     res.status(500).json({ error: 'server misconfigured: firebase-admin FieldValue unavailable' });
