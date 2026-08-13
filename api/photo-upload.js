@@ -50,13 +50,18 @@
 //      H-04 fix from earlier for the proxy-side analog.
 
 import { randomUUID } from 'node:crypto';
-// 2026-08-13 — H-01: firebase-admin is a CommonJS module. Node's
-// ESM interop does NOT expose its functions as named imports
-// (`import { auth } from 'firebase-admin'` throws SyntaxError).
-// Use the default import and destructure. Vite's bundler
-// tolerates the named-import form but Vercel's esbuild does not.
-import admin from 'firebase-admin';
-const { initializeApp, getApps, cert, applicationDefault, auth: adminAuth, firestore: adminFirestore } = admin;
+// 2026-08-13 — H-01: firebase-admin v13+ split into sub-modules.
+// The top-level `firebase-admin` package only exposes
+// `initializeApp`, `getApps`, `cert`, `applicationDefault`. The
+// `auth()` and `firestore()` factory functions (and `FieldValue`)
+// live in `firebase-admin/auth` and `firebase-admin/firestore`.
+// Importing the top-level namespace as `import admin from` and
+// destructuring `auth`/`firestore` returns undefined for both in
+// production. Vite/vitest tolerated this because the mock factory
+// supplied the admin field by name; Vercel's runtime does not.
+import { initializeApp, getApps, cert, applicationDefault } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 
 const NAS_UPLOAD_URL =
   process.env.NAS_UPLOAD_URL ||
