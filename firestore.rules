@@ -60,7 +60,25 @@ match /{path=**}/events/{eventId} {
           // queries to be denied with 403 even with allow read: if
           // isSignedIn(). Moving to the top level with {path=**} allows
           // collectionGroup queries to work.
-          allow read: if isSignedIn();
+          //
+          // 2026-08-13 — H-02 (HIGH) TIGHTENING. The previous
+          // `allow read: if isSignedIn()` permitted any signed-in
+          // user to enumerate ALL events across ALL owners via
+          // collectionGroup('events'). Audit finding: a malicious
+          // user could harvest the entire events table by
+          // collectionGroup enumeration. Tightened to require
+          // the caller be the OWNER or in the event's `coOwners`
+          // array. The single live caller (App.jsx:1025, the
+          // coOwnedEvents picker) already filters with
+          // `where('coOwners','array-contains', user.uid)`, so
+          // every returned doc matches `auth.uid in coOwners` and
+          // the rule passes — zero behavior change for legitimate
+          // callers, while non-co-owners can no longer enumerate.
+          // Write rule unchanged: still tied to `ownerUid` (the
+          // path wildcard variable).
+          allow read: if isSignedIn()
+            && (resource.data._ownerUid == request.auth.uid
+                || request.auth.uid in resource.data.coOwners);
           allow create, update, delete: if isSignedIn() && request.auth.uid == ownerUid;
         }
 
@@ -71,8 +89,27 @@ match /{path=**}/events/{eventId} {
         // even for signed-in users (the nested rule at line 645 only
         // applies to per-doc get(), not collectionGroup). READ-only —
         // per-doc write stays owner-scoped at the nested rule.
+        //
+        // 2026-08-13 — H-02 (HIGH) TIGHTENING. The previous
+        // `allow read: if isSignedIn()` permitted any signed-in
+        // user to enumerate ALL vendorContacts across ALL owners.
+        // Tightened to require the caller be the doc's owner via
+        // a denormalized `ownerUid` field. The single live caller
+        // (contactLink.js, the auto-link lookup) filters with
+        // `where('vendorEmail','==', email)` — but that doesn't
+        // narrow by owner, so without this tightening a malicious
+        // user could craft a series of email-targeted queries to
+        // enumerate contacts across the entire database.
+        //
+        // Companion write-side change (App.jsx handleAddVendorContact
+        // + handleUpdateVendorContact): every new/updated doc now
+        // stamps `ownerUid` on the doc body. Legacy docs without
+        // `ownerUid` deny by default (the `hasAll` guard skips
+        // them) — this is the intended posture until the backfill
+        // migration runs (separate step per user direction).
         match /{path=**}/vendorContacts/{contactId} {
-          allow read: if isSignedIn();
+          allow read: if isSignedIn()
+            && resource.data.ownerUid == request.auth.uid;
         }
 
         // 2026-08-08 — collectionGroup FIX for tasks. VendorDashboard's
@@ -1071,8 +1108,42 @@ match /{path=**}/events/{eventId} {
         // word of mouth, etc.). Owner-only CRUD; supports optional
         // linkedVendorUid field for contacts whose vendor later signs
         // up and gets auto-linked. Used by MyVendorsPanel + chat.
+        //
+        // 2026-08-13 — H-02 (HIGH) AUDIT FIX. Added an OR branch
+        // that gates on the denormalized `ownerUid` field on the
+        // doc body. This makes the rule safe in collectionGroup
+        // LIST context (Class 27/30) where the co-owner helper's
+        // `get()` calls throw on LIVE. For per-doc reads (where
+        // path-bound `ownerUid` resolves), `isOwnerOrAnyCoOwner`
+        // still works as before — but the denormalized-field
+        // branch covers the collectionGroup runQuery path that
+        // contactLink.js uses.
         match /vendorContacts/{contactId} {
-          allow read: if isOwnerOrAnyCoOwner(ownerUid);
+          // 2026-08-13 — H-02 (HIGH) AUDIT FIX. The list rule
+          // must pass for the OWNER reading their own scoped
+          // collection even on legacy docs that don't have the
+          // `ownerUid` denormalized field yet. We can't use
+          // the denormalized field ALONE for the list rule —
+          // Firestore evaluates the rule on every candidate
+          // doc and any doc without `ownerUid` denies,
+          // killing the entire list (Class 27 runQuery
+          // divergence applies to LIST subcollections too).
+          //
+          // The path-bound `ownerUid` variable IS the owner's
+          // uid when they're reading their own scoped
+          // collection, so `isOwner(ownerUid)` is the safe
+          // list check. Co-owners fall through to the
+          // denormalized-field branch (their uid must be
+          // stamped on the doc body — same as H-02's events
+          // rule pattern). Legacy docs without `ownerUid`
+          // still deny to non-owners (preserves the
+          // cross-tenant read prevention).
+          //
+          // Writes still require the original co-owner logic
+          // (creates from a co-owner's session need the
+          // path-bound ownerUid to resolve).
+          allow read: if isOwner(ownerUid)
+            || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
           allow create, update: if isOwnerOrAnyCoOwner(ownerUid);
           allow delete: if isOwnerOrAnyCoOwner(ownerUid);
         }

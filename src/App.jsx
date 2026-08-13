@@ -1731,12 +1731,21 @@ export default function App() {
    };
 
    // ---- Vendor contact CRUD (主理新人 personal address book) ----
+   // 2026-08-13 — H-02 (HIGH) AUDIT FIX. Every new/updated
+   // vendorContact doc now stamps `ownerUid` on the doc body. The
+   // /{path=**}/vendorContacts/{contactId} collectionGroup rule
+   // (firestore.rules line 92+) gates reads on
+   // `resource.data.ownerUid == request.auth.uid` to close the
+   // cross-owner enumeration hole. Legacy docs without `ownerUid`
+   // are denied-by-default until the backfill migration runs
+   // (separate step per user direction).
    const handleAddVendorContact = async (data) => {
      if (!user) return;
      await addDoc(
        collection(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts'),
        {
          ...data,
+         ownerUid: user.uid, // H-02 denormalization — see comment above
          addedAt: serverTimestamp(),
          linkedVendorUid: null,
          invitationSentAt: null,
@@ -1747,10 +1756,12 @@ export default function App() {
    };
    const handleUpdateVendorContact = async (contact) => {
      if (!user || !contact?.id) return;
-     const { id, addedAt, ...rest } = contact;
+     const { id, addedAt, ownerUid: _ownerUid, ...rest } = contact;
+     // Force ownerUid to current user — denormalized field is
+     // owner-bound at write time, never trusts client-supplied value.
      await updateDoc(
        doc(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts', id),
-       rest,
+       { ...rest, ownerUid: user.uid },
      );
      showToast('✅ 已更新');
    };
