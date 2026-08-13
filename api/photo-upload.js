@@ -133,7 +133,10 @@ let _adminDb = null;
 // it as internal-only.
 export async function __getAdmin__() {
   if (_adminApp) return { auth: _adminAuth, db: _adminDb, firestore: _adminNs && _adminNs.firestore, FieldValue: _adminNs && _adminNs.firestore && _adminNs.firestore.FieldValue };
-  const admin = (await import('firebase-admin')).default;
+  // firebase-admin is a CommonJS module. Under ESM dynamic
+  // import, the namespace IS the module — `.default` is undefined.
+  // Use the namespace directly.
+  const admin = await import('firebase-admin');
   if (!admin.apps.length) {
     // Prefer a service-account JSON blob if provided (recommended
     // for Vercel since ADC isn't available in serverless runtime).
