@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from 'react';
+
+// 2026-08-13 — M-04 audit fix. Helper component that wraps a
+// React.lazy() screen in <Suspense> with a lightweight fallback.
+// Use instead of repeating <Suspense fallback={<div>...</div>}> at
+// every call site (13 lazy screens).
+function LazyScreen({ children, fallback = null }) {
+  return <Suspense fallback={fallback}>{children}</Suspense>;
+}
 import { Heart, Users, MessageCircle, ChevronLeft } from 'lucide-react';
 import {
      addDoc,
@@ -80,25 +88,44 @@ import { CoupleBudget } from './screens/CoupleBudget';
 import { CoupleJobBoard } from './screens/CoupleJobBoard';
 import { GuestList } from './screens/GuestList';
 import { PhotoDrop } from './screens/PhotoDrop';
-import { DiscoverDirectory } from './screens/DiscoverDirectory';
-import { VendorAnalytics } from './screens/VendorAnalytics';
-import { AdminUsers } from './screens/AdminUsers';
-import { AdminQueue } from './screens/AdminQueue';
-import { AdminVendors } from './screens/AdminVendors';
-import { AdminImportVendors } from './screens/AdminImportVendors';
-import { AdminPaymentSettings } from './screens/AdminPaymentSettings';
-import { VendorOnboarding } from './screens/VendorOnboarding';
-import { VendorDashboard } from './screens/VendorDashboard';
-import { VendorProfileEdit } from './screens/VendorProfileEdit';
+// 2026-08-13 — DiscoverDirectory converted to lazy() below.
+// 2026-08-13 — M-04 audit fix. Heavy screens are now React.lazy() so
+// they're split into separate chunks instead of bloating the main
+// bundle. Per the audit: 'load admin panels, invitation editing,
+// PDF/HTML canvas export, scanner flows, and heavy directory
+// components only when opened. Avoid importing a module both
+// eagerly and lazily; centralize service imports so the bundler
+// has an unambiguous boundary.'
+//
+// Each lazy() screen renders inside a <Suspense fallback={null}/>
+// wrapper added below. The first time a user navigates to that
+// view, React fetches the chunk; subsequent navigations use the
+// cached module. The auth/role gates (isAdmin, isVendor, helper)
+// ensure non-privileged users never trigger the chunk fetch.
+
+const VendorAnalytics = lazy(() => import('./screens/VendorAnalytics').then((m) => ({ default: m.VendorAnalytics })));
+const AdminUsers = lazy(() => import('./screens/AdminUsers').then((m) => ({ default: m.AdminUsers })));
+const AdminQueue = lazy(() => import('./screens/AdminQueue').then((m) => ({ default: m.AdminQueue })));
+const AdminVendors = lazy(() => import('./screens/AdminVendors').then((m) => ({ default: m.AdminVendors })));
+const AdminImportVendors = lazy(() => import('./screens/AdminImportVendors').then((m) => ({ default: m.AdminImportVendors })));
+const AdminPaymentSettings = lazy(() => import('./screens/AdminPaymentSettings').then((m) => ({ default: m.AdminPaymentSettings })));
+const VendorDashboard = lazy(() => import('./screens/VendorDashboard').then((m) => ({ default: m.VendorDashboard })));
+const VendorProfileEdit = lazy(() => import('./screens/VendorProfileEdit').then((m) => ({ default: m.VendorProfileEdit })));
+const VendorOnboarding = lazy(() => import('./screens/VendorOnboarding').then((m) => ({ default: m.VendorOnboarding })));
+const ReceptionScanner = lazy(() => import('./screens/ReceptionScanner').then((m) => ({ default: m.ReceptionScanner })));
+const HelperDashboard = lazy(() => import('./screens/HelperDashboard').then((m) => ({ default: m.HelperDashboard })));
+const DiscoverDirectory = lazy(() => import('./screens/DiscoverDirectory').then((m) => ({ default: m.DiscoverDirectory })));
+const InvitationEditor = lazy(() => import('./screens/InvitationEditor').then((m) => ({ default: m.InvitationEditor })));
+const RedPacketManager = lazy(() => import('./screens/RedPacketManager').then((m) => ({ default: m.RedPacketManager })));
 import { MyProfile } from './screens/MyProfile';
-import { ReceptionScanner } from './screens/ReceptionScanner';
-import { HelperDashboard } from './screens/HelperDashboard';
+// 2026-08-13 — ReceptionScanner, HelperDashboard, InvitationEditor,
+// RedPacketManager already converted to lazy() above.
 import { WeddingDay } from './screens/WeddingDay';
 import { ChatRoom } from './screens/ChatRoom';
 import { Inbox } from './screens/Inbox';
 import { PersonalGuestPortal } from './screens/PersonalGuestPortal';
-import { InvitationEditor } from './screens/InvitationEditor';
-import { RedPacketManager } from './screens/RedPacketManager';
+// 2026-08-13 — InvitationEditor, RedPacketManager already converted
+// to lazy() above.
 
 import { RoleSimulator } from './components/RoleSimulator';
 import { GuestBanner } from './components/GuestBanner';
@@ -3753,54 +3780,62 @@ export default function App() {
             )}
 
             {userRole === 'owner' && currentView === 'discover-vendors' && (
-              <DiscoverDirectory
-                vendors={vendors}
-                filter={discoverFilter}
-                onFilterChange={setDiscoverFilter}
-                onViewProfile={setViewingVendorProfile}
-                user={user}
-                favoriteIds={favoriteIds}
-                onToggleFavorite={handleToggleFavorite}
-              />
+              <LazyScreen>
+                <DiscoverDirectory
+                  vendors={vendors}
+                  filter={discoverFilter}
+                  onFilterChange={setDiscoverFilter}
+                  onViewProfile={setViewingVendorProfile}
+                  user={user}
+                  favoriteIds={favoriteIds}
+                  onToggleFavorite={handleToggleFavorite}
+                />
+              </LazyScreen>
             )}
 
             {/* Admin-only: vendor analytics for monthly membership sales */}
             {isAdmin && currentView === 'vendor-analytics' && (
-              <VendorAnalytics user={user} isAdmin={isAdmin} />
+              <LazyScreen><VendorAnalytics user={user} isAdmin={isAdmin} /></LazyScreen>
             )}
 
             {/* Admin-only: master user list with admin/disable toggles */}
             {isAdmin && currentView === 'admin-users' && (
-              <AdminUsers user={user} isAdmin={isAdmin} />
+              <LazyScreen><AdminUsers user={user} isAdmin={isAdmin} /></LazyScreen>
             )}
 
             {/* 2026-07-29 — Admin Queue (Phase 4). Triage pending
                 submissions across the 3 unlock paths (social proof,
                 referral, payment receipt) in one screen. */}
             {isAdmin && currentView === 'admin-queue' && (
-              <AdminQueue
-                user={user}
-                isAdmin={isAdmin}
-                onBack={() => setCurrentView('events-dashboard')}
-              />
+              <LazyScreen>
+                <AdminQueue
+                  user={user}
+                  isAdmin={isAdmin}
+                  onBack={() => setCurrentView('events-dashboard')}
+                />
+              </LazyScreen>
             )}
 
             {/* Admin-only: vendor CRUD (list / edit / delete) */}
             {isAdmin && currentView === 'admin-vendors' && (
-              <AdminVendors
-                user={user}
-                isAdmin={isAdmin}
-                onOpenImportVendors={() => setCurrentView('admin-import-vendors')}
-              />
+              <LazyScreen>
+                <AdminVendors
+                  user={user}
+                  isAdmin={isAdmin}
+                  onOpenImportVendors={() => setCurrentView('admin-import-vendors')}
+                />
+              </LazyScreen>
             )}
 
             {/* Admin-only: batch vendor CSV import (entry from admin-vendors) */}
             {isAdmin && currentView === 'admin-import-vendors' && (
-              <AdminImportVendors
-                user={user}
-                isAdmin={isAdmin}
-                onBack={() => setCurrentView('admin-vendors')}
-              />
+              <LazyScreen>
+                <AdminImportVendors
+                  user={user}
+                  isAdmin={isAdmin}
+                  onBack={() => setCurrentView('admin-vendors')}
+                />
+              </LazyScreen>
             )}
 
             {/* 2026-08-07 — Admin payment settings (PayMe QR + FPS
@@ -3808,7 +3843,7 @@ export default function App() {
                 gets the full header / tab area. Reached via the
                 RoleSimulator "💳 收款設定" pill. */}
             {isAdmin && currentView === 'admin-payment-settings' && (
-              <AdminPaymentSettings user={user} isAdmin={isAdmin} />
+              <LazyScreen><AdminPaymentSettings user={user} isAdmin={isAdmin} /></LazyScreen>
             )}
 
             {(userRole === 'owner' || userRole === 'reception') &&
@@ -3918,26 +3953,28 @@ export default function App() {
                 that the PersonalGuestPortal's PaymentModal reads
                 to display the actual scan targets. */}
             {userRole === 'owner' && currentEvent && currentView === 'red-packet' && (
-              <RedPacketManager
-                // 2026-07-27 — Use dataOwnerUid (resolved via the
-                // events list's _ownerUid, which comes from the
-                // collectionGroup query path) instead of
-                // currentEvent.userId || user?.uid. The latter two
-                // are wrong for coOwner sessions:
-                //   - currentEvent.userId is not set on event docs
-                //     (the field is in the path, not the doc)
-                //   - user?.uid is the coOwner's OWN uid, not the
-                //     original event owner's uid. Subscribing to
-                //     /users/{coOwnerUid}/events/{eid}/redPackets
-                //     returns 0 docs when the actual data is under
-                //     /users/{originalOwnerUid}/events/{eid}/redPackets.
-                // Verified live 2026-07-27 23:54 — both partners
-                // uploaded to their OWN path instead of the shared
-                // event path, so neither could see the other's QRs.
-                ownerUid={dataOwnerUid}
-                eventId={currentEvent.id}
-                showToast={showToast}
-              />
+              <LazyScreen>
+                <RedPacketManager
+                  // 2026-07-27 — Use dataOwnerUid (resolved via the
+                  // events list's _ownerUid, which comes from the
+                  // collectionGroup query path) instead of
+                  // currentEvent.userId || user?.uid. The latter two
+                  // are wrong for coOwner sessions:
+                  //   - currentEvent.userId is not set on event docs
+                  //     (the field is in the path, not the doc)
+                  //   - user?.uid is the coOwner's OWN uid, not the
+                  //     original event owner's uid. Subscribing to
+                  //     /users/{coOwnerUid}/events/{eid}/redPackets
+                  //     returns 0 docs when the actual data is under
+                  //     /users/{originalOwnerUid}/events/{eid}/redPackets.
+                  // Verified live 2026-07-27 23:54 — both partners
+                  // uploaded to their OWN path instead of the shared
+                  // event path, so neither could see the other's QRs.
+                  ownerUid={dataOwnerUid}
+                  eventId={currentEvent.id}
+                  showToast={showToast}
+                />
+              </LazyScreen>
             )}
 
             {userRole === 'owner' && currentEvent && currentView === 'couple-jobboard' && (
@@ -3961,12 +3998,14 @@ export default function App() {
             )}
 
             {userRole === 'reception' && currentEvent && currentView === 'reception-scanner' && (
-              <ReceptionScanner
-                eventGuests={eventGuests}
-                recentScans={recentScans || []}
-                onCheckIn={handleSimulateReceptionScan}
-                onManualCheckIn={handleSimulateReceptionScan}
-              />
+              <LazyScreen>
+                <ReceptionScanner
+                  eventGuests={eventGuests}
+                  recentScans={recentScans || []}
+                  onCheckIn={handleSimulateReceptionScan}
+                  onManualCheckIn={handleSimulateReceptionScan}
+                />
+              </LazyScreen>
             )}
 
             {/* 2026-07-19 — Helper dashboard. Active helpers
@@ -3977,14 +4016,16 @@ export default function App() {
                 tab strip shows which owner they're working for and
                 which perms they have. */}
             {userRole === 'helper' && currentView === 'helper-dashboard' && helperActiveAssignment && (
-              <HelperDashboard
-                helperAssignment={helperActiveAssignment}
-                currentUser={user}
-                eventGuests={eventGuests}
-                recentScans={recentScans || []}
-                onCheckIn={handleSimulateReceptionScan}
-                onManualCheckIn={handleSimulateReceptionScan}
-              />
+              <LazyScreen>
+                <HelperDashboard
+                  helperAssignment={helperActiveAssignment}
+                  currentUser={user}
+                  eventGuests={eventGuests}
+                  recentScans={recentScans || []}
+                  onCheckIn={handleSimulateReceptionScan}
+                  onManualCheckIn={handleSimulateReceptionScan}
+                />
+              </LazyScreen>
             )}
 
             {/* 2026-07-15 — chat views. Inbox is shared between
@@ -4029,28 +4070,30 @@ export default function App() {
             )}
 
             {userRole === 'vendor' && currentView === 'vendor-dashboard' && (
-              <VendorDashboard
-                user={user}
-                vendor={vendorProfile}
-                jobRequests={liveJobRequests || []}
-                loading={vendorProfileLoading || jobRequestsLoading}
-                onSubmitProposal={submitProposal}
-                onManageProfile={() => setCurrentView('vendor-profile')}
-                onLogout={handleVendorLogout}
-                assignedTasks={assignedTasks}
-                assignedRundown={assignedRundown}
-                assignedResources={assignedResources}
-                isAdminPreview={isAdmin && !isVendor}
-                onUpdateTaskStatus={handleUpdateAssignedTaskStatus}
-                // 2026-07-20 — inquiry inbox routing. The
-                // VendorInquiriesPanel hands back a selected inquiry
-                // and we wire it to the same ChatRoom the couple
-                // uses (shared component).
-                onOpenInquiry={(inq) => {
-                  setSelectedInquiry(inq);
-                  setCurrentView('chat-room');
-                }}
-              />
+              <LazyScreen>
+                <VendorDashboard
+                  user={user}
+                  vendor={vendorProfile}
+                  jobRequests={liveJobRequests || []}
+                  loading={vendorProfileLoading || jobRequestsLoading}
+                  onSubmitProposal={submitProposal}
+                  onManageProfile={() => setCurrentView('vendor-profile')}
+                  onLogout={handleVendorLogout}
+                  assignedTasks={assignedTasks}
+                  assignedRundown={assignedRundown}
+                  assignedResources={assignedResources}
+                  isAdminPreview={isAdmin && !isVendor}
+                  onUpdateTaskStatus={handleUpdateAssignedTaskStatus}
+                  // 2026-07-20 — inquiry inbox routing. The
+                  // VendorInquiriesPanel hands back a selected inquiry
+                  // and we wire it to the same ChatRoom the couple
+                  // uses (shared component).
+                  onOpenInquiry={(inq) => {
+                    setSelectedInquiry(inq);
+                    setCurrentView('chat-room');
+                  }}
+                />
+              </LazyScreen>
             )}
 
             {userRole === 'vendor' && currentView === 'vendor-profile' && (
@@ -4059,11 +4102,13 @@ export default function App() {
               // static DEFAULT_VENDORS constant. The profile form
               // needs the user's actual UID to write back, and the
               // current vendor's data to pre-fill the fields.
-              <VendorProfileEdit
-                vendor={vendorProfile}
-                user={user}
-                onBack={() => setCurrentView('vendor-dashboard')}
-              />
+              <LazyScreen>
+                <VendorProfileEdit
+                  vendor={vendorProfile}
+                  user={user}
+                  onBack={() => setCurrentView('vendor-dashboard')}
+                />
+              </LazyScreen>
             )}
 
             {/* Vendor onboarding wizard — reachable from any signed-in user.
@@ -4071,28 +4116,30 @@ export default function App() {
                 require userRole === 'vendor' (you can't be a vendor before
                 applying). */}
             {user && currentView === 'vendor-onboarding' && (
-              <VendorOnboarding
-                user={user}
-                // 2026-07-15 — after the wizard submits, applyAsVendor sets the
-                              // `vendor: true` custom claim server-side. We refresh the
-                              // ID token so the local session picks it up, then route
-                              // to the vendor dashboard. Without the explicit refresh
-                              // here, the user sees the couple events-dashboard
-                              // (stale token, no vendor claim) and is confused.
-                              onComplete={async () => {
-                                try {
-                                  if (user?.getIdToken) {
-                                    await user.getIdToken(true);
+              <LazyScreen>
+                <VendorOnboarding
+                  user={user}
+                  // 2026-07-15 — after the wizard submits, applyAsVendor sets the
+                                // `vendor: true` custom claim server-side. We refresh the
+                                // ID token so the local session picks it up, then route
+                                // to the vendor dashboard. Without the explicit refresh
+                                // here, the user sees the couple events-dashboard
+                                // (stale token, no vendor claim) and is confused.
+                                onComplete={async () => {
+                                  try {
+                                    if (user?.getIdToken) {
+                                      await user.getIdToken(true);
+                                    }
+                                  } catch (e) {
+                                    // eslint-disable-next-line no-console
+                                    console.warn('[App] token refresh after vendor apply failed:', e?.message);
                                   }
-                                } catch (e) {
-                                  // eslint-disable-next-line no-console
-                                  console.warn('[App] token refresh after vendor apply failed:', e?.message);
-                                }
-                                setUserRole('vendor');
-                                setCurrentView('vendor-dashboard');
-                              }}
-                              onCancel={() => setCurrentView('events-dashboard')}
-              />
+                                  setUserRole('vendor');
+                                  setCurrentView('vendor-dashboard');
+                                }}
+                                onCancel={() => setCurrentView('events-dashboard')}
+                />
+              </LazyScreen>
             )}
           </main>
         </>
@@ -4327,16 +4374,18 @@ export default function App() {
       )}
 
       {showInvitationEditor && user?.uid && currentEvent && (
-        <InvitationEditor
-          isOpen={showInvitationEditor}
-          ownerUid={user.uid}
-          eventId={currentEvent.id}
-          event={currentEvent}
-          guests={eventGuests}
-          ownerTier={currentEvent.tier || 'free'}
-          isAdmin={isAdmin}
-          onClose={() => setShowInvitationEditor(false)}
-        />
+        <LazyScreen>
+          <InvitationEditor
+            isOpen={showInvitationEditor}
+            ownerUid={user.uid}
+            eventId={currentEvent.id}
+            event={currentEvent}
+            guests={eventGuests}
+            ownerTier={currentEvent.tier || 'free'}
+            isAdmin={isAdmin}
+            onClose={() => setShowInvitationEditor(false)}
+          />
+        </LazyScreen>
       )}
 
       <EditGuestModal
