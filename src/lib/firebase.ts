@@ -77,8 +77,14 @@ export const appId: string = resolveAppId();
 // bundled into the client, so this is the same surface area as the rest of
 // the app. The auth/claims layer still gates what the user can DO.
 //
-// Kept in production builds (not DEV-gated) so admins can run bootstrap
-// callables from DevTools on the live site. The bundle cost is ~50 bytes.
+// 2026-08-13 — M-05 audit fix. Gated behind import.meta.env.DEV so the
+// global is removed from production builds. The audit recommendation was
+// to gate behind "an admin-only authenticated support page with explicit
+// audit logging"; that requires building a separate ops surface which is
+// out of scope. DEV-only gate is the minimum-cost mitigation per the
+// audit's "Remove the global in production" guidance. For prod ops needs,
+// add the support-page solution in a follow-up.
+if (import.meta.env.DEV) {
 void Promise.all([
   import('firebase/functions'),
   import('firebase/app'),
@@ -109,3 +115,4 @@ void Promise.all([
   // eslint-disable-next-line no-console
   console.info('[firebase] DevTools helpers attached: window.__fb');
 });
+}
