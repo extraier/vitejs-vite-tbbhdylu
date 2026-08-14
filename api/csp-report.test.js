@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Tests for the Vercel CSP-report endpoint (api/csp-report.js).
  *
@@ -22,7 +23,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { normalizeReport } from './csp-report.js';
+import { Readable } from 'node:stream';
+import { normalizeReport, readRawBody } from './csp-report.js';
 
 describe('normalizeReport — legacy application/csp-report', () => {
   it('extracts the inner csp-report fields', () => {
@@ -199,5 +201,62 @@ describe('normalizeReport — defensive edge cases', () => {
       'legacy-csp-report',
     );
     expect(out.sample.length).toBe(1024);
+  });
+});
+
+describe('readRawBody — chunk-buffered stream reader', () => {
+  // Helper: build a fake IncomingMessage-like stream from a string.
+  // Vercel handoffs the raw body via the underlying Node stream,
+  // so we mimic that shape.
+  function mockReq(body) {
+    const stream = new Readable({ read() {} });
+    if (body != null) {
+      stream.push(Buffer.from(body, 'utf8'));
+      stream.push(null);
+    }
+    return stream;
+  }
+
+  it('buffers a single chunk into a string', async () => {
+    const req = mockReq('{"csp-report": {"violated-directive": "x"}}');
+    const out = await readRawBody(req);
+    expect(typeof out).toBe('string');
+    expect(out).toBe('{"csp-report": {"violated-directive": "x"}}');
+  });
+
+  it('returns null when the stream is empty', async () => {
+    // Close an empty stream immediately.
+    const stream = new Readable({ read() {} });
+    stream.push(null);
+    const out = await readRawBody(stream);
+    expect(out).toBe(null);
+  });
+
+  it('buffers multiple chunks in order', async () => {
+    const stream = new Readable({ read() {} });
+    stream.push('{"csp-');
+    stream.push('report": {"violated-');
+    stream.push('directive": "x"}}');
+    stream.push(null);
+    const out = await readRawBody(stream);
+    expect(out).toBe('{"csp-report": {"violated-directive": "x"}}');
+  });
+
+  it('rejects when the body exceeds MAX_BODY_BYTES (8 KB)', async () => {
+    const stream = new Readable({ read() {} });
+    // Push one chunk that's already over the limit.
+    const tooBig = 'a'.repeat(9000);
+    stream.push(Buffer.from(tooBig, 'utf8'));
+    stream.push(null);
+    await expect(readRawBody(stream)).rejects.toThrow('body too large');
+  });
+
+  it('propagates stream errors', async () => {
+    const stream = new Readable({ read() {} });
+    // Emit an error asynchronously.
+    setImmediate(() => {
+      stream.destroy(new Error('connection reset'));
+    });
+    await expect(readRawBody(stream)).rejects.toThrow('connection reset');
   });
 });

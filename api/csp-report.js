@@ -147,6 +147,53 @@ export function normalizeReport(report, source) {
   };
 }
 
+// Read the raw body from the underlying IncomingMessage stream.
+// Vercel does NOT auto-parse `application/csp-report` or
+// `application/reports+json` — the spec content-types for CSP
+// reports — so for those reports `req.body` is undefined. We
+// fall back to buffering the stream manually.
+//
+// 2026-08-14 — exported for unit tests. The stream-parser
+// logic is the riskiest piece after the first version (which
+// only handled application/json and dropped all real browser
+// reports). We want to lock the chunk-buffering + size-cap
+// behavior down without mocking firebase-admin.
+//
+// Buffer cap is `MAX_BODY_BYTES`. We enforce it on the wire
+// BEFORE JSON parsing so a giant payload can't exhaust memory.
+export async function readRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (total > MAX_BODY_BYTES) {
+        // Reject the request — we've already over-consumed, so
+        // there's no way to safely back out. The client should
+        // retry with a smaller payload.
+        reject(new Error('body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (total === 0) {
+        resolve(null);
+        return;
+      }
+      const buf = Buffer.concat(chunks);
+      // The body is JSON-encoded (CSP reports are JSON by spec).
+      // We return a string so the JSON.parse path downstream
+      // works uniformly.
+      resolve(buf.toString('utf8'));
+    });
+    req.on('error', (err) => {
+      reject(err);
+    });
+  });
+}
+
 export default async function handler(req, res) {
   // CSP browsers only POST.
   if (req.method !== 'POST') {
@@ -160,9 +207,30 @@ export default async function handler(req, res) {
     return res.status(429).json({ error: 'rate-limited' });
   }
 
-  // Body size cap. Vercel parses the body for us.
-  const raw = req.body;
-  if (raw == null) {
+  // Body size cap. Vercel parses the body for us, but the
+  // supported Content-Types are limited:
+  //   - application/json → parsed as object
+  //   - application/x-www-form-urlencoded → parsed as object
+  //   - application/csp-report → STRING or undefined (this is the
+  //     spec content-type for legacy CSP reports, and Vercel
+  //     does NOT auto-parse it)
+  //   - application/reports+json → STRING or undefined (modern
+  //     Reporting API; same Vercel limitation)
+  //
+  // 2026-08-14 — M-06 fix #2. We now handle the
+  // req.body-is-undefined case by reading the raw body via the
+  // Node IncomingMessage stream. This is the only reliable path
+  // for application/csp-report reports because browsers always
+  // send that content-type per the W3C spec.
+  let raw;
+  if (req.body !== undefined && req.body !== null && req.body !== '') {
+    raw = req.body;
+  } else {
+    // Vercel exposes the raw body as a stream on the underlying
+    // request. We buffer it manually so we can JSON.parse it.
+    raw = await readRawBody(req);
+  }
+  if (raw == null || raw === '') {
     return res.status(204).end();
   }
   // The body might be parsed as an object (JSON) or a string.
@@ -175,8 +243,12 @@ export default async function handler(req, res) {
   let parsed;
   try {
     parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  } catch {
-    return res.status(204).end(); // malformed — drop silently
+  } catch (err) {
+    // Malformed JSON. Don't reject the request — the browser
+    // doesn't care about the response. Just log so we can
+    // diagnose if a real browser sends broken JSON.
+    console.error('csp-report malformed JSON:', err.message, 'first 256 chars:', bodyStr.slice(0, 256));
+    return res.status(204).end();
   }
 
   // Normalize one or many reports.
