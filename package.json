@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:e2e:api": "playwright test tests/api",
     "test:watch": "vitest",
     "lint": "oxlint src/ functions/src/",
     "lint:fix": "oxlint --fix src/ functions/src/",
@@ -29,6 +31,7 @@
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.1",
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^14.3.1",
     "@types/react": "^18.2.66",
