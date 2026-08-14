@@ -12,11 +12,23 @@ and variables → Actions).
 | Secret | Where to get it |
 |---|---|
 | `FIREBASE_TOKEN` | `firebase login:ci` — paste the token it prints |
+| `GCLOUD_SA_KEY` | Base64-encoded service account JSON key. Used by the Playwright job's Firestore-integration tests (3 of 9 tests). |
+
+The `GCLOUD_SA_KEY` is optional — the integration tests auto-skip when missing. Only the 6 HTTP-smoke tests run on PRs without secrets. To enable the full integration suite on pushes to main:
+
+```bash
+# Get the SA key (one-time, on a machine that has it):
+SA=$(cat ~/.firebase-keys/savetheday-2377a.json | base64)
+
+# Add to GitHub via the CLI:
+gh secret set GCLOUD_SA_KEY --body "$SA" --repo extraier/vitejs-vite-tbbhdylu
+```
 
 This single token authorizes the workflow to:
 - Deploy `firestore.rules`
 - Deploy `functions/` (the issueGuestLink / redeemGuestLink Cloud Functions)
 - Optionally deploy Firebase Hosting
+- Run the Playwright Firestore-integration tests on push to main
 
 ### For Vercel deploy (`deploy-vercel.yml`)
 
