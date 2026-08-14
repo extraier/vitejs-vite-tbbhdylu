@@ -64,6 +64,60 @@ jobs:
           retention-days: 7
 
   # -----------------------------------------------------------------------
+  # Job 1b: Playwright E2E (API smoke + browser tests)
+  # -----------------------------------------------------------------------
+  # 2026-08-14 — Playwright suite added in commit 13180b5.
+  # Splits into two modes:
+  #   - Tests 1-6 (HTTP smoke): run on every PR — no secrets needed.
+  #   - Tests 7-9 (Firestore integration): run on push to main only —
+  #     require GCLOUD_SA_KEY secret to query production Firestore.
+  # The split is enforced by the test file itself (auto-skip when SA
+  # key is missing), so a single test invocation handles both modes.
+  playwright:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Install Playwright Chromium
+        # 2026-08-14 — `npx playwright install chromium` is the
+        # documented way; not all CI runners have a system chrome
+        # at a version Playwright accepts. We pin the browser
+        # version via the @playwright/test dependency.
+        run: npx playwright install --with-deps chromium
+
+      - name: Run API tests (HTTP smoke)
+        # Always run — no secrets needed.
+        run: npx playwright test tests/api --reporter=list
+
+      - name: Run API tests (Firestore integration)
+        # Only fires on push to main when the SA key is configured.
+        # Locally and on PRs, this auto-skips because the key is
+        # missing. See scripts/firestore-query.cjs for the env var.
+        if: github.ref == 'refs/heads/main'
+        run: npx playwright test tests/api --reporter=list
+        env:
+          GCLOUD_SA_KEY: ${{ secrets.GCLOUD_SA_KEY }}
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-${{ github.sha }}
+          path: test-results/
+          retention-days: 7
+
+  # -----------------------------------------------------------------------
   # Job 2: Firestore rules tests (the security gate)
   # -----------------------------------------------------------------------
   rules:
