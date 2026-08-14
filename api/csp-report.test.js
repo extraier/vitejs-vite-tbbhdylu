@@ -24,7 +24,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { Readable } from 'node:stream';
-import { normalizeReport, readRawBody } from './csp-report.js';
+import { normalizeReport, classifyReports, readRawBody } from './csp-report.js';
 
 describe('normalizeReport — legacy application/csp-report', () => {
   it('extracts the inner csp-report fields', () => {
@@ -258,5 +258,96 @@ describe('readRawBody — chunk-buffered stream reader', () => {
       stream.destroy(new Error('connection reset'));
     });
     await expect(readRawBody(stream)).rejects.toThrow('connection reset');
+  });
+});
+
+
+describe('classifyReports — body shape detection', () => {
+  // The shape detection is the most error-prone piece of the
+  // handler. We want each branch tested explicitly so a future
+  // refactor doesn't accidentally collapse them. The bug we're
+  // guarding against: the single-report Reporting API wrapper
+  // (`{ age, type, url, body: {...} }`) was being misclassified
+  // as legacy because the inner fields match the legacy shape.
+
+  it('returns [] for null/undefined', () => {
+    expect(classifyReports(null)).toEqual([]);
+    expect(classifyReports(undefined)).toEqual([]);
+  });
+
+  it('returns [] for arrays (handler treats them as no-op)', () => {
+    expect(classifyReports([])).toEqual([]);
+    expect(classifyReports([{ 'csp-report': {} }])).toEqual([]);
+  });
+
+  it('returns [] for non-object inputs', () => {
+    expect(classifyReports('string')).toEqual([]);
+    expect(classifyReports(42)).toEqual([]);
+    expect(classifyReports(true)).toEqual([]);
+  });
+
+  it('classifies the legacy application/csp-report wrapper', () => {
+    const out = classifyReports({
+      'csp-report': {
+        'document-uri': 'https://savetheday.io/p/foo',
+        'violated-directive': 'script-src-elem',
+      },
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('legacy-csp-report');
+    expect(out[0].documentUri).toBe('https://savetheday.io/p/foo');
+  });
+
+  it('classifies the Reporting API multi-report envelope', () => {
+    const out = classifyReports({
+      age: 100,
+      type: 'csp',
+      reports: [
+        { 'document-uri': 'https://a', 'violated-directive': 'script-src' },
+        { 'document-uri': 'https://b', 'violated-directive': 'img-src' },
+      ],
+    });
+    expect(out).toHaveLength(2);
+    expect(out[0].source).toBe('reporting-api');
+    expect(out[1].source).toBe('reporting-api');
+  });
+
+  it('classifies the Reporting API single-report envelope (the bug case)', () => {
+    // Before M-06 follow-up, this shape fell through to the
+    // legacy branch and got tagged `source: 'legacy-csp-report'`.
+    const out = classifyReports({
+      age: 0,
+      type: 'csp',
+      url: 'https://savetheday.io/p/single',
+      body: {
+        'document-uri': 'https://savetheday.io/p/single',
+        'violated-directive': 'img-src',
+        'blocked-uri': 'https://othercdn.example/x.png',
+      },
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].source).toBe('reporting-api');
+    expect(out[0].documentUri).toBe('https://savetheday.io/p/single');
+    expect(out[0].blockedUri).toBe('https://othercdn.example/x.png');
+  });
+
+  it('drops malformed entries in multi-report envelopes', () => {
+    const out = classifyReports({
+      reports: [
+        { 'document-uri': 'https://good' },
+        null,
+        'string',
+        { 'document-uri': 'https://also-good' },
+      ],
+    });
+    expect(out).toHaveLength(2);
+  });
+
+  it('returns [] when body is not an object', () => {
+    // Some browsers send the single-report envelope with body=null
+    // or missing. We should NOT misclassify that as legacy.
+    expect(classifyReports({ body: null })).toEqual([]);
+    expect(classifyReports({ body: 'string' })).toEqual([]);
+    expect(classifyReports({ body: 42 })).toEqual([]);
   });
 });

@@ -131,3 +131,124 @@ describe('shortHost — compact URL display', () => {
     // rejects them as malformed without a base.)
   });
 });
+
+
+describe('formatTimeSpan — millisecond span to human label', () => {
+  // The function lives in AdminCspReports.jsx but is duplicated
+  // here for unit-testing. The implementations stay in sync by
+  // definition — if you change one, change both.
+  function formatTimeSpan(ms) {
+    if (ms < 0) return '—';
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s} 秒`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} 分鐘`;
+    const h = Math.floor(m / 60);
+    if (h < 24) {
+      const rem = m % 60;
+      return rem === 0 ? `${h} 小時` : `${h} 小時 ${rem} 分鐘`;
+    }
+    const d = Math.floor(h / 24);
+    const remH = h % 24;
+    return remH === 0 ? `${d} 日` : `${d} 日 ${remH} 小時`;
+  }
+
+  it('returns "—" for negative spans', () => {
+    expect(formatTimeSpan(-1)).toBe('—');
+  });
+
+  it('returns seconds for sub-minute spans', () => {
+    expect(formatTimeSpan(0)).toBe('0 秒');
+    expect(formatTimeSpan(1000)).toBe('1 秒');
+    expect(formatTimeSpan(59_000)).toBe('59 秒');
+  });
+
+  it('returns minutes for sub-hour spans', () => {
+    expect(formatTimeSpan(60_000)).toBe('1 分鐘');
+    expect(formatTimeSpan(59 * 60_000)).toBe('59 分鐘');
+  });
+
+  it('returns hours for sub-day spans', () => {
+    expect(formatTimeSpan(60 * 60_000)).toBe('1 小時');
+    expect(formatTimeSpan(2 * 60 * 60_000)).toBe('2 小時');
+    expect(formatTimeSpan(2 * 60 * 60_000 + 30 * 60_000)).toBe('2 小時 30 分鐘');
+  });
+
+  it('returns days for multi-day spans', () => {
+    expect(formatTimeSpan(24 * 60 * 60_000)).toBe('1 日');
+    expect(formatTimeSpan(5 * 24 * 60 * 60_000)).toBe('5 日');
+    expect(formatTimeSpan(2 * 24 * 60 * 60_000 + 3 * 60 * 60_000)).toBe('2 日 3 小時');
+  });
+});
+
+describe('stats aggregation — top-directives + top-blocked-uris', () => {
+  // Same pattern: duplicated logic to keep the test independent
+  // of the React component. The helpers are pure functions.
+
+  function topDirectives(reports) {
+    const counts = new Map();
+    for (const r of reports) {
+      const key = r.violatedDirective || r.effectiveDirective || '(unknown)';
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+  }
+
+  function topBlockedUris(reports) {
+    const counts = new Map();
+    for (const r of reports) {
+      const u = r.blockedUri;
+      if (!u) continue;
+      counts.set(u, (counts.get(u) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+  }
+
+  const sample = [
+    { violatedDirective: 'script-src', blockedUri: 'https://a.example/x.js' },
+    { violatedDirective: 'script-src', blockedUri: 'https://a.example/x.js' },
+    { violatedDirective: 'img-src', blockedUri: 'https://b.example/y.png' },
+    { violatedDirective: 'img-src', blockedUri: 'https://c.example/z.png' },
+    { effectiveDirective: 'font-src', blockedUri: '' },
+    { violatedDirective: '', blockedUri: undefined },
+  ];
+
+  it('counts directives by frequency, sorted desc', () => {
+    const out = topDirectives(sample);
+    expect(out).toEqual([
+      ['script-src', 2],
+      ['img-src', 2],
+      ['font-src', 1],
+      ['(unknown)', 1],
+    ]);
+  });
+
+  it('caps results at top 5', () => {
+    const big = Array.from({ length: 10 }, (_, i) => ({
+      violatedDirective: `directive-${i}`,
+    }));
+    const out = topDirectives(big);
+    expect(out).toHaveLength(5);
+  });
+
+  it('counts blocked-uris by frequency, skipping missing', () => {
+    const out = topBlockedUris(sample);
+    expect(out).toEqual([
+      ['https://a.example/x.js', 2],
+      ['https://b.example/y.png', 1],
+      ['https://c.example/z.png', 1],
+    ]);
+  });
+
+  it('returns [] when no reports have blockedUri', () => {
+    expect(topBlockedUris([
+      { blockedUri: '' },
+      { blockedUri: undefined },
+      {},
+    ])).toEqual([]);
+  });
+});

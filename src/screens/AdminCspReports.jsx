@@ -41,6 +41,8 @@ import {
   RefreshCw,
   Clock,
   FileWarning,
+  BarChart3,
+  TrendingUp,
 } from 'lucide-react';
 import { db, appId } from '../lib/firebase';
 
@@ -130,6 +132,49 @@ export function AdminCspReports({ isAdmin }) {
       .slice(0, 5);
   }, [reports]);
 
+  // Top-blocked-URI aggregation. Useful for spotting a single
+  // external resource being blocked repeatedly (e.g. a third-party
+  // beacon that the public CSP doesn't allow).
+  const topBlockedUris = useMemo(() => {
+    const counts = new Map();
+    for (const r of reports) {
+      const u = r.blockedUri;
+      if (!u) continue;
+      counts.set(u, (counts.get(u) || 0) + 1);
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+  }, [reports]);
+
+  // Aggregate stats: total, last-24h, sources, time span.
+  const stats = useMemo(() => {
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    let last24h = 0;
+    let earliest = null;
+    let latest = null;
+    const sources = new Set();
+    for (const r of reports) {
+      const d = r.createdAtDate;
+      if (d) {
+        const t = d.getTime();
+        if (now - t < day) last24h += 1;
+        if (earliest == null || t < earliest) earliest = t;
+        if (latest == null || t > latest) latest = t;
+      }
+      if (r.source) sources.add(r.source);
+    }
+    return {
+      total: reports.length,
+      last24h,
+      sourceCount: sources.size,
+      sources: Array.from(sources),
+      earliest,
+      latest,
+    };
+  }, [reports]);
+
   // ---- Admin gate ----
   if (!isAdmin) {
     return (
@@ -178,6 +223,39 @@ export function AdminCspReports({ isAdmin }) {
         </div>
       )}
 
+{/* Aggregate stats row */}
+      {!loading && reports.length > 0 && (
+        <div className="mb-4 grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <StatCard
+            icon={BarChart3}
+            label="總報告數"
+            value={stats.total}
+            accent="indigo"
+          />
+          <StatCard
+            icon={TrendingUp}
+            label="過去 24 小時"
+            value={stats.last24h}
+            accent={stats.last24h > 0 ? 'rose' : 'slate'}
+          />
+          <StatCard
+            icon={Globe}
+            label="來源種類"
+            value={stats.sourceCount}
+            hint={stats.sources.length > 0 ? stats.sources.map(s => s === 'reporting-api' ? 'API' : 'legacy').join('+') : ''}
+            accent="slate"
+          />
+          <StatCard
+            icon={Clock}
+            label="時間跨度"
+            value={stats.earliest && stats.latest
+              ? formatTimeSpan(stats.latest - stats.earliest)
+              : '—'}
+            accent="slate"
+          />
+        </div>
+      )}
+
       {/* Top-directive summary */}
       {!loading && reports.length > 0 && (
         <div className="mb-6 bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
@@ -189,6 +267,26 @@ export function AdminCspReports({ isAdmin }) {
             {topDirectives.map(([directive, count]) => (
               <li key={directive} className="flex items-center justify-between gap-3">
                 <code className="text-xs text-slate-700 truncate">{directive}</code>
+                <span className="text-xs font-mono text-slate-500 whitespace-nowrap">
+                  {count} 次
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Top-blocked-URI summary — only show if any reports had a blocked-uri */}
+      {!loading && topBlockedUris.length > 0 && (
+        <div className="mb-6 bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
+          <h2 className="font-bold text-slate-900 mb-3 flex items-center gap-2">
+            <Globe className="w-4 h-4 text-rose-600" />
+            最常被阻擋嘅 URI
+          </h2>
+          <ul className="space-y-2">
+            {topBlockedUris.map(([uri, count]) => (
+              <li key={uri} className="flex items-center justify-between gap-3">
+                <code className="text-xs text-slate-700 truncate">{uri}</code>
                 <span className="text-xs font-mono text-slate-500 whitespace-nowrap">
                   {count} 次
                 </span>
@@ -278,6 +376,45 @@ function ReportRow({ report }) {
           </pre>
         </details>
       )}
+    </div>
+  );
+}
+
+// Round a millisecond span to a human-readable label.
+// 2.5h → "2h 30m", 90s → "1m 30s", 5d → "5d".
+function formatTimeSpan(ms) {
+  if (ms < 0) return '—';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} 分鐘`;
+  const h = Math.floor(m / 60);
+  if (h < 24) {
+    const rem = m % 60;
+    return rem === 0 ? `${h} 小時` : `${h} 小時 ${rem} 分鐘`;
+  }
+  const d = Math.floor(h / 24);
+  const remH = h % 24;
+  return remH === 0 ? `${d} 日` : `${d} 日 ${remH} 小時`;
+}
+
+// ---- Sub-component: aggregate stat tile ----
+function StatCard({ icon: Icon, label, value, hint, accent = 'slate' }) {
+  const accentMap = {
+    slate: 'text-slate-700 bg-slate-50',
+    indigo: 'text-indigo-700 bg-indigo-50',
+    rose: 'text-rose-700 bg-rose-50',
+  };
+  return (
+    <div className="bg-white rounded-xl border border-slate-100 p-4 shadow-sm">
+      <div className="flex items-center gap-2 mb-1">
+        <div className={`p-1 rounded ${accentMap[accent] || accentMap.slate}`}>
+          <Icon className="w-3.5 h-3.5" />
+        </div>
+        <span className="text-xs text-slate-500">{label}</span>
+      </div>
+      <div className="text-2xl font-black text-slate-900 leading-tight">{value}</div>
+      {hint && <div className="text-xs text-slate-400 mt-0.5">{hint}</div>}
     </div>
   );
 }

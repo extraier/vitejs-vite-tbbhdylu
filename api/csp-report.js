@@ -194,6 +194,54 @@ export async function readRawBody(req) {
   });
 }
 
+
+// 2026-08-14 — M-06 follow-up. Detect the three report shapes
+// the browser might send:
+//
+//   1. Reporting API (multi):   { age, type, reports: [r1, r2, ...] }
+//   2. Reporting API (single):  { age, type, url, body: {...} }
+//   3. Legacy application/csp-report: { 'csp-report': {...} }
+//
+// Returns an array of normalized reports. The `source` field of
+// each result records which shape the original wrapper was in,
+// which the admin view uses to tell legacy from modern.
+//
+// Why we extract this from the handler: the inline branch
+// chain was easy to misread (the legacy branch ran for the
+// Reporting API single-report shape because the body has `body`
+// not `csp-report`). Pulling it out and unit-testing each
+// branch catches the bug class.
+export function classifyReports(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return [];
+  }
+  if (Array.isArray(parsed.reports)) {
+    // 1. Reporting API multi-report envelope
+    const out = [];
+    for (const r of parsed.reports) {
+      const n = normalizeReport(r, 'reporting-api');
+      if (n) out.push(n);
+    }
+    return out;
+  }
+  if ('body' in parsed) {
+    // 2. Reporting API single-report envelope. The `body` field
+    // is the inner violation payload. We require it to be a
+    // non-null object; null/string/number bodies are treated
+    // as malformed and dropped rather than classified as legacy,
+    // because a malformed Reporting API envelope is not the
+    // same as a legacy report.
+    if (parsed.body && typeof parsed.body === 'object') {
+      const n = normalizeReport(parsed.body, 'reporting-api');
+      return n ? [n] : [];
+    }
+    return [];
+  }
+  // 3. Legacy application/csp-report
+  const n = normalizeReport(parsed, 'legacy-csp-report');
+  return n ? [n] : [];
+}
+
 export default async function handler(req, res) {
   // CSP browsers only POST.
   if (req.method !== 'POST') {
@@ -251,21 +299,11 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  // Normalize one or many reports.
-  const reports = [];
-  if (parsed && typeof parsed === 'object') {
-    if (Array.isArray(parsed.reports)) {
-      // Reporting API
-      for (const r of parsed.reports) {
-        const n = normalizeReport(r, 'reporting-api');
-        if (n) reports.push(n);
-      }
-    } else {
-      // Legacy application/csp-report
-      const n = normalizeReport(parsed, 'legacy-csp-report');
-      if (n) reports.push(n);
-    }
-  }
+  // Normalize one or many reports. The shape-detection logic is
+  // extracted into `classifyReports` so we can unit-test it
+  // without mocking Firestore. See api/csp-report.test.js for
+  // the cases that motivated extracting this.
+  const reports = classifyReports(parsed);
 
   if (reports.length === 0) {
     return res.status(204).end();
