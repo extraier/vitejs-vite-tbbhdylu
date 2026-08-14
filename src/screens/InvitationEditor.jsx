@@ -41,6 +41,20 @@ export function InvitationEditor({
   const [templateId, setTemplateId] = useState('plain');
   const [bgUrl, setBgUrl] = useState(null);
   const [ownerMessage, setOwnerMessage] = useState('');
+  // 2026-08-14 — invitation-level overrides for event metadata.
+  // The event record is the canonical source for date/time/venue/
+  // address, but the user often wants to nudge the date shown on
+  // the invitation (e.g. "ceremony is 2pm but reception is 7pm")
+  // without rewriting the event record. Overrides are stored on
+  // the invitation doc, not the event, so we don't disturb other
+  // surfaces (dashboard, RSVP, rundown). Empty string means
+  // "fall back to event value"; populated means "use this".
+  const [eventOverrides, setEventOverrides] = useState({
+    date: '',
+    time: '',
+    venue: '',
+    address: '',
+  });
   const [selectedGuestIds, setSelectedGuestIds] = useState([]);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [sending, setSending] = useState(false);
@@ -75,6 +89,14 @@ export function InvitationEditor({
           setTemplateId(d.templateId || 'plain');
           setBgUrl(d.bgUrl || null);
           setOwnerMessage(d.ownerMessage || '');
+          // Restore overrides — only the four scalar fields. Older
+          // invitations without these keys get '' (fall back to event).
+          setEventOverrides({
+            date: typeof d.dateOverride === 'string' ? d.dateOverride : '',
+            time: typeof d.timeOverride === 'string' ? d.timeOverride : '',
+            venue: typeof d.venueOverride === 'string' ? d.venueOverride : '',
+            address: typeof d.addressOverride === 'string' ? d.addressOverride : '',
+          });
         }
       } catch (err) {
         console.warn('[InvitationEditor] load failed:', err);
@@ -92,6 +114,13 @@ export function InvitationEditor({
           templateId,
           bgUrl,
           ownerMessage,
+          // Persist the four override fields. We store them as
+          // separate top-level keys so they're easy to query and
+          // diff. Empty strings mean "no override; use event value".
+          dateOverride: eventOverrides.date || '',
+          timeOverride: eventOverrides.time || '',
+          venueOverride: eventOverrides.venue || '',
+          addressOverride: eventOverrides.address || '',
           updatedAt: serverTimestamp(),
         }, { merge: true });
       } catch (err) {
@@ -99,7 +128,7 @@ export function InvitationEditor({
       }
     }, 500);
     return () => clearTimeout(t);
-  }, [templateId, bgUrl, ownerMessage, isOpen, ownerUid, invitationId]);
+  }, [templateId, bgUrl, ownerMessage, eventOverrides, isOpen, ownerUid, invitationId]);
 
   // Ensure the invitation doc exists the first time the editor opens,
   // so cloud functions that look up `invitations/default` succeed even
@@ -116,6 +145,12 @@ export function InvitationEditor({
             templateId: 'plain',
             bgUrl: null,
             ownerMessage: '',
+            // Seed override keys so reads via .data() always see
+            // a consistent shape — saves us a typeof check elsewhere.
+            dateOverride: '',
+            timeOverride: '',
+            venueOverride: '',
+            addressOverride: '',
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
@@ -132,6 +167,21 @@ export function InvitationEditor({
   const previewShareUrl = previewGuest
     ? `${typeof window !== 'undefined' ? window.location.origin : ''}/?o=${ownerUid}&e=${eventId}&g=${previewGuest.guestId}`
     : '';
+
+  // 2026-08-14 — merge event metadata with invitation-level overrides.
+  // Each override is treated as "use this instead" when non-empty;
+  // empty strings fall back to the event record. We do NOT mutate
+  // `event` itself — the spread builds a new object the InfoStep and
+  // InvitationCard both consume.
+  const effectiveEvent = event
+    ? {
+        ...event,
+        date: eventOverrides.date || event.date,
+        time: eventOverrides.time || event.time,
+        venue: eventOverrides.venue || event.venue,
+        address: eventOverrides.address || event.address,
+      }
+    : event;
 
   // 2026-07-23 — switched from direct NAS POST to /api/photo-upload.
   // The HMAC token is no longer minted client-side: the proxy mints
@@ -305,7 +355,13 @@ export function InvitationEditor({
             />
           )}
           {step === 1 && (
-            <InfoStep ownerMessage={ownerMessage} setOwnerMessage={setOwnerMessage} event={event} />
+            <InfoStep
+              ownerMessage={ownerMessage}
+              setOwnerMessage={setOwnerMessage}
+              event={effectiveEvent}
+              overrides={eventOverrides}
+              setOverrides={setEventOverrides}
+            />
           )}
           {step === 2 && (
             <GuestsStep
@@ -327,7 +383,7 @@ export function InvitationEditor({
             <InvitationCard
               templateId={templateId}
               bgUrl={bgUrl}
-              event={event}
+              event={effectiveEvent}
               guest={previewGuest}
               ownerMessage={ownerMessage}
               shareUrl={previewShareUrl}
@@ -629,18 +685,115 @@ function BackgroundStep({
   );
 }
 
-function InfoStep({ ownerMessage, setOwnerMessage, event }) {
+// 2026-08-14 — EditableField is the building block for the four
+// invitation-metadata overrides. Click the text → it becomes an
+// input; blur or Enter saves; Esc cancels. The original (event.*)
+// value is shown as a placeholder/hint when the field is empty,
+// so users see what they're overriding.
+function EditableField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+  hint,
+  inputClass = '',
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value || '');
+  const commit = () => {
+    onChange(draft);
+    setEditing(false);
+  };
+  // Keep draft in sync if value changes from above (e.g. loaded async)
+  useEffect(() => {
+    if (!editing) setDraft(value || '');
+  }, [value, editing]);
+  return (
+    <div className="flex items-baseline gap-2">
+      <strong className="shrink-0 w-12 text-slate-700">{label}</strong>
+      {editing ? (
+        <input
+          type={type}
+          autoFocus
+          value={draft}
+          placeholder={placeholder}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit();
+            if (e.key === 'Escape') {
+              setDraft(value || '');
+              setEditing(false);
+            }
+          }}
+          className={`flex-1 px-2 py-1 border border-rose-300 rounded outline-none focus:border-rose-500 text-sm ${inputClass}`}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className="flex-1 text-left px-2 py-1 -mx-2 rounded hover:bg-rose-50 text-slate-800 hover:text-rose-700 transition-colors text-sm group flex items-center gap-1.5"
+          title={hint || '點擊修改'}
+        >
+          {value || <span className="text-slate-400 italic">{placeholder || '—'}</span>}
+          <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-50 text-rose-400 shrink-0" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function InfoStep({ ownerMessage, setOwnerMessage, event, overrides, setOverrides }) {
+  // Build a setter per field — keeps the override state immutable
+  // and lets EditableField stay generic.
+  const setOverride = (key) => (val) =>
+    setOverrides((prev) => ({ ...prev, [key]: val }));
   return (
     <div className="p-6 space-y-5">
       <h3 className="font-bold text-slate-800">婚禮資料（自動從活動填入，可修改）</h3>
-      <div className="bg-slate-50 rounded-xl p-4 space-y-1 text-sm">
-        <p><strong>名稱：</strong> {event?.name || '婚禮晚宴'}</p>
-        <p><strong>日期：</strong> {event?.date || '—'} {event?.time && `· ${event.time}`}</p>
-        <p><strong>場地：</strong> {event?.venue || '—'}</p>
-        <p><strong>地址：</strong> {event?.address || '—'}</p>
+      <div className="bg-slate-50 rounded-xl p-4 space-y-2 text-sm">
+        <p className="flex items-baseline gap-2">
+          <strong className="shrink-0 w-12 text-slate-700">名稱：</strong>
+          <span className="flex-1 px-2 py-1 -mx-2 text-slate-800 text-sm">
+            {event?.name || '婚禮晚宴'}
+          </span>
+        </p>
+        <EditableField
+          label="日期："
+          value={overrides.date}
+          onChange={setOverride('date')}
+          placeholder={event?.date || 'YYYY-MM-DD'}
+          type="date"
+          inputClass="font-mono"
+          hint="點擊改日期（只影響呢封電子喜帖）"
+        />
+        <EditableField
+          label="時間："
+          value={overrides.time}
+          onChange={setOverride('time')}
+          placeholder={event?.time || 'HH:MM'}
+          type="time"
+          inputClass="font-mono"
+          hint="點擊改時間（只影響呢封電子喜帖）"
+        />
+        <EditableField
+          label="場地："
+          value={overrides.venue}
+          onChange={setOverride('venue')}
+          placeholder={event?.venue || '例：四季酒店'}
+          hint="點擊改場地（只影響呢封電子喜帖）"
+        />
+        <EditableField
+          label="地址："
+          value={overrides.address}
+          onChange={setOverride('address')}
+          placeholder={event?.address || '例：香港中環…'}
+          hint="點擊改地址（只影響呢封電子喜帖）"
+        />
       </div>
       <p className="text-xs text-slate-500">
-        想改呢啲資料？去「活動設定」頁改完再返嚟。
+        上面四個欄位嘅覆寫只影響呢封電子喜帖，唔會改活動設定。
       </p>
 
       {/* Wording templates — pick a starting point, then edit freely below */}
