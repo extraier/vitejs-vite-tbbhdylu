@@ -1771,5 +1771,24 @@ match /{path=**}/events/{eventId} {
         && request.resource.data.viewerUid == request.auth.uid;
       allow update, delete: if false;
     }
+    // 2026-08-14 — M-06 follow-up: /cspReports/{reportId}.
+    //
+    // The CSP header on savetheday.io is REPORT-ONLY (see
+    // `Content-Security-Policy-Report-Only` in vercel.json) and
+    // specifies `report-uri /api/csp-report`. When a browser sees
+    // a violation, it POSTs the report to the Vercel endpoint at
+    // api/csp-report.js, which writes one row per report here via
+    // the Admin SDK (bypassing these rules).
+    //
+    // Authorization:
+    //   - read: admin only — admins diagnose violations, regular
+    //     users can't see any other user's IP/UA.
+    //   - write: deny. The Admin SDK path is the only writer.
+    //     A client-side write would be a self-serving violation
+    //     log, so we lock it down entirely.
+    match /cspReports/{reportId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
   }
 }
