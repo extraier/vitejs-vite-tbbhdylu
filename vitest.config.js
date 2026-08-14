@@ -38,11 +38,6 @@ export default defineConfig({
       // copy used to break the test run with "duplicate suite"
       // errors and stale state from a different module cache.
       '.vercel/**',
-      // 2026-08-14 — Playwright e2e tests live at tests/api/*.test.ts
-      // and use the @playwright/test runner, not vitest. Without
-      // this exclusion, vitest picks them up via its default globs
-      // and reports 1 failed test file (tests/api/csp-report.api.test.ts).
-      'tests/**',
     ],
     // 2026-08-13 — M-03: prevent the suite from hanging on open
     // handles (Firebase emulator sockets, jsdom workers). Audit
