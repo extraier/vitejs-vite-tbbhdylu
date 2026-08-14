@@ -109,6 +109,8 @@ const AdminQueue = lazy(() => import('./screens/AdminQueue').then((m) => ({ defa
 const AdminVendors = lazy(() => import('./screens/AdminVendors').then((m) => ({ default: m.AdminVendors })));
 const AdminImportVendors = lazy(() => import('./screens/AdminImportVendors').then((m) => ({ default: m.AdminImportVendors })));
 const AdminPaymentSettings = lazy(() => import('./screens/AdminPaymentSettings').then((m) => ({ default: m.AdminPaymentSettings })));
+// 2026-08-14 — M-06 follow-up: admin-only CSP report diagnostic.
+const AdminCspReports = lazy(() => import('./screens/AdminCspReports').then((m) => ({ default: m.AdminCspReports })));
 const VendorDashboard = lazy(() => import('./screens/VendorDashboard').then((m) => ({ default: m.VendorDashboard })));
 const VendorProfileEdit = lazy(() => import('./screens/VendorProfileEdit').then((m) => ({ default: m.VendorProfileEdit })));
 const VendorOnboarding = lazy(() => import('./screens/VendorOnboarding').then((m) => ({ default: m.VendorOnboarding })));
@@ -3281,7 +3283,11 @@ export default function App() {
             target === 'admin-users' ||
             target === 'admin-vendors' ||
             target === 'admin-queue' ||
-            target === 'admin-payment-settings'
+            target === 'admin-payment-settings' ||
+            // 2026-08-14 — M-06 follow-up: admin-only CSP report
+            // diagnostic view. Reads from /cspReports (admin-only
+            // read per firestore.rules).
+            target === 'admin-csp-reports'
           ) {
             // Stay in owner role; just swap the view. Clear any guest-portal
             // overlay so the admin screen has the full header / tab area.
@@ -3842,6 +3848,11 @@ export default function App() {
                 banking). Mounted as a top-level admin screen so it
                 gets the full header / tab area. Reached via the
                 RoleSimulator "💳 收款設定" pill. */}
+            {/* 2026-08-14 — M-06 follow-up: CSP report view */}
+            {isAdmin && currentView === 'admin-csp-reports' && (
+              <LazyScreen><AdminCspReports isAdmin={isAdmin} /></LazyScreen>
+            )}
+
             {isAdmin && currentView === 'admin-payment-settings' && (
               <LazyScreen><AdminPaymentSettings user={user} isAdmin={isAdmin} /></LazyScreen>
             )}

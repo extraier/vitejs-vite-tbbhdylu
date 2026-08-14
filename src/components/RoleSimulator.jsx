@@ -1,4 +1,4 @@
-import { Users, Shield, BarChart3, Store, Inbox, CreditCard } from 'lucide-react';
+import { Users, Shield, BarChart3, Store, Inbox, CreditCard, ShieldAlert } from 'lucide-react';
 
 /**
  * RoleSimulator — dark "developer-mode" pill bar at the top of the screen.
@@ -179,6 +179,23 @@ export function RoleSimulator({
           >
             <CreditCard className="w-3.5 h-3.5" />
             💳 收款設定
+          </button>
+          {/* 2026-08-14 — M-06 follow-up: CSP report diagnostic view.
+              Reads from /cspReports (admin-only read per firestore.rules).
+              Useful for spotting browsers that try to load blocked
+              resources — typically Cloudflare beacon, image sources,
+              or unauthorized Connect-src calls. */}
+          <button
+            onClick={() => onSwitch('admin-csp-reports')}
+            title="CSP 違規報告 (平台管理員)"
+            className={`px-3 py-1 rounded-full flex items-center gap-1 ${
+              currentView === 'admin-csp-reports'
+                ? 'bg-rose-500 font-bold'
+                : 'bg-slate-800 hover:bg-slate-700'
+            }`}
+          >
+            <ShieldAlert className="w-3.5 h-3.5" />
+            🛡️ CSP 報告
           </button>
         </>
       )}
