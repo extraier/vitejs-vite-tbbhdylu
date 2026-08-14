@@ -178,12 +178,8 @@ test.describe('/api/csp-report — Firestore integration (requires SA key)', () 
     expect(resp.status()).toBe(204);
 
     // Firestore writes are async — wait briefly for propagation.
-    let docs: any[] = [];
-    for (let attempt = 0; attempt < 5; attempt++) {
-      await new Promise((r) => setTimeout(r, 1000));
-      docs = await queryDocuments(marker);
-      if (docs.length > 0) break;
-    }
+    // Helper handles retries internally (~5s max). No client-side loop.
+    const docs = await queryDocuments(marker);
     expect(docs.length, `expected >= 1 doc with marker ${marker}`).toBeGreaterThanOrEqual(1);
 
     const doc = docs[0];
@@ -214,12 +210,8 @@ test.describe('/api/csp-report — Firestore integration (requires SA key)', () 
     });
     expect(resp.status()).toBe(204);
 
-    let docs: any[] = [];
-    for (let attempt = 0; attempt < 5; attempt++) {
-      await new Promise((r) => setTimeout(r, 1000));
-      docs = await queryDocuments(marker);
-      if (docs.length > 0) break;
-    }
+    // Helper handles retries internally (~5s max). No client-side loop.
+    const docs = await queryDocuments(marker);
     expect(docs.length, `expected >= 1 doc with marker ${marker}`).toBeGreaterThanOrEqual(1);
 
     const doc = docs[0];
@@ -252,12 +244,8 @@ test.describe('/api/csp-report — Firestore integration (requires SA key)', () 
     });
     expect(resp.status()).toBe(204);
 
-    let docs: any[] = [];
-    for (let attempt = 0; attempt < 5; attempt++) {
-      await new Promise((r) => setTimeout(r, 1500));
-      docs = await queryDocuments(marker);
-      if (docs.length >= 2) break;
-    }
+    // Helper handles retries internally (~5s max). No client-side loop.
+    const docs = await queryDocuments(marker);
     expect(docs.length, `expected 2 docs for marker ${marker}`).toBeGreaterThanOrEqual(2);
     for (const d of docs) {
       expect(d.source).toBe('reporting-api');
