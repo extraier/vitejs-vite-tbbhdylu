@@ -20,7 +20,7 @@
         },
         {
           "key": "Permissions-Policy",
-          "value": "camera=(self), microphone=(), geolocation=(self), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=(), ambient-light-sensor=(), serial=()"
+          "value": "camera=(self), microphone=(), geolocation=(self), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=(), serial=()"
         },
         {
           "key": "X-Frame-Options",
@@ -32,7 +32,7 @@
         },
         {
           "key": "Content-Security-Policy-Report-Only",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.firebaseio.com https://*.googleapis.com https://*.cloudfunctions.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.savetheday.io https://firebasestorage.googleapis.com https://api.qrserver.com https://*.googleusercontent.com; font-src 'self' data:; connect-src 'self' https://*.googleapis.com https://identitytoolkit.googleapis.com https://*.firebaseio.com https://firestore.googleapis.com https://firebasestorage.googleapis.com wss://*.firebaseio.com https://cdn.savetheday.io https://*.savetheday-2377a.cloudfunctions.net https://api.qrserver.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /api/csp-report"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.firebaseio.com https://*.googleapis.com https://*.cloudfunctions.net https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.savetheday.io https://firebasestorage.googleapis.com https://storage.googleapis.com https://api.qrserver.com https://*.googleusercontent.com; font-src 'self' data:; connect-src 'self' https://*.googleapis.com https://identitytoolkit.googleapis.com https://*.firebaseio.com https://firestore.googleapis.com https://firebasestorage.googleapis.com wss://*.firebaseio.com https://cdn.savetheday.io https://*.cloudfunctions.net https://api.qrserver.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /api/csp-report"
         }
       ]
     }
