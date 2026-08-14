@@ -28,6 +28,10 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+// 2026-08-14 — mergeOverride is the pure-logic helper for invitation
+// metadata overrides. Lives in its own file so test code can import
+// it without pulling in firebase-admin.
+import { mergeOverride } from './invitationEmail';
 import * as QRCode from 'qrcode';
 import * as crypto from 'node:crypto';
 import { sendViaSendgrid } from './sendgridMailer';
@@ -351,10 +355,16 @@ async function _sendInvitationsImpl(req: any): Promise<SendInvitationsResult> {
         isFamily,
         memberNames: isFamily ? unit.memberRows.map((m: any) => m.data().name) : [],
         eventName: event.name || '婚禮晚宴',
-        eventDate: event.date,
-        eventTime: event.time,
-        venue: event.venue,
-        address: event.address,
+        // 2026-08-14 — invitation-level overrides take precedence
+        // over the canonical event record. Empty override = fall
+        // back to event value. This lets the user nudge the date
+        // shown on the invitation without rewriting the event
+        // record (which powers RSVP, dashboard cards, vendor
+        // dashboards, etc.).
+        eventDate: mergeOverride(invitation.dateOverride as string | undefined, event.date),
+        eventTime: mergeOverride(invitation.timeOverride as string | undefined, event.time),
+        venue: mergeOverride(invitation.venueOverride as string | undefined, event.venue),
+        address: mergeOverride(invitation.addressOverride as string | undefined, event.address),
         ownerMessage: customMessage || (invitation.ownerMessage as string) || '',
         bgUrl: invitation.bgUrl as string | null | undefined,
         templateId: invitation.templateId as string,
@@ -520,7 +530,9 @@ function getEmailTemplate(id: string): TemplateDef {
   return EMAIL_TEMPLATES[id] || EMAIL_TEMPLATES.plain;
 }
 
-function renderEmailHtml(args: {
+// 2026-08-14 — exported so test/invitations.email.test.ts can verify
+// the override flow without spinning up a fake firestore.
+export function renderEmailHtml(args: {
   guestName: string;
   isFamily: boolean;
   memberNames: string[];
