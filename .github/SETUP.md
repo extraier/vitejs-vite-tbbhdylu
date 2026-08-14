@@ -12,17 +12,19 @@ and variables → Actions).
 | Secret | Where to get it |
 |---|---|
 | `FIREBASE_TOKEN` | `firebase login:ci` — paste the token it prints |
-| `GCLOUD_SA_KEY` | Base64-encoded service account JSON key. Used by the Playwright job's Firestore-integration tests (3 of 9 tests). |
+| `GCLOUD_SA_KEY` | Service account JSON **file contents** (raw JSON, not base64). Used by the Playwright job's Firestore-integration tests (3 of 9 tests). |
 
 The `GCLOUD_SA_KEY` is optional — the integration tests auto-skip when missing. Only the 6 HTTP-smoke tests run on PRs without secrets. To enable the full integration suite on pushes to main:
 
 ```bash
-# Get the SA key (one-time, on a machine that has it):
-SA=$(cat ~/.firebase-keys/savetheday-2377a.json | base64)
+# Get the SA key file (one-time, on a machine that has it):
+ls ~/.firebase-keys/savetheday-2377a.json
 
-# Add to GitHub via the CLI:
-gh secret set GCLOUD_SA_KEY --body "$SA" --repo extraier/vitejs-vite-tbbhdylu
+# Add to GitHub via the CLI (raw JSON, not base64):
+gh secret set GCLOUD_SA_KEY < ~/.firebase-keys/savetheday-2377a.json --repo extraier/vitejs-vite-tbbhdylu
 ```
+
+The Playwright helper (`scripts/firestore-query.cjs`) auto-detects whether `GCLOUD_SA_KEY` is a file path (local dev) or raw JSON content (CI secret) by checking whether the value starts with `{`. Both forms are supported.
 
 This single token authorizes the workflow to:
 - Deploy `firestore.rules`
@@ -46,6 +48,7 @@ This single token authorizes the workflow to:
 |---|---|---|
 | `app` | lint + test + build | ✅ Yes |
 | `rules` | Firestore rules unit tests + functions type-check | ✅ Yes |
+| `playwright` | End-to-end tests for `/api/csp-report` (HTTP smoke always; Firestore integration only when `GCLOUD_SA_KEY` is set, on push to main) | ✅ Yes (2026-08-14) |
 | `deploy-functions` | Deploy rules + functions to Firebase (main only) | n/a |
 
 ### `deploy-vercel.yml` — runs on push to `main`
