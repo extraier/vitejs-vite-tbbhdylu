@@ -966,6 +966,11 @@ export {
   applyReferralAttribution,
   getMyReferralInfo,
   requestReferralClaim,
+  // 2026-08-15 — Firestore trigger that auto-qualifies the
+  // referrer the moment a referred user creates their first
+  // event. Replaces the manual email-claim flow (P0-2 of the
+  // Manus product review).
+  onEventCreated,
 } from './referralCodes';
 
 // 2026-07-29 — listSocialProofs for SocialProofModal history tab.
