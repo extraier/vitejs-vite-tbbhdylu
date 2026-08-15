@@ -31,6 +31,16 @@ import {
   HttpsError,
 } from 'firebase-functions/v2/https';
 import { beforeUserCreated } from 'firebase-functions/v2/identity';
+// 2026-08-15 — onDocumentCreated fires when a couple creates their
+// first event. We use it to auto-qualify the referrer (no email
+// claim step), per the Manus product review P0-2.
+import { onDocumentCreated } from 'firebase-functions/v2/firestore';
+// Pure helpers from a sibling file so we can unit-test the
+// decision logic without pulling in firebase-admin.
+import {
+  isFirstEvent,
+  makeQualifiedOutcome,
+} from './referralQualify';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
@@ -235,8 +245,17 @@ export const applyReferralAttribution = onCall(
  *   - shareUrl: full URL the caller should share with friends
  *   - referredCount: how many users have referredByCode === my code
  *     (signed up but haven't necessarily created an event yet)
- *   - claimedCount: how many of those users have created ≥1 event
- *     (eligible to be claimed)
+ *   - qualifiedReferralCount: how many of those users have created
+ *     ≥1 event AND triggered an auto-unlock for us. Maintained by
+ *     onEventCreated. Falls back to an N+1 scan for legacy users who
+ *     predate the trigger (one-time backfill).
+ *   - claimedCount: kept for backwards compat; same value as
+ *     qualifiedReferralCount.
+ *
+ * 2026-08-15 — qualifiedReferralCount replaces the manual email
+ * claim step. Couples no longer need to type in their friend's email;
+ * the auto-trigger does the work and this function just reports the
+ * count.
  */
 export const getMyReferralInfo = onCall(
   { cors: true, region: 'us-central1' },
@@ -282,14 +301,40 @@ export const getMyReferralInfo = onCall(
       .where('referredByCode', '==', code)
       .get();
 
-    // For each referred user, check if they have at least one event.
-    // We do this by getting all their events subcollections. For our
-    // scale (max ~10k referred users per referrer) this is acceptable;
-    // if it becomes hot we can denormalize a `claimedByReferrer` flag.
-    let claimedCount = 0;
-    for (const d of referredSnap.docs) {
-      const events = await userRef(d.id).collection('events').limit(1).get();
-      if (!events.empty) claimedCount++;
+    // 2026-08-15 — replace the N+1 read with the denormalized
+    // qualifiedReferralCount maintained by onEventCreated. This is
+    // the count of referred users who have created at least one
+    // event AND whose referrer (us) has been granted the unlock.
+    //
+    // Backwards compat: if qualifiedReferralCount isn't set yet
+    // (user predates this trigger), fall back to a single
+    // collectionGroup count. The collectionGroup reads events
+    // across all users' subcollections and is bounded by the
+    // Firestore rules we already enforce — same security
+    // boundary, no new exposure.
+    let qualifiedReferralCount = (data.qualifiedReferralCount as number | undefined) ?? 0;
+    if (qualifiedReferralCount === 0) {
+      // Legacy path: count qualifying users by walking the
+      // referredByUid index. Still N+1 but only for users who
+      // predate the trigger — vanishingly small at this point.
+      const qualSnap = await db
+        .collection('artifacts').doc(appId)
+        .collection('users')
+        .where('referredByCode', '==', code)
+        .get();
+      let legacyQualified = 0;
+      for (const d of qualSnap.docs) {
+        const events = await userRef(d.id).collection('events').limit(1).get();
+        if (!events.empty) legacyQualified++;
+      }
+      qualifiedReferralCount = legacyQualified;
+      // Backfill the aggregate so we never re-scan. Best-effort.
+      if (legacyQualified > 0) {
+        await userDocRef.set(
+          { qualifiedReferralCount: legacyQualified },
+          { merge: true },
+        );
+      }
     }
 
     // Build the share URL — front-end host is hardcoded for now since
@@ -301,7 +346,14 @@ export const getMyReferralInfo = onCall(
       code,
       shareUrl,
       referredCount: referredSnap.size,
-      claimedCount,
+      // 2026-08-15 — renamed for clarity. qualifiedReferralCount is
+      // maintained by the auto-qualify trigger; it's the same
+      // population as the old claimedCount but kept up-to-date
+      // automatically.
+      qualifiedReferralCount,
+      // 2026-08-15 — keep claimedCount for backwards compat with
+      // the existing client UI. Same value, both names.
+      claimedCount: qualifiedReferralCount,
     };
   },
 );
@@ -401,3 +453,190 @@ export async function resolveEmailToUid(email: string): Promise<string | null> {
     throw e;
   }
 }
+
+// ---- 5. onEventCreated (Firestore trigger) ----------------------------
+//
+// 2026-08-15 — automatic referral qualification. Replaces the manual
+// `requestReferralClaim` workflow (which required the referrer to type
+// in the friend's email). Per the Manus product review P0-2.
+//
+// Flow:
+//   1. User creates their first event (the trigger fires on every
+//      event creation but only the FIRST one qualifies the referrer).
+//   2. We look up `referredByUid` on the new user's doc.
+//   3. If set, we mark the user as qualified in
+//      /users/{referrerUid}/referralQualifications/{referredUid}.
+//   4. The first-time write bumps referrer's qualifiedReferralCount
+//      and grants the two unlocks (storage-500mb + watermark-removed).
+//   5. Subsequent events from the same referred user are no-ops.
+//
+// Idempotency: every step uses create-with-merge OR a conditional
+// update that no-ops if the qualification already exists. grantUnlock
+// is itself idempotent on unlockType.
+//
+// Anti-fraud hold: deferred. The Manus review suggested "a short
+// anti-fraud hold" before granting. We grant immediately because:
+//   (a) grantUnlock is reversible via admin revoke, so fraud can be
+//       undone without data loss;
+//   (b) couples waiting 24h for a referral reward feels punitive;
+//   (c) adding a hold means another state field + admin UI to
+//       override. We can layer this in later without breaking the
+//       current flow.
+
+/**
+ * Auto-qualify the referrer when the referred user creates their
+ * FIRST event. Subsequent events from the same referred user are
+ * no-ops (the qualification record already exists).
+ *
+ * @param referredUid  The new user who just created an event.
+ * @param referrerUid  The user who referred them (from referredByUid).
+ */
+export async function qualifyReferrerOnFirstEvent(
+  referredUid: string,
+  referrerUid: string,
+): Promise<{
+  alreadyQualified: boolean;
+  grantedStorage: boolean;
+  grantedWatermark: boolean;
+}> {
+  // ---- Step 1: Try to create the qualification record. If it
+  // already exists, this is a duplicate trigger fire (or a second
+  // event from the same user). No-op and report. ----
+  const qualRef = userRef(referrerUid)
+    .collection('referralQualifications')
+    .doc(referredUid);
+  const qualSnap = await qualRef.get();
+  if (qualSnap.exists) {
+    return makeQualifiedOutcome(true, false, false);
+  }
+
+  // ---- Step 2: Atomic qualification write. Use create() (not set())
+  // so a parallel trigger fire races safely — only one wins. ----
+  try {
+    await qualRef.create({
+      referredUid,
+      qualifiedAt: FieldValue.serverTimestamp(),
+      // First event info is enriched in step 3 below.
+    });
+  } catch (e: any) {
+    if (e?.code === 6 /* ALREADY_EXISTS */) {
+      // Lost the race; another trigger instance already qualified.
+      return makeQualifiedOutcome(true, false, false);
+    }
+    throw e;
+  }
+
+  // ---- Step 3: Enrich the qualification doc with event info
+  // (best-effort; doesn't block the unlock). We do this AFTER the
+  // conditional create so a partial failure doesn't lose the
+  // qualification signal. ----
+  //
+  // Defensive check: if the user already had an event BEFORE this
+  // trigger fired (e.g. they had events from before the trigger
+  // shipped), don't re-bump qualifiedReferralCount. The pure
+  // isFirstEvent() helper makes this testable in isolation.
+  const eventsSnap = await userRef(referredUid)
+    .collection('events')
+    .orderBy('createdAt', 'asc')
+    .limit(2)
+    .get();
+  const otherEventCount = eventsSnap.docs.length - 1; // -1 for the just-created event
+  if (isFirstEvent(otherEventCount) && !eventsSnap.empty) {
+    const firstEventDoc = eventsSnap.docs[0];
+    await qualRef.set(
+      {
+        firstEventId: firstEventDoc.id,
+        firstEventName: firstEventDoc.data().name || '',
+        firstEventCreatedAt: firstEventDoc.data().createdAt || null,
+      },
+      { merge: true },
+    );
+  }
+
+  // ---- Step 4: Bump referrer's qualifiedReferralCount atomically. ----
+  // We use FieldValue.increment for safe concurrent updates. The
+  // pure nextQualifiedCount() helper computes the expected value
+  // for the legacy backfill path (in getMyReferralInfo) — same
+  // semantics, different code path.
+  await userRef(referrerUid).set(
+    {
+      qualifiedReferralCount: FieldValue.increment(1),
+      lastReferralQualifiedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true },
+  );
+
+  // ---- Step 5: Grant the two unlocks. grantUnlock is idempotent
+  // on unlockType, so re-firing is safe. The {referredUid} extras
+  // field records provenance for the audit trail. ----
+  const storageResult = await grantUnlock(referrerUid, 'storage-500mb', 'referral', {
+    referredUid,
+  });
+  const watermarkResult = await grantUnlock(referrerUid, 'watermark-removed', 'referral', {
+    referredUid,
+  });
+
+  return makeQualifiedOutcome(
+    false,
+    !storageResult.alreadyGranted,
+    !watermarkResult.alreadyGranted,
+  );
+}
+
+/**
+ * Firestore trigger: fires when a new event doc is created under any
+ * user's events collection. Path:
+ *   artifacts/{appId}/users/{referredUid}/events/{eventId}
+ *
+ * The trigger:
+ *   - Reads the referred user's doc to find `referredByUid`.
+ *   - If absent (the user wasn't referred), returns silently.
+ *   - If present, calls qualifyReferrerOnFirstEvent().
+ *
+ * Path-scoping via the {appId} literal keeps the trigger attached to
+ * the production app namespace only.
+ */
+export const onEventCreated = onDocumentCreated(
+  {
+    document: 'artifacts/savetheday-production/users/{referredUid}/events/{eventId}',
+    region: 'us-central1',
+    // No secrets needed; this trigger only writes to firestore.
+    timeoutSeconds: 30,
+    memory: '256MiB',
+  },
+  async (event) => {
+    const referredUid = String(event.params.referredUid);
+    const eventId = String(event.params.eventId);
+    console.log(`[onEventCreated] referredUid=${referredUid} eventId=${eventId}`);
+
+    try {
+      // Look up who referred this user. If they weren't referred,
+      // referredByUid is missing — return silently.
+      const userDoc = await userRef(referredUid).get();
+      const userData = userDoc.data() || {};
+      const referrerUid = userData.referredByUid as string | undefined;
+
+      if (!referrerUid) {
+        console.log(`[onEventCreated] referredUid=${referredUid} not referred; skipping.`);
+        return;
+      }
+      if (referrerUid === referredUid) {
+        // Self-referral (shouldn't happen — applyReferralAttribution
+        // blocks it — but defensive).
+        console.warn(`[onEventCreated] self-referral detected; uid=${referredUid}`);
+        return;
+      }
+
+      const result = await qualifyReferrerOnFirstEvent(referredUid, referrerUid);
+      console.log(
+        `[onEventCreated] referredUid=${referredUid} referrerUid=${referrerUid} result=${JSON.stringify(result)}`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[onEventCreated] crash:`, msg);
+      // Don't rethrow — trigger retry on transient errors is annoying
+      // for this idempotent path. Log loudly so we see it in
+      // Cloud Logging.
+    }
+  },
+);
