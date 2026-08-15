@@ -213,43 +213,44 @@ jobs:
       - name: Build functions
         run: cd functions && npm run build && cd ..
 
-      # 2026-08-15 — changed: was silently `exit 0` when the
-      # FIREBASE_TOKEN secret was empty. That hid a real bug:
-      # fe8da63 added onEventCreated but the function was never
-      # exported from index.ts, so the source didn't match prod
-      # for 3 days and nobody noticed. The deploy job exists to
-      # catch source-vs-prod drift; silently skipping defeats the
-      # purpose. Now: hard-fail with a clear remediation message.
-      # Add a manual-deploy fallback by running
-      #   scripts/deploy-functions.sh <fn> [<fn> ...]
-      # from a workstation with the SA key (~/.firebase-keys/
-      # savetheday-2377a.json) — that script uses gcloud's
-      # short-lived OAuth access token so no Firebase login is
-      # needed.
+      # 2026-08-15 — rewritten to mint a Firebase CLI token from a
+      # GCP service-account JSON in CI. This replaces the old
+      # `firebase login:ci` flow that required a separate
+      # FIREBASE_TOKEN secret.
       #
-      # We can't use `if: ${{ secrets.X }}` to gate the step
-      # (GitHub Actions security hardening rejects that syntax).
-      # Instead: detect-and-fail in a tiny first step, then the
-      # subsequent steps use an `outputs.has_token` value to
-      # gate themselves.
-      - name: Detect FIREBASE_TOKEN
-        id: detect
+      # Set the GCP_SA_KEY secret to the raw JSON content of a
+      # service account with firebase.admin role on the project
+      # (the existing firebase-adminsdk-fbsvc@savetheday-2377a.
+      # iam.gserviceaccount.com is the recommended choice). The
+      # Node script mints a short-lived OAuth2 access token from
+      # that SA and passes it as FIREBASE_TOKEN to the Firebase
+      # CLI. The CLI accepts user-OAuth tokens with a
+      # deprecation notice that is informational only.
+      #
+      # If GCP_SA_KEY is missing we still hard-fail — the deploy
+      # job exists to catch source-vs-prod drift, so silently
+      # skipping would defeat the purpose (see 32da0db history).
+      - name: Mint FIREBASE_TOKEN from GCP_SA_KEY
+        id: mint
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
-          if [ -z "$FIREBASE_TOKEN" ]; then
-            echo "::error::FIREBASE_TOKEN secret is not configured on this repo."
-            echo "::error::This means functions + firestore rules are NOT being auto-deployed from CI."
-            echo "::error::Either set the secret (see .github/SETUP.md) or run scripts/deploy-functions.sh manually."
+          if [ -z "$GCP_SA_KEY" ]; then
+            echo "::error::GCP_SA_KEY secret is not configured on this repo."
+            echo "::error::Either set it (raw SA JSON content) or run scripts/deploy-functions.sh manually."
             exit 1
           fi
-          # Only reachable if the secret is present.
+          # The script writes the token to stdout. Capture it and
+          # expose it as a step output for later steps.
+          TOKEN=$(node scripts/mint-firebase-token.mjs)
+          echo "::add-mask::$TOKEN"
           echo "has_token=true" >> "$GITHUB_OUTPUT"
+          echo "firebase_token=$TOKEN" >> "$GITHUB_OUTPUT"
 
       - name: Deploy rules + functions
-        if: steps.detect.outputs.has_token == 'true'
+        if: steps.mint.outputs.has_token == 'true'
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_TOKEN: ${{ steps.mint.outputs.firebase_token }}
         run: |
           firebase login:ci --token "$FIREBASE_TOKEN"
           firebase deploy --only firestore:rules,functions --non-interactive --project savetheday-2377a
@@ -257,9 +258,9 @@ jobs:
       # Hosting deploy is best-effort — same token, but failing it
       # shouldn't block the run. Same gate.
       - name: Deploy hosting (optional)
-        if: steps.detect.outputs.has_token == 'true'
+        if: steps.mint.outputs.has_token == 'true'
         continue-on-error: true
         env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          FIREBASE_TOKEN: ${{ steps.mint.outputs.firebase_token }}
         run: |
           firebase deploy --only hosting --non-interactive --project savetheday-2377a
