@@ -213,25 +213,21 @@ jobs:
       - name: Build functions
         run: cd functions && npm run build && cd ..
 
-      # 2026-08-15 — rewritten to mint a Firebase CLI token from a
-      # GCP service-account JSON in CI. This replaces the old
-      # `firebase login:ci` flow that required a separate
-      # FIREBASE_TOKEN secret.
+      # 2026-08-15 — uses GOOGLE_APPLICATION_CREDENTIALS env var
+      # to authenticate `firebase deploy` against the service
+      # account. This is the modern (non-deprecated) path; the
+      # older `--token` path prints a warning on every run.
       #
       # Set the GCP_SA_KEY secret to the raw JSON content of a
       # service account with firebase.admin role on the project
       # (the existing firebase-adminsdk-fbsvc@savetheday-2377a.
-      # iam.gserviceaccount.com is the recommended choice). The
-      # Node script mints a short-lived OAuth2 access token from
-      # that SA and passes it as FIREBASE_TOKEN to the Firebase
-      # CLI. The CLI accepts user-OAuth tokens with a
-      # deprecation notice that is informational only.
+      # iam.gserviceaccount.com is the recommended choice).
       #
-      # If GCP_SA_KEY is missing we still hard-fail — the deploy
-      # job exists to catch source-vs-prod drift, so silently
+      # If GCP_SA_KEY is missing we hard-fail — the deploy job
+      # exists to catch source-vs-prod drift, so silently
       # skipping would defeat the purpose (see 32da0db history).
-      - name: Mint FIREBASE_TOKEN from GCP_SA_KEY
-        id: mint
+      - name: Materialize SA key file
+        id: sa
         env:
           GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
         run: |
@@ -240,27 +236,34 @@ jobs:
             echo "::error::Either set it (raw SA JSON content) or run scripts/deploy-functions.sh manually."
             exit 1
           fi
-          # The script writes the token to stdout. Capture it and
-          # expose it as a step output for later steps.
-          TOKEN=$(node scripts/mint-firebase-token.mjs)
-          echo "::add-mask::$TOKEN"
-          echo "has_token=true" >> "$GITHUB_OUTPUT"
-          echo "firebase_token=$TOKEN" >> "$GITHUB_OUTPUT"
+          # Write the SA JSON to a private tmp file. The CI runner
+          # is ephemeral so this is safe; we just don't want the
+          # SA JSON appearing in process listings or logs.
+          SA_PATH="$RUNNER_TEMP/sa-key.json"
+          printf '%s' "$GCP_SA_KEY" > "$SA_PATH"
+          chmod 600 "$SA_PATH"
+          echo "sa_path=$SA_PATH" >> "$GITHUB_OUTPUT"
+          echo "has_sa=true" >> "$GITHUB_OUTPUT"
 
       - name: Deploy rules + functions
-        if: steps.mint.outputs.has_token == 'true'
+        if: steps.sa.outputs.has_sa == 'true'
         env:
-          FIREBASE_TOKEN: ${{ steps.mint.outputs.firebase_token }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.sa.outputs.sa_path }}
         run: |
-          firebase login:ci --token "$FIREBASE_TOKEN"
-          firebase deploy --only firestore:rules,functions --non-interactive --project savetheday-2377a
+          firebase deploy \
+            --only firestore:rules,functions \
+            --non-interactive \
+            --project savetheday-2377a
 
-      # Hosting deploy is best-effort — same token, but failing it
+      # Hosting deploy is best-effort — same auth, but failing it
       # shouldn't block the run. Same gate.
       - name: Deploy hosting (optional)
-        if: steps.mint.outputs.has_token == 'true'
+        if: steps.sa.outputs.has_sa == 'true'
         continue-on-error: true
         env:
-          FIREBASE_TOKEN: ${{ steps.mint.outputs.firebase_token }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.sa.outputs.sa_path }}
         run: |
-          firebase deploy --only hosting --non-interactive --project savetheday-2377a
+          firebase deploy \
+            --only hosting \
+            --non-interactive \
+            --project savetheday-2377a
