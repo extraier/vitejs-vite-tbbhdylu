@@ -1,62 +1,77 @@
 // 2026-07-29 — Referral modal.
+// 2026-08-15 — drop the manual email-claim tab. Auto-qualify trigger
+// (referralCodes.ts:onEventCreated) now grants the unlock the moment
+// a referred friend creates their first event — no email lookup
+// required. The Track tab now surfaces the pending/qualified state
+// directly.
 //
 // Owner opens this from the RewardsBanner "Earn via referral" button.
-// Three tabs:
+// Two tabs:
 //
 //   1. Share   — show my referralCode + share URL + a copy-to-clipboard
-//                button. (QR generation deferred — too much code for
-//                Phase 2. We'll add in Phase 4 polish if needed.)
+//                button. Native share + QR generation deferred.
 //
-//   2. Claim   — paste a friend's email. We resolve it, verify they
-//                signed up via my code, verify they have ≥1 event, and
-//                auto-grant storage-500mb. This is the moment the user
-//                becomes premium via referral.
+//   2. Track   — show referredCount (signed up) + qualifiedReferralCount
+//                (created their first event → you got the unlock). Each
+//                qualified friend shows as 🎉 Premium unlocked.
 //
-//   3. Track   — show referredCount + claimedCount so the user can see
-//                who's in their pipeline. Read-only.
-//
-// All three tabs share one mount effect that calls
-// getMyReferralInfo once (cached in state). Claim is best-effort with
-// a clear success/failure message.
+// The Track tab auto-refreshes via Firestore listener on the user's
+// own doc so the couple sees their reward land in real time.
 //
 // Styling mirrors InvitePartnerModal / the existing modal family
 // (rounded-2xl, slate-50 header, primary button).
 
-import { useEffect, useState } from 'react';
-import { X, Copy, Check, Share2, Mail, Sparkles, Users, RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { X, Copy, Check, Share2, Users, RefreshCw, PartyPopper, Sparkles } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../../lib/firebase';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { functions, db, appId } from '../../lib/firebase';
 
+// 2026-08-15 — qualifiedReferralCount replaces the old claimedCount
+// field name in our wire. The server keeps claimedCount for
+// backwards compat with anything still reading it.
 interface ReferralInfo {
   code: string;
   shareUrl: string;
   referredCount: number;
-  claimedCount: number;
+  qualifiedReferralCount: number;
+  claimedCount?: number; // legacy alias
 }
 
 interface ReferralModalProps {
   isOpen: boolean;
   onClose: () => void;
   // Used for a "you got premium!" celebration toast on the caller side.
-  onClaimSuccess?: (friendName: string) => void;
+  // Receives the qualifiedReferralCount so the parent can decide how
+  // loudly to celebrate (first unlock is more delightful than the Nth).
+  onQualifiedIncrease?: (newQualified: number) => void;
 }
 
-type Tab = 'share' | 'claim' | 'track';
+type Tab = 'share' | 'track';
 
-export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModalProps) {
+export function ReferralModal({ isOpen, onClose, onQualifiedIncrease }: ReferralModalProps) {
   const [tab, setTab] = useState<Tab>('share');
   const [info, setInfo] = useState<ReferralInfo | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
   const [infoError, setInfoError] = useState<string | null>(null);
-
   const [copied, setCopied] = useState(false);
-  const [claimEmail, setClaimEmail] = useState('');
-  const [claiming, setClaiming] = useState(false);
-  const [claimResult, setClaimResult] = useState<
-    | null
-    | { kind: 'success'; friendName: string; alreadyGranted: boolean }
-    | { kind: 'error'; message: string }
-  >(null);
+
+  // 2026-08-15 — Track the previous qualifiedReferralCount so we can
+  // detect a fresh unlock and fire the celebration toast. The auto-
+  // qualify trigger is asynchronous; this is how the modal notices.
+  //
+  // We use a REF (not state) for the comparison baseline because
+  // the onSnapshot handler closes over the value at effect-run time.
+  // If we used state, every setLastQualified() would re-trigger the
+  // effect, creating a new listener whose closure still has the OLD
+  // value — leading to spurious celebrations or missed bumps.
+  // The state mirrors the ref for UI re-renders.
+  const [lastQualified, setLastQualified] = useState(0);
+  const lastQualifiedRef = useRef(0);
+  // Whether we've already seeded lastQualified from the initial
+  // snapshot. Avoids spurious toasts on mount for users who already
+  // have qualifiedReferralCount > 0.
+  const seededRef = useRef(false);
 
   // Load referral info when the modal opens.
   useEffect(() => {
@@ -64,15 +79,25 @@ export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModal
     let cancelled = false;
     setInfoLoading(true);
     setInfoError(null);
-    setClaimResult(null);
     const fn = httpsCallable<
       void,
-      { code: string; shareUrl: string; referredCount: number; claimedCount: number }
+      {
+        code: string;
+        shareUrl: string;
+        referredCount: number;
+        qualifiedReferralCount: number;
+        claimedCount?: number;
+      }
     >(functions, 'getMyReferralInfo');
     fn()
       .then((res) => {
         if (cancelled) return;
         setInfo(res.data);
+        // Initialize lastQualified on first read; the onSnapshot
+        // below will pick up future changes.
+        if (typeof res.data.qualifiedReferralCount === 'number') {
+          setLastQualified(res.data.qualifiedReferralCount);
+        }
       })
       .catch((err) => {
         if (cancelled) return;
@@ -85,12 +110,70 @@ export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModal
         );
       })
       .finally(() => {
-        if (cancelled) return;
-        setInfoLoading(false);
+        if (!cancelled) setInfoLoading(false);
       });
     return () => {
       cancelled = true;
     };
+  }, [isOpen]);
+
+  // 2026-08-15 — Live listener on our own user doc so the Track
+  // tab updates the moment a friend is auto-qualified (the trigger
+  // writes qualifiedReferralCount via FieldValue.increment). This
+  // is what makes the experience feel real-time instead of
+  // requiring a manual refresh.
+  //
+  // We use the userDoc from the auth listener, not a separate auth
+  // subscription, so we don't double-bind auth state. If the user
+  // isn't signed in yet, the listener simply isn't attached.
+  useEffect(() => {
+    if (!isOpen) return;
+    let unsub: (() => void) | null = null;
+    (async () => {
+      // Lazy-import the auth instance so we don't pull the firebase
+      // auth SDK into the module bundle twice.
+      const { auth } = await import('../../lib/firebase');
+      const uid = auth.currentUser?.uid;
+      if (!uid) return;
+      const userDocRef = doc(db, 'artifacts', appId, 'users', uid);
+      unsub = onSnapshot(
+        userDocRef,
+        (snap) => {
+          const data = snap.data() || {};
+          const newQualified =
+            typeof data.qualifiedReferralCount === 'number'
+              ? data.qualifiedReferralCount
+              : 0;
+          // Use the ref for comparison (always-current), not the
+          // closure variable. See comment above on the ref vs state
+          // decision.
+          if (seededRef.current) {
+            if (newQualified > lastQualifiedRef.current && onQualifiedIncrease) {
+              onQualifiedIncrease(newQualified);
+            }
+          } else {
+            seededRef.current = true;
+          }
+          lastQualifiedRef.current = newQualified;
+          setLastQualified(newQualified);
+        },
+        (err) => {
+          // eslint-disable-next-line no-console
+          console.warn('[ReferralModal] userDoc listener failed:', err?.code, err?.message);
+        },
+      );
+    })();
+    return () => {
+      if (unsub) unsub();
+    };
+  }, [isOpen, onQualifiedIncrease]);
+  // Reset the seeded flag when the modal closes so the next open
+  // re-seeds from the current snapshot. Also reset the ref baseline.
+  useEffect(() => {
+    if (!isOpen) {
+      seededRef.current = false;
+      lastQualifiedRef.current = 0;
+    }
   }, [isOpen]);
 
   const copyShareUrl = async () => {
@@ -122,37 +205,13 @@ export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModal
     }
   };
 
-  const submitClaim = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!claimEmail.trim()) return;
-    setClaiming(true);
-    setClaimResult(null);
-    try {
-      const fn = httpsCallable<
-        { friendEmail: string },
-        { ok: boolean; unlockId: string; alreadyGranted: boolean; friendName: string }
-      >(functions, 'requestReferralClaim');
-      const res = await fn({ friendEmail: claimEmail.trim() });
-      setClaimResult({
-        kind: 'success',
-        friendName: res.data.friendName,
-        alreadyGranted: res.data.alreadyGranted,
-      });
-      setClaimEmail('');
-      // Refresh so the track tab shows the new claimedCount
-      refreshInfo();
-      if (onClaimSuccess) onClaimSuccess(res.data.friendName);
-    } catch (err: any) {
-      // eslint-disable-next-line no-console
-      console.warn('[ReferralModal] requestReferralClaim failed:', err?.code, err?.message);
-      setClaimResult({
-        kind: 'error',
-        message: friendlyClaimError(err?.code, err?.message),
-      });
-    } finally {
-      setClaiming(false);
-    }
-  };
+  // 2026-08-15 — submitClaim removed. The auto-qualify trigger
+  // (referralCodes.ts:onEventCreated) handles qualification
+  // server-side; the couple no longer types a friend's email.
+  // requestReferralClaim is kept on the server for backwards
+  // compat with deep-linked browser sessions but is no longer
+  // surfaced in the UI.
+  void httpsCallable; // keep import live for the getMyReferralInfo call above
 
   if (!isOpen) return null;
 
@@ -186,7 +245,6 @@ export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModal
           {(
             [
               { id: 'share', label: '分享', icon: Share2 },
-              { id: 'claim', label: '領取', icon: Mail },
               { id: 'track', label: '追蹤', icon: Users },
             ] as const
           ).map((t) => (
@@ -194,7 +252,6 @@ export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModal
               key={t.id}
               onClick={() => {
                 setTab(t.id);
-                setClaimResult(null);
               }}
               className={`flex items-center gap-1.5 px-3 py-3 text-sm font-bold border-b-2 transition-colors ${
                 tab === t.id
@@ -272,83 +329,31 @@ export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModal
                   </div>
 
                   <p className="text-xs text-slate-500">
-                    朋友打開連結註冊後，等佢哋建立第一個婚禮，你就可以去「領取」tab claim 解鎖。
+                    朋友用呢條連結註冊並建立婚禮後，你會自動收到{' '}
+                    <span className="font-bold text-amber-600">+500MB</span> 同移除浮水印嘅解鎖，唔使再人手 claim。
                   </p>
-                </div>
-              )}
-
-              {tab === 'claim' && (
-                <div>
-                  <p className="text-sm text-slate-600 mb-4">
-                    輸入你朋友註冊時用嘅 email。確認係用你嘅推薦碼註冊 + 已建立婚禮之後，會即時解鎖{' '}
-                    <span className="font-bold text-amber-600">+500MB</span>。
-                  </p>
-
-                  <form onSubmit={submitClaim}>
-                    <label className="block text-xs font-bold text-slate-500 uppercase tracking-wide mb-1.5">
-                      朋友 email
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      value={claimEmail}
-                      onChange={(e) => setClaimEmail(e.target.value)}
-                      placeholder="friend@example.com"
-                      disabled={claiming}
-                      className="w-full px-3 py-2.5 text-sm border border-slate-200 rounded-lg focus:border-rose-400 focus:ring-2 focus:ring-rose-100 outline-none disabled:opacity-50 mb-3"
-                    />
-                    <button
-                      type="submit"
-                      disabled={claiming || !claimEmail.trim()}
-                      className="w-full bg-amber-500 text-white font-bold py-2.5 rounded-xl hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {claiming ? '處理中…' : '🎁 領取 +500MB 解鎖'}
-                    </button>
-                  </form>
-
-                  {claimResult && (
-                    <div
-                      className={`mt-4 p-3 rounded-xl text-sm ${
-                        claimResult.kind === 'success'
-                          ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
-                          : 'bg-rose-50 border border-rose-200 text-rose-800'
-                      }`}
-                    >
-                      {claimResult.kind === 'success' ? (
-                        <>
-                          {claimResult.alreadyGranted ? (
-                            <>
-                              <div className="font-bold mb-1">✓ 你之前已經領取過呢個 unlock</div>
-                              <div className="text-xs">
-                                {claimResult.friendName
-                                  ? `${claimResult.friendName} 嘅推薦已經有效。`
-                                  : '推薦解鎖仲喺度。'}
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="font-bold mb-1">
-                                🎉 解鎖成功！你已經係 Premium 用戶！
-                              </div>
-                              <div className="text-xs">
-                                {claimResult.friendName
-                                  ? `感謝 ${claimResult.friendName} 用咗你嘅推薦。`
-                                  : '感謝你朋友用咗你嘅推薦。'}
-                                {' '}500MB 儲存空間已經加咗 + 浮水印已經移除。
-                              </div>
-                            </>
-                          )}
-                        </>
-                      ) : (
-                        <div className="font-bold">✗ {claimResult.message}</div>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
 
               {tab === 'track' && (
                 <div>
+                  {/* 2026-08-15 — celebration banner when at least one
+                      friend has been auto-qualified. The auto-trigger
+                      grants the unlock the moment they create their
+                      first event; this banner just makes that visible. */}
+                  {info.qualifiedReferralCount > 0 && (
+                    <div className="mb-4 p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-800 flex items-start gap-2">
+                      <PartyPopper className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-bold">🎉 你已經係 Premium 用戶！</div>
+                        <div className="text-xs mt-0.5">
+                          {info.qualifiedReferralCount} 位朋友用咗你嘅推薦碼並建立婚禮，
+                          你嘅 +500MB 同移除浮水印已經自動解鎖。
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-center">
                       <div className="text-3xl font-black text-rose-600">
@@ -358,14 +363,15 @@ export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModal
                     </div>
                     <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
                       <div className="text-3xl font-black text-amber-600">
-                        {info.claimedCount}
+                        {info.qualifiedReferralCount}
                       </div>
-                      <div className="text-xs font-bold text-slate-600 mt-1">已建立婚禮</div>
+                      <div className="text-xs font-bold text-slate-600 mt-1">已解鎖推薦</div>
                     </div>
                   </div>
 
                   <p className="text-xs text-slate-500 mb-3">
-                    「已建立婚禮」嘅朋友先可以喺「領取」tab 解鎖。
+                    朋友用你嘅連結註冊後，<strong>建立第一個婚禮</strong>就會自動幫你解鎖，
+                    唔使再做任何嘢。
                   </p>
 
                   <button
@@ -386,15 +392,6 @@ export function ReferralModal({ isOpen, onClose, onClaimSuccess }: ReferralModal
   );
 }
 
-function friendlyClaimError(code: string | undefined, message: string | undefined): string {
-  if (code === 'functions/not-found') return '搵唔到呢個 email 嘅帳戶。請確認你朋友用咗呢個 email。';
-  if (code === 'functions/failed-precondition') {
-    if (message?.includes('推薦自己')) return '你不能推薦自己。';
-    if (message?.includes('推薦碼註冊')) return '呢位朋友唔係用你嘅推薦碼註冊嘅，請確認佢哋用咗你分享嘅連結。';
-    if (message?.includes('婚禮')) return '你嘅朋友仲未建立任何婚禮，請等佢哋建立之後再嚟 claim。';
-    if (message?.includes('未有推薦碼')) return '你未有推薦碼，請聯絡管理員。';
-    return message || '領取失敗，請稍後再試。';
-  }
-  if (code === 'functions/unauthenticated') return '請先登入。';
-  return message || '領取失敗，請稍後再試。';
-}
+// 2026-08-15 — friendlyClaimError removed. The auto-qualify
+// trigger replaces the manual email-claim flow entirely; the
+// client no longer surfaces any error messages of that shape.

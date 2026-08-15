@@ -239,11 +239,25 @@ export function EventsDashboard({
 
 
       {/* 2026-07-29 — Referral modal. Opened from RewardsBanner's
-          "推薦朋友" button. The modal handles share / claim / track
-          tabs and calls requestReferralClaim for auto-grant. */}
+          "推薦朋友" button.
+          2026-08-15 — auto-qualify trigger handles the unlock the
+          moment a referred friend creates their first event; the
+          modal shows share / track tabs and surfaces a celebration
+          toast when the qualifiedReferralCount goes up. */}
       <ReferralModal
         isOpen={referralModalOpen}
         onClose={() => setReferralModalOpen(false)}
+        // 2026-08-15 — surface a celebration toast the moment a
+        // referred friend is auto-qualified. The modal's onSnapshot
+        // detects the qualifiedReferralCount bump and passes the
+        // new value here; we pick the message by transition.
+        onQualifiedIncrease={(newQualified) => {
+          if (newQualified === 1) {
+            onToast?.('🎉 朋友建立咗婚禮！你已經係 Premium 用戶，+500MB 同浮水印移除已經自動解鎖。');
+          } else {
+            onToast?.(`🎉 又一位朋友完成推薦（總共 ${newQualified} 位）！`);
+          }
+        }}
       />
 
       {/* 2026-07-29 — Social proof modal. Replaces the alert() TODO
