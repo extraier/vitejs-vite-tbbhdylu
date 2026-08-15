@@ -213,31 +213,53 @@ jobs:
       - name: Build functions
         run: cd functions && npm run build && cd ..
 
-      # 2026-07-18 — GitHub Actions does NOT allow `if: ${{ secrets.X }}`
-      # to be evaluated (it's a security hardening). The previous
-      # syntax was throwing "Unrecognized named-value: 'secrets'"
-      # parser errors on every push. Workaround: just always run
-      # the step and bail inside the shell when the secret is
-      # empty. Adds a few seconds of overhead when there's no
-      # token, but no more email-spam failures.
-      - name: Deploy rules + functions
+      # 2026-08-15 — changed: was silently `exit 0` when the
+      # FIREBASE_TOKEN secret was empty. That hid a real bug:
+      # fe8da63 added onEventCreated but the function was never
+      # exported from index.ts, so the source didn't match prod
+      # for 3 days and nobody noticed. The deploy job exists to
+      # catch source-vs-prod drift; silently skipping defeats the
+      # purpose. Now: hard-fail with a clear remediation message.
+      # Add a manual-deploy fallback by running
+      #   scripts/deploy-functions.sh <fn> [<fn> ...]
+      # from a workstation with the SA key (~/.firebase-keys/
+      # savetheday-2377a.json) — that script uses gcloud's
+      # short-lived OAuth access token so no Firebase login is
+      # needed.
+      #
+      # We can't use `if: ${{ secrets.X }}` to gate the step
+      # (GitHub Actions security hardening rejects that syntax).
+      # Instead: detect-and-fail in a tiny first step, then the
+      # subsequent steps use an `outputs.has_token` value to
+      # gate themselves.
+      - name: Detect FIREBASE_TOKEN
+        id: detect
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: |
           if [ -z "$FIREBASE_TOKEN" ]; then
-            echo "::warning::FIREBASE_TOKEN secret not configured — skipping deploy. See .github/SETUP.md."
-            exit 0
+            echo "::error::FIREBASE_TOKEN secret is not configured on this repo."
+            echo "::error::This means functions + firestore rules are NOT being auto-deployed from CI."
+            echo "::error::Either set the secret (see .github/SETUP.md) or run scripts/deploy-functions.sh manually."
+            exit 1
           fi
+          # Only reachable if the secret is present.
+          echo "has_token=true" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy rules + functions
+        if: steps.detect.outputs.has_token == 'true'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
           firebase login:ci --token "$FIREBASE_TOKEN"
           firebase deploy --only firestore:rules,functions --non-interactive --project savetheday-2377a
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
+      # Hosting deploy is best-effort — same token, but failing it
+      # shouldn't block the run. Same gate.
       - name: Deploy hosting (optional)
+        if: steps.detect.outputs.has_token == 'true'
         continue-on-error: true
-        run: |
-          if [ -z "$FIREBASE_TOKEN" ]; then
-            echo "::notice::FIREBASE_TOKEN secret not configured — skipping hosting deploy."
-            exit 0
-          fi
-          firebase deploy --only hosting --non-interactive --project savetheday-2377a
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          firebase deploy --only hosting --non-interactive --project savetheday-2377a
