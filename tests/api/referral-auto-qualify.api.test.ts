@@ -20,7 +20,6 @@
 // from the client side (no savetheday.io HTTP route involved).
 
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -30,45 +29,78 @@ const HAS_SA = !!process.env.GCLOUD_SA_KEY;
 const PROJECT = 'savetheday-2377a';
 const APP_ID = 'savetheday-production';
 
-// Cached SA key file path (GCLOUD_SA_KEY may be raw JSON or a path)
-let saKeyFile: string | null = null;
+// Mint a Bearer token directly from the SA JSON using Node
+// stdlib (crypto + fetch). Cached for ~50min to avoid one
+// round-trip per Firestore call.
+let cachedToken: { value: string; expiry: number } | null = null;
 
-function getSaKeyFile(): string {
-  if (saKeyFile) return saKeyFile;
+async function saToken(): Promise<string> {
+  if (cachedToken && cachedToken.expiry > Date.now() + 60_000) {
+    return cachedToken.value;
+  }
   const raw = process.env.GCLOUD_SA_KEY || '';
+  let sa: any;
   if (raw.startsWith('{')) {
-    // Raw JSON — write to a temp file
-    const tmp = path.join(os.tmpdir(), `playwright-sa-${Date.now()}.json`);
-    fs.writeFileSync(tmp, raw, { mode: 0o600 });
-    saKeyFile = tmp;
+    sa = JSON.parse(raw);
   } else if (raw) {
-    saKeyFile = raw;
+    sa = JSON.parse(fs.readFileSync(raw, 'utf8'));
   } else {
-    // Fall back to local default
     const home = os.homedir();
     const candidate = path.join(home, '.firebase-keys', `${PROJECT}.json`);
-    if (fs.existsSync(candidate)) saKeyFile = candidate;
-    else throw new Error('GCLOUD_SA_KEY not configured and no local SA key found');
+    sa = JSON.parse(fs.readFileSync(candidate, 'utf8'));
   }
-  return saKeyFile!;
-}
 
-function saToken(): string {
-  const keyFile = getSaKeyFile();
-  return execFileSync(
-    'gcloud',
-    ['auth', 'print-access-token', `--project=${PROJECT}`],
-    {
-      env: { ...process.env, CLOUDSDK_PYTHON: '/opt/homebrew/bin/python3.14' },
-      encoding: 'utf8',
-    },
-  ).trim();
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const payload = {
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/cloud-platform',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600,
+  };
+  const enc = (o: object) =>
+    Buffer.from(JSON.stringify(o))
+      .toString('base64')
+      .replace(/=+$/, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+  const input = `${enc(header)}.${enc(payload)}`;
+
+  const crypto = await import('node:crypto');
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(input);
+  signer.end();
+  const signature = signer
+    .sign(sa.private_key)
+    .toString('base64')
+    .replace(/=+$/, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: `${input}.${signature}`,
+    }),
+  });
+  if (!resp.ok) {
+    throw new Error(`token mint failed: ${resp.status}: ${await resp.text()}`);
+  }
+  const body = await resp.json();
+  cachedToken = {
+    value: body.access_token,
+    expiry: now + body.expires_in,
+  };
+  return cachedToken.value;
 }
 
 const BASE = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(default)/documents`;
 
 async function fCreate(parentPath: string, docId: string, fields: Record<string, any>): Promise<any> {
-  const tok = saToken();
+  const tok = await saToken();
   const url = `${BASE}/${parentPath}?documentId=${docId}`;
   const resp = await fetch(url, {
     method: 'POST',
@@ -82,7 +114,7 @@ async function fCreate(parentPath: string, docId: string, fields: Record<string,
 }
 
 async function fGet(path: string): Promise<any | null> {
-  const tok = saToken();
+  const tok = await saToken();
   const resp = await fetch(`${BASE}/${path}`, {
     headers: { 'Authorization': `Bearer ${tok}` },
   });
@@ -92,7 +124,7 @@ async function fGet(path: string): Promise<any | null> {
 }
 
 async function fListCollection(path: string): Promise<any[]> {
-  const tok = saToken();
+  const tok = await saToken();
   const resp = await fetch(`${BASE}/${path}`, {
     headers: { 'Authorization': `Bearer ${tok}` },
   });
@@ -102,7 +134,7 @@ async function fListCollection(path: string): Promise<any[]> {
 }
 
 async function fDelete(path: string): Promise<void> {
-  const tok = saToken();
+  const tok = await saToken();
   const resp = await fetch(`${BASE}/${path}`, {
     method: 'DELETE',
     headers: { 'Authorization': `Bearer ${tok}` },

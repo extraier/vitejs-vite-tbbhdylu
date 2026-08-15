@@ -582,9 +582,9 @@ async function runTests() {
   log('Owner CAN delete redPackets', true);
 
   // Expired-link guest CANNOT read
-  const expiredCtx = env.authenticatedContext('expired-uid');
+  const guestExpiredCtx = env.authenticatedContext('expired-uid');
   await assertFails(
-    getDoc(doc(expiredCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+    getDoc(doc(guestExpiredCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
   );
   log('Expired-link guest CANNOT read redPackets', true);
 

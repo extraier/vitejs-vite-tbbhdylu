@@ -962,14 +962,15 @@ export {
 // auto-grant path — the referrer provides a friend's email and we
 // grant the storage-500mb unlock without admin involvement.
 export {
-  onUserCreate,
+  // 2026-08-15 — onUserCreate removed. It used a blocking auth
+  // trigger which can't deploy on standard Firebase projects.
+  // The same code-minting logic lives as a fallback in
+  // getMyReferralInfo.
   applyReferralAttribution,
   getMyReferralInfo,
   requestReferralClaim,
-  // 2026-08-15 — Firestore trigger that auto-qualifies the
-  // referrer the moment a referred user creates their first
-  // event. Replaces the manual email-claim flow (P0-2 of the
-  // Manus product review).
+  // Firestore trigger that auto-qualifies the referrer the
+  // moment a referred user creates their first event.
   onEventCreated,
 } from './referralCodes';
 

@@ -30,7 +30,6 @@ import {
   onCall,
   HttpsError,
 } from 'firebase-functions/v2/https';
-import { beforeUserCreated } from 'firebase-functions/v2/identity';
 // 2026-08-15 — onDocumentCreated fires when a couple creates their
 // first event. We use it to auto-qualify the referrer (no email
 // claim step), per the Manus product review P0-2.
@@ -94,65 +93,12 @@ export function isWellFormedReferralCode(code: unknown): code is string {
   return re.test(code);
 }
 
-// ---- 1. onCreate Auth trigger ----------------------------------------
-
-/**
- * Auto-mint a referralCode on every new Firebase Auth user.
- * Runs before the user signs in for the first time, so the user doc
- * exists when they first land on the app and the code is ready to share.
- *
- * Idempotency: only writes referralCode if the user doc doesn't already
- * have one (covers the edge case where this trigger is re-deployed and
- * processes users that already had a doc created some other way).
- */
-export const onUserCreate = beforeUserCreated(
-  { region: 'us-central1' },
-  async (event) => {
-    const uid = event.data?.uid;
-    if (!uid) return;
-
-    // Sanity check — is this a real new user? event.data is non-null on
-    // create, but TS doesn't know that.
-    const userDocRef = userRef(uid);
-    const existing = await userDocRef.get();
-    const existingData = existing.exists ? existing.data() || {} : {};
-    if (existingData.referralCode) return; // already has a code; skip the whole flow
-
-    // Generate a unique code. With 31^5 = ~28M codes, collisions are
-    // negligible for our scale (<100k users), but we still check + retry
-    // up to 5 times to be safe.
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const code = generateReferralCode();
-      // Check uniqueness by querying users with this code (cheap because
-      // we'll add a composite index in firestore.indexes.json).
-      const dupes = await db
-        .collection('artifacts').doc(appId)
-        .collection('users')
-        .where('referralCode', '==', code)
-        .limit(1)
-        .get();
-      if (dupes.empty) {
-        // Upsert so we handle the "user doc doesn't exist yet" case.
-        // 2026-07-31 — also write createdAt so the profile screen can
-        // display 註冊時間. We only stamp it when the doc has no
-        // existing createdAt; once stamped, never overwrite (signup
-        // date is immutable).
-        const update: Record<string, unknown> = {
-          referralCode: code,
-          referralCodeCreatedAt: FieldValue.serverTimestamp(),
-        };
-        if (!existingData.createdAt) {
-          update.createdAt = FieldValue.serverTimestamp();
-        }
-        await userDocRef.set(update, { merge: true });
-        return;
-      }
-    }
-    // 5 collisions in a row is statistically impossible at our scale.
-    // Surface as a hard failure so we notice in logs.
-    throw new Error(`Could not generate unique referral code after 5 attempts for uid=${uid}`);
-  },
-);
+// 2026-08-15 — onUserCreate (Auth blocking trigger) was removed.
+// It used beforeUserCreated which fails to deploy on standard
+// Firebase projects ("Blocking Functions may only be configured
+// for GCIP projects"). The same code-minting logic lives as a
+// fallback in getMyReferralInfo below — when a user doc has no
+// referralCode, we mint one on first read.
 
 // ---- 2. applyReferralAttribution (callable) ---------------------------
 
