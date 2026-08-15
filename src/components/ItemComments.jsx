@@ -35,7 +35,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MessageCircle, Send, Trash2, Loader2 } from 'lucide-react';
-import { addDoc, deleteDoc, doc } from 'firebase/firestore';
+import { addDoc, deleteDoc, doc, query, where } from 'firebase/firestore';
 import { useFirestoreCollection } from '../hooks/useFirestoreCollection';
 import { callFirebaseFn } from '../lib/firebaseFn';
 import { parseCommentPath } from '../lib/firestorePaths';
@@ -90,11 +90,23 @@ export function ItemComments({
   const listRef = useRef(null);
   const prevCountRef = useRef(0);
 
-  const { data: comments = [], loading } = useFirestoreCollection(path, [
-    // Re-subscribe when the path identity changes. useFirestoreCollection
-    // already stringifies the path for its key, but we hand-deps so
-    // tests can stub deterministically.
-    path && JSON.stringify(path),
+  // A vendor must never open an unfiltered comment collection. The
+  // parent assignment field is denormalized onto each comment and the
+  // matching Firestore list rule requires this equality constraint.
+  // Owner and helper reads remain scoped by the event path and their
+  // respective role checks in the rules.
+  const subscription = useMemo(() => {
+    if (!path) return null;
+    if (currentRole === 'vendor' && currentUser?.uid) {
+      return query(path, where('parentAssignedVendorUid', '==', currentUser.uid));
+    }
+    return path;
+  }, [path?.path, currentRole, currentUser?.uid]);
+
+  const { data: comments = [], loading } = useFirestoreCollection(subscription, [
+    path?.path,
+    currentRole,
+    currentUser?.uid,
   ]);
 
   // (2026-08-11 — Diagnostic logging removed. Path resolution

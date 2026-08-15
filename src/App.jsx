@@ -142,7 +142,6 @@ import { PaymentModal } from './components/modals/PaymentModal';
 import { QrCodeModal } from './components/modals/QrCodeModal';
 import { EditGuestModal } from './components/modals/EditGuestModal';
 import { VendorModal } from './components/modals/VendorModal';
-import { VendorInviteLinkModal } from './components/modals/VendorInviteLinkModal';
 import { MyVendorsPanel } from './components/MyVendorsPanel';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { SubmitProposalModal } from './components/modals/SubmitProposalModal';
@@ -822,11 +821,6 @@ export default function App() {
   const [viewingVendorProfile, setViewingVendorProfile] = useState(null);
   // 2026-08-02 — couple-side invite flow. When a couple clicks
   // "✉️ 邀請商戶上線" in VendorModal's BrowseOnlyNotice, we close
-  // VendorModal (to avoid modal-on-modal stacking) and set this so
-  // VendorInviteLinkModal opens with the same vendor. Title is
-  // overridden to "邀請 {name} 上線" to make the couple-side intent
-  // clear (onboarding nudge, not re-invite).
-  const [coupleInvitingVendor, setCoupleInvitingVendor] = useState(null);
   const [viewingQrCode, setViewingQrCode] = useState(null);
   // 2026-08-07 — Couple-side "invite not-yet-onboarded vendor" state.
   // TrendingVendors strips mounted inside MyVendorsPanel → AddVendorPicker
@@ -4296,31 +4290,16 @@ export default function App() {
       <VendorModal
         vendor={viewingVendorProfile}
         onClose={() => setViewingVendorProfile(null)}
-        // 2026-08-02 — couples invite flow. BrowseOnlyNotice calls
-        // onOpenInvite(vendor) when the couple taps the "✉️ 邀請商戶上線"
-        // button. We close VendorModal first to avoid modal-on-modal
-        // stacking, then open VendorInviteLinkModal with the same vendor.
+        // Couples can request vendor outreach, but raw ownership-claim
+        // links remain administrator-only. Close this modal first to
+        // avoid stacking, then open the scoped pending-invite request.
         onOpenInvite={(vendor) => {
           setViewingVendorProfile(null);
-          setCoupleInvitingVendor(vendor);
+          setNotOnboardedVendor(vendor);
         }}
         currentUser={user}
         currentUserRole={userRole}
       />
-      {coupleInvitingVendor && (
-        <VendorInviteLinkModal
-          vendor={{
-            vendorUid:
-              coupleInvitingVendor.id ||
-              coupleInvitingVendor.vendorUid ||
-              coupleInvitingVendor.slug,
-            name: coupleInvitingVendor.name,
-            signupStatus: coupleInvitingVendor.signupStatus,
-          }}
-          onClose={() => setCoupleInvitingVendor(null)}
-          title={`邀請 ${coupleInvitingVendor.name || coupleInvitingVendor.id} 上線`}
-        />
-      )}
       {/* 2026-08-07 — "invite not-yet-onboarded vendor" modal. Opened
           by TrendingVendors strips inside MyVendorsPanel →
           AddVendorPicker → PickExistingVendor when the couple taps

@@ -613,29 +613,16 @@ match /{path=**}/events/{eventId} {
               // the full explanation of the LIVE rules-engine throw
               // on `resource.data.X` during LISTEN).
               //
-              // 2026-08-11 — Vendor branch rewritten to NOT call
-              // get(parentRundown). The helper branch is also dropped
-              // from the READ side: helpers always have an associated
-              // assignedHelperUid on the parent — the comment doc
-              // carries it forward as `parentAssignedHelperUid`. Read
-              // access is granted when either that field matches
-              // request.auth.uid OR the user has a helper perm doc
-              // (which is independent of any single assigned task).
-              //
-              // 2026-08-11 — LISTEN validation on /rundown/{entryId}/comments.
-              // Any cross-doc function call (exists(), get(), or any
-              // function that uses them) throws inside a list rule when
-              // the user can't read the target doc — even if exists()
-              // would return false. The vendor LISTEN path needs to
-              // succeed for the chat panel to work, so the list rule
-              // is intentionally OPEN to any signed-in user. The get
-              // rule below does the actual per-doc authorization via
-              // resource.data.parentAssignedVendorUid — so the vendor
-              // only sees comments they were assigned to. The "leak"
-              // is just the LIST channel itself, which is empty unless
-              // a vendor is actually subscribed to this path (which
-              // only happens via the dashboard wiring).
-              allow list: if isSignedIn();
+              // List queries must be authorized as well as individual
+              // gets. Vendor clients query by parentAssignedVendorUid,
+              // so a request can only return comments for the assigned
+              // vendor. The hasAll guard fails closed for legacy rows.
+              allow list: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
+                || hasHelperPerm(ownerUid, 'canViewChecklist')
+                || (isSignedIn()
+                  && resource.data.keys().hasAll(['parentAssignedVendorUid'])
+                  && resource.data.parentAssignedVendorUid == request.auth.uid);
               // get is evaluated per-doc, so resource.data is bound.
               // The vendor branch reads resource.data.parentAssignedVendorUid
               // because the comment doc carries that field forward from
@@ -735,18 +722,15 @@ match /{path=**}/events/{eventId} {
               || hasHelperPerm(ownerUid, 'canViewChecklist');
             allow write: if isOwnerOrAnyCoOwner(ownerUid);
             match /comments/{commentId} {
-              // 2026-08-11 — Same vendor-branch rewrite as
-              // /rundown/{entryId}/comments. Read & create no
-              // longer call get(parentResource). The comment doc
-              // carries the parent's assignedVendorUid /
-              // assignedHelperUid fields, and the rules do pure
-              // field comparisons.
-              //
-              // 2026-08-11 — Split into list / get to avoid the
-              // "Property parentAssignedVendorUid is undefined on
-              // object" error during LISTEN validation (resource
-              // is unbound for list-level evaluations).
-              allow list: if isSignedIn();
+              // Vendor queries are constrained by the denormalized
+              // assignment field in ItemComments. Do not grant a broad
+              // signed-in list channel for another owner's comments.
+              allow list: if isOwner(ownerUid)
+                || isCoOwnerOfAnyEvent(ownerUid)
+                || hasHelperPerm(ownerUid, 'canViewChecklist')
+                || (isSignedIn()
+                  && resource.data.keys().hasAll(['parentAssignedVendorUid'])
+                  && resource.data.parentAssignedVendorUid == request.auth.uid);
               allow get: if isOwner(ownerUid)
                 || isCoOwnerOfAnyEvent(ownerUid)
                 || hasHelperPerm(ownerUid, 'canViewChecklist')
