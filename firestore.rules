@@ -891,6 +891,11 @@ match /{path=**}/events/{eventId} {
             }
           }
 
+          // 2026-08-17 — DELETED OLD PER-EVENT COMMENT-ALERT BLOCK.
+          // Migrated to a per-recipient /notifications/ inbox at the
+          // /users/{ownerUid}/ scope (see the match /notifications
+          // block after /pendingInvites below — Manus step 11).
+
           // Guests — full rule ported from /guests/. eventId is in
           // the path; the doc body's eventId must still match the
           // path for the create branch that uses resource.data.eventId
@@ -1059,6 +1064,64 @@ match /{path=**}/events/{eventId} {
         match /pendingInvites/{email} {
           allow read: if isOwnerOrAnyCoOwner(ownerUid);
           allow create, update, delete: if isOwnerOrAnyCoOwner(ownerUid);
+        }
+
+        // 2026-08-17 — Big Day comment alerts (Manus step 11).
+        //
+        // Recipient-PRIVATE notification inbox. Each role
+        // participant (owner, co-owner, assigned vendor, helper)
+        // gets one alert doc per Big Day comment in their own
+        // /notifications/ subcollection. The CF writes via Admin
+        // SDK; clients read their OWN inbox only and can update
+        // only the `readAt` field to mark read.
+        //
+        // Why a separate per-user inbox (vs the old per-event
+        // /events/{id}/commentsAlerts/ block):
+        //   - vendor / helper participants are NOT in the same
+        //     /users/{ownerUid}/ tree as the couple. Their alerts
+        //     need to land under THEIR user docs.
+        //   - the per-event path forced all participants to read
+        //     from one location, which leaked read access on the
+        //     owner's tenant to anyone with a comment id.
+        //   - per-user inbox makes cross-device unread state
+        //     trivial (just subscribe to your own /notifications/).
+        //
+        // Path: /users/{recipientUid}/notifications/{notificationId}
+        //   - notificationId is deterministic — `bigday-comment_
+        //     {commentId}_{recipientUid}` — so a CF retry writes
+        //     to the same doc (acceptance A5).
+        //   - `type: 'bigday-comment'` filter on the client
+        //     keeps future notification categories isolated.
+        //
+        // Access:
+        //   - get / list — request.auth.uid == recipientUid ONLY
+        //   - create / delete — DENY (CF uses Admin SDK)
+        //   - update — only `readAt` may change, only on own doc
+        //     (Manus spec 1.5 / acceptance A7)
+        match /notifications/{notificationId} {
+          // Read: only the recipient. This is intentionally
+          // STRICTER than isOwnerOrAnyCoOwner — a co-owner
+          // does NOT read another participant's inbox. The
+          // path's {ownerUid} IS the recipient here.
+          allow get, list: if isOwner(ownerUid);
+
+          // Create / delete: deny clients. The Cloud Function
+          // writes via Admin SDK, which bypasses these rules.
+          // A bad actor can't forge alerts in someone else's
+          // inbox (Manus A7, A4).
+          allow create, delete: if false;
+
+          // Update: only the recipient, and only `readAt` may
+          // change. affectedKeys() must contain ONLY readAt
+          // (existing keys can't be removed, so we check that
+          // the diff is a single key + it's readAt). The new
+          // value must be a server-set timestamp or null
+          // (toggling back to unread).
+          allow update: if isOwner(ownerUid)
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['readAt'])
+            && (request.resource.data.readAt == null
+                || request.resource.data.readAt is timestamp);
         }
 
         // ScanLog: append-only audit trail of every QR-code scan.

@@ -92,6 +92,9 @@ export function NotificationsCenter({
   onBack,
   onOpenProposal,
   onOpenComment,
+  // 2026-08-17 — Big Day comment-alert click handler. Routes to
+  // WeddingDay instead of the checklist.
+  onOpenCommentAlert,
   onOpenInvite,
 }) {
   const [filter, setFilter] = useState('all');
@@ -134,6 +137,8 @@ export function NotificationsCenter({
       proposal: proposalTotal,
       task: Date.now(),
       invite: Date.now(),
+      // 2026-08-17 — per-event timestamp, same shape as task.
+      comment: Date.now(),
     });
   };
 
@@ -145,6 +150,13 @@ export function NotificationsCenter({
         break;
       case 'task':
         if (onOpenComment) onOpenComment(item.meta);
+        break;
+      // 2026-08-17 — Vendor / helper comment on 大日流程 / 物資.
+      // Routes to the Big Day view (wedding-day) instead of the
+      // checklist because rundown / resource comments live there.
+      case 'comment':
+        if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
+        else if (onOpenComment) onOpenComment(item.meta);
         break;
       case 'invite':
         if (onOpenInvite) onOpenInvite(item.meta);

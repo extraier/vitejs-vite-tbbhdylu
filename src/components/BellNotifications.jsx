@@ -91,6 +91,9 @@ export function BellNotifications({
   eventId,
   onOpenProposal,
   onOpenComment,
+  // 2026-08-17 — Big Day comment-alert click handler. Routes the
+  // couple to the WeddingDay view instead of the checklist.
+  onOpenCommentAlert,
   onOpenStatus,
   onOpenInvite,
   onOpenDashboard,
@@ -165,6 +168,8 @@ export function BellNotifications({
       proposal: proposalCount,
       task: Date.now(),
       invite: Date.now(),
+      // 2026-08-17 — per-event timestamp, same shape as task.
+      comment: Date.now(),
     });
     // Bump local tick so this component re-renders immediately
     // against the fresh localStorage markers. The hook also listens
@@ -182,6 +187,13 @@ export function BellNotifications({
         break;
       case 'task':
         if (onOpenComment) onOpenComment(item.meta);
+        break;
+      // 2026-08-17 — Vendor / helper comment on 大日流程 / 物資.
+      // Routes to the Big Day view (wedding-day) instead of the
+      // checklist because rundown / resource comments live there.
+      case 'comment':
+        if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
+        else if (onOpenComment) onOpenComment(item.meta);
         break;
       case 'invite':
         if (onOpenInvite) onOpenInvite(item.meta);

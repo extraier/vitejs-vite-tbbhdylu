@@ -107,6 +107,26 @@ export const CATEGORY_META = {
     badgeClass: 'bg-purple-500',
     borderClass: 'border-purple-200',
   },
+  // 2026-08-17 — Vendor / helper post a comment on 大日流程 /
+  // 物資 (Big Day rundown entry / resource item). The vendor's
+  // comment lives at
+  //   /events/{eventId}/{rundown|resources}/{parentId}/comments/{commentId}
+  // and the cloud function emits a small owner-scoped notification
+  // doc at
+  //   /events/{eventId}/commentsAlerts/{alertId}
+  // which this hook subscribes to. The 'comment' category is the
+  // bell-visible item the couple taps to jump back to the parent.
+  comment: {
+    icon: '💬',
+    color: 'indigo',
+    label: '待辦新留言',
+    pluralLabel: '新留言',
+    bgClass: 'from-indigo-400 to-violet-400',
+    hoverBgClass: 'hover:bg-indigo-50/50',
+    textClass: 'text-indigo-600',
+    badgeClass: 'bg-indigo-500',
+    borderClass: 'border-indigo-200',
+  },
   chat: {
     icon: '✉️',
     color: 'pink',
@@ -136,6 +156,12 @@ const SEEN_KEYS = {
   proposal: (ownerUid) => `lastSeenProposalsCount_${ownerUid}`,
   task: (ownerUid, eventId) => `lastSeenTasksAt_${ownerUid}_${eventId || '0'}`,
   invite: (ownerUid) => `lastSeenHelperAcceptAt_${ownerUid}`,
+  // 2026-08-17 — per-event timestamp for vendor / helper comments.
+  // Same shape as `task` because we want "新留言 since X" semantics,
+  // not absolute count. The commentsAlerts subcollection is
+  // pruned on the client only when the user clicks 全部已讀
+  // (which writes lastSeenCommentsAt_<ownerUid>_<eventId>=now).
+  comment: (ownerUid, eventId) => `lastSeenCommentsAt_${ownerUid}_${eventId || '0'}`,
 };
 
 // Read a "last seen" marker from localStorage. Returns 0 if missing.
@@ -269,6 +295,73 @@ function inviteItems(docs) {
   }));
 }
 
+// 2026-08-17 — Bidirectional recipient-private inbox (Manus step 11).
+//
+// Cloud Function writes alerts to:
+//   /artifacts/{appId}/users/{recipientUid}/notifications/
+//     bigday-comment_{commentId}_{recipientUid}
+//
+// Each role participant (owner, co-owner, assigned vendor, helper)
+// gets their own per-tenant inbox. The hook now subscribes to the
+// SIGNED-IN USER's inbox via `selfUid` (not the owner's `ownerUid`),
+// with a `where('type', '==', 'bigday-comment')` filter so we don't
+// pick up other notification categories that may share the
+// /notifications/ collection later.
+//
+// The hook no longer requires `eventId` for the comment source —
+// the inbox is per-user, not per-event. Multiple events the user
+// participates in all flow into the same inbox.
+//
+// The doc shape (what the CF writes, see functions/src/vendorComment.ts):
+//   {
+//     type: 'bigday-comment',         // notification category
+//     notificationVersion: 1,         // schema version (per Manus 1.3)
+//     recipientUid,                   // inbox owner
+//     kind: 'rundown' | 'resources',  // parent kind for click routing
+//     parentId, parentTitle,          // rundown / resource item ref
+//     commentId,                      // idempotency trace + deep-link
+//     authorUid, authorName, authorRole, // sender presentation
+//     text,                           // 120-char preview (CF-truncated)
+//     createdAt,                      // server timestamp (millis)
+//     readAt intentionally absent — absence == unread (Manus A10).
+//   }
+function commentItems(docs, ownerUid, eventId) {
+  return docs.map((d) => {
+    const kind = d.kind === 'resources' ? 'resources' : 'rundown';
+    const actorName = d.authorName || (d.authorRole === 'vendor' ? '商戶' : '助手');
+    return {
+      id: `comment:${d.id}`,
+      category: 'comment',
+      actorRole: d.authorRole === 'vendor' ? 'vendor' : 'helper',
+      actorName,
+      actorInitial: initialOf(actorName),
+      title:
+        kind === 'rundown'
+          ? `${actorName} 喺大日流程留言`
+          : `${actorName} 喺物資留言`,
+      preview: summarize(d.text) || d.parentTitle || '已留言',
+      meta: {
+        alertId: d.id,
+        commentId: d.commentId || null,
+        parentId: d.parentId || null,
+        parentTitle: d.parentTitle || null,
+        kind,
+        eventId,
+      },
+      href: {
+        view: 'wedding-day',
+        eventId,
+        kind,
+        parentId: d.parentId || null,
+        parentTitle: d.parentTitle || null,
+        source: 'comment',
+      },
+      createdAt: toMillis(d.createdAt),
+      sourceKey: 'comment',
+    };
+  });
+}
+
 // ---- The main hook ----
 
 export const MAX_BELL_DROPDOWN_ITEMS = 20;
@@ -292,6 +385,8 @@ export function useNotifications({
   const [proposals, setProposals] = useState(null); // null = loading
   const [tasks, setTasks] = useState([]);
   const [helpers, setHelpers] = useState([]);
+  // 2026-08-17 — vendor / helper comment alerts (see Source 4 below)
+  const [commentAlerts, setCommentAlerts] = useState([]);
   const [errors, setErrors] = useState({});
   // 2026-08-09 — bumped by the `bell:mark-all-seen` window event so the
   // badges useMemo recomputes against the fresh localStorage markers
@@ -419,6 +514,89 @@ export function useNotifications({
     return () => { cancelled = true; unsub(); };
   }, [ownerUid, enabled]);
 
+  // ---- Source 4 (2026-08-17): Big Day comment alerts ----
+  //
+  // Subscribes to the SIGNED-IN USER's PRIVATE notification inbox:
+  //   /artifacts/{appId}/users/{selfUid}/notifications/
+  //   where type == 'bigday-comment'
+  //
+  // Each recipient (owner, co-owner, vendor, helper) has their own
+  // inbox; the hook is now role-agnostic. The bell subscriber is
+  // whichever user is currently signed in (`selfUid`), so the same
+  // hook backs owner, vendor, and helper bells with no special-casing
+  // in the source.
+  //
+  // Filter `type == 'bigday-comment'` so other notification
+  // categories that may eventually share the /notifications/
+  // collection (e.g. future 'proposal-reply', 'task-reminder') don't
+  // leak into the Big Day bell.
+  //
+  // `where` requires a Firestore composite index — see the rule
+  // block added in firestore.rules. Index: collection-id
+  // 'notifications', fields: type ASC, createdAt DESC.
+  //
+  // `eventId` is intentionally NOT a dependency here — the inbox is
+  // per-user and includes alerts from every event they participate
+  // in. Earlier code subscribed to a per-event subcollection and
+  // missed alerts when the user switched event contexts.
+  useEffect(() => {
+    if (!enabled || !selfUid) {
+      setCommentAlerts([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const inboxRef = collection(
+      db,
+      'artifacts',
+      appId,
+      'users',
+      selfUid,
+      'notifications',
+    );
+    const q = query(
+      inboxRef,
+      where('type', '==', 'bigday-comment'),
+      fsLimit(TASKS_LIMIT),
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        if (cancelled) return;
+        const list = snap.docs.map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            // notificationVersion: 1 — schema version. Hook currently
+            // reads no versioned fields, but reserve the slot so a
+            // future migration can branch.
+            kind: data.kind === 'resources' ? 'resources' : 'rundown',
+            parentId: data.parentId || null,
+            parentTitle: data.parentTitle || null,
+            commentId: data.commentId || null,
+            eventId: data.eventId || null,
+            ownerUid: data.ownerUid || null,
+            authorUid: data.authorUid || null,
+            authorName: data.authorName || null,
+            authorRole: data.authorRole || 'vendor',
+            text: data.text || '',
+            createdAt: data.createdAt,
+            readAt: data.readAt || null,
+            // Source the cross-device unread state — Manus A10.
+          };
+        });
+        list.sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+        setCommentAlerts(list);
+      },
+      (err) => {
+        if (cancelled) return;
+        console.error('[useNotifications] notifications error:', err);
+        setErrors((s) => ({ ...s, comment: err.message || '讀取失敗' }));
+        setCommentAlerts([]);
+      },
+    );
+    return () => { cancelled = true; unsub(); };
+  }, [selfUid, enabled]);
+
   // ---- Merge + sort ----
   // Returns ALL items (no truncation). The bell dropdown caps the
   // rendered list to 20 client-side for visual density; the full
@@ -431,14 +609,15 @@ export function useNotifications({
       ...proposalItems(proposals || [], ownerUid),
       ...taskItems(tasks, ownerUid, eventId),
       ...inviteItems(helpers.filter((h) => h.status === 'active')),
+      ...commentItems(commentAlerts, ownerUid, eventId),
     ];
     items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     return items;
-  }, [proposals, tasks, helpers, ownerUid, eventId]);
+  }, [proposals, tasks, helpers, commentAlerts, ownerUid, eventId]);
 
   // ---- Per-source "new since last seen" counts ----
   const badges = useMemo(() => {
-    if (!ownerUid) return { proposal: 0, task: 0, invite: 0 };
+    if (!ownerUid) return { proposal: 0, task: 0, invite: 0, comment: 0 };
 
     // Proposals: marker is the last-seen *count*. New = current count - marker.
     const lastSeenProposalCount = readSeen(ownerUid, 'proposal');
@@ -457,14 +636,20 @@ export function useNotifications({
       return ts > lastSeenInviteAt;
     }).length;
 
+    // 2026-08-17 — Comments: marker is a per-event timestamp. New =
+    // alerts createdAt > marker. Same semantics as tasks.
+    const lastSeenCommentAt = readSeen(ownerUid, 'comment', eventId);
+    const commentNew = commentAlerts.filter((c) => toMillis(c.createdAt) > lastSeenCommentAt).length;
+
     return {
       proposal: proposalNew,
       task: taskNew,
       invite: inviteNew,
+      comment: commentNew,
     };
-  }, [ownerUid, eventId, proposals, tasks, helpers, seenTick, refreshKey]);
+  }, [ownerUid, eventId, proposals, tasks, helpers, commentAlerts, seenTick, refreshKey]);
 
-  const totalNew = badges.proposal + badges.task + badges.invite;
+  const totalNew = badges.proposal + badges.task + badges.invite + badges.comment;
 
   const loading = proposals === null && totalNew === 0;
 

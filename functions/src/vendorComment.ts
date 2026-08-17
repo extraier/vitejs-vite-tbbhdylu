@@ -224,6 +224,90 @@ export const vendorPostComment = onCall(
 
     const commentsRef = parentRef.collection('comments');
     const ref = await commentsRef.add(commentDoc);
+
+    // 2026-08-17 — Vendor-comment OWNER ALERT.
+    //
+    // Vendor / helper comments live at
+    //   /events/{eventId}/{rundown|resources}/{parentId}/comments/{commentId}
+    // The header bell previously could not subscribe to those
+    // because every attempt at a collectionGroup('comments') listener
+    // hit the LIVE rules-engine throw on `resource.data.X` for the
+    // LISTEN code path (comment docs don't carry the parent's
+    // assignedVendorUid; the per-doc GET branch is fine but LIST
+    // evaluates the rule against each candidate doc and bombs).
+    //
+    // Solution: emit a small owner-scoped notification doc into a
+    // dedicated subcollection on the same per-event path the bell
+    // already subscribes to for tasks. The bell adds a single
+    // `comment` category that listens to this collection, the rules
+    // gate reads by owner/co-owner/helper (no `get()` on parent doc),
+    // and the tap routes back to the rundown entry or resource item
+    // via `parentKind` + `parentId`.
+    //
+    // Why server-side (not client): vendors/helpers can't write to
+    // this collection from the client (rules deny client writes) —
+    // keeps the alert payload authoritative and stops bad actors
+    // from spamming the bell by impersonating vendors.
+    //
+    // The payload is built by a pure helper so unit tests can pin
+    // it without mocking firebase-admin (see
+    // functions/test/vendorComment.test.ts).
+    const alertDoc = buildCommentAlertDoc({
+      parentKind: parentKindStr,
+      parentId: parentIdStr,
+      parentTitle: parentData.title,
+      commentId: ref.id,
+      authorUid: callerUid,
+      authorName: commentDoc.authorName,
+      authorRole: commentDoc.authorRole as 'vendor' | 'helper',
+      text: cleanText,
+      createdAt: now,
+    });
+    // 2026-08-17 — Bidirectional migration (Manus handoff, step 11).
+    //
+    // Old path (deprecated): /events/{eventId}/commentsAlerts/{alertId}
+    //   - alerts lived in a per-event subcollection
+    //   - Firestore-generated doc IDs (not idempotent on retry)
+    //   - only the owner / co-owner / helper-on-the-event could read
+    //
+    // New path (per Manus spec): /users/{recipientUid}/notifications/
+    //   bigday-comment_{commentId}_{recipientUid}
+    //   - alerts live in each recipient's PRIVATE notification inbox
+    //   - one inbox per role participant (owner, co-owner, vendor,
+    //     helper) — each subscribes to their own /notifications/ path
+    //   - deterministic doc id derived from (commentId, recipientUid)
+    //     so a Cloud Function retry writes to the same doc and we
+    //     never duplicate alerts (acceptance A5)
+    //   - rule intent: clients can read only their own inbox;
+    //     client create/delete denied; clients can update readAt
+    //     only (acceptance A7)
+    //
+    // This CF (vendorPostComment) currently writes to the OLD path.
+    // For step 11 we migrate the write to the new path while keeping
+    // the existing single-recipient owner fan-out. Step 12+ will
+    // add the vendor/helper fan-out via a separate trigger (per
+    // Manus, an onDocumentCreated trigger is preferred over
+    // expanding this CF, because couple and co-owner replies
+    // bypass this CF entirely).
+    const recipientUid = ownerUidStr;
+    const notificationId = buildCommentNotificationId(ref.id, recipientUid);
+    const recipientInboxRef = db
+      .collection('artifacts').doc(APP_ID)
+      .collection('users').doc(recipientUid)
+      .collection('notifications');
+    // Deterministic .doc(id) + .set() — a Cloud Functions retry
+    // (network blip, transient error) will overwrite the same
+    // document rather than creating a second alert (A5). set() is
+    // safe because the payload is fully derived from the comment
+    // doc + parent doc + recipient; it is deterministic.
+    await recipientInboxRef.doc(notificationId).set({
+      ...alertDoc,
+      type: 'bigday-comment',
+      notificationVersion: 1,
+      recipientUid,
+      // readAt intentionally absent — absence == unread (Manus A10).
+    });
+
     return { id: ref.id, createdAt: now };
   },
 );
@@ -241,3 +325,137 @@ export const vendorPostCommentHelper = onCall(
     return vendorPostComment.run(req);
   },
 );
+
+// 2026-08-17 — Pure helper for the owner-alert payload.
+//
+// Extracted from vendorPostComment so unit tests can pin the
+// shape (kind / parentId / parentTitle / commentId / author /
+// text / createdAt / source) without mocking firebase-admin.
+// The bell hook in src/hooks/useNotifications.js reads these
+// exact fields when building the `comment` category envelope.
+export interface CommentAlertInput {
+  parentKind: 'rundown' | 'resources';
+  parentId: string;
+  // The parent rundown / resource doc's `title` field, if any.
+  parentTitle: unknown;
+  commentId: string;
+  authorUid: string;
+  authorName: string;
+  authorRole: 'vendor' | 'helper';
+  text: string;
+  createdAt: number;
+}
+export interface CommentAlertDoc {
+  kind: 'rundown' | 'resources';
+  parentId: string;
+  parentTitle: string;
+  commentId: string;
+  authorUid: string;
+  authorName: string;
+  authorRole: 'vendor' | 'helper';
+  text: string;
+  createdAt: number;
+  source: 'cf:vendorPostComment';
+}
+export function buildCommentAlertDoc(input: CommentAlertInput): CommentAlertDoc {
+  // If the parent doc has no usable title, fall back to a generic
+  // label so the bell preview is never blank.
+  const parentTitle =
+    (typeof input.parentTitle === 'string' && input.parentTitle.trim()) ||
+    (input.parentKind === 'rundown' ? '大日流程' : '物資');
+  // Trim comment preview to 120 chars so the bell card stays
+  // single-line. Server-side truncation keeps the bell layout
+  // independent of vendor input length.
+  const text = input.text.length > 120
+    ? `${input.text.slice(0, 120)}…`
+    : input.text;
+  return {
+    kind: input.parentKind,
+    parentId: input.parentId,
+    parentTitle,
+    commentId: input.commentId,
+    authorUid: input.authorUid,
+    authorName: input.authorName,
+    authorRole: input.authorRole,
+    text,
+    createdAt: input.createdAt,
+    source: 'cf:vendorPostComment',
+  };
+}
+
+// 2026-08-17 — Deterministic notification-doc id (Manus step 11).
+//
+// Path: /users/{recipientUid}/notifications/{notificationId}
+//
+// We derive the id from (commentId, recipientUid) so that any Cloud
+// Function retry — network blip, transient error, exponential
+// backoff — overwrites the SAME document instead of creating a
+// second alert. Without this, a 1% retry rate produces visible
+// duplicate bells.
+//
+// Spec (Manus 1.3): `bigday-comment_{commentId}_{recipientUid}`
+//
+// Pure function — exported for unit tests.
+export function buildCommentNotificationId(
+  commentId: string,
+  recipientUid: string,
+): string {
+  return `bigday-comment_${commentId}_${recipientUid}`;
+}
+
+// 2026-08-17 — Recipient-set builder (Manus spec 1.2 / 1.4).
+//
+// The Cloud Function must NEVER accept recipient UIDs from the
+// browser. The recipient set is built authoritatively from the
+// comment + parent + event docs and MUST exclude the author.
+//
+// The author identity is known to the caller; the event's
+// `coOwners` and the parent's `assignedVendorUid` /
+// `assignedHelperUid` are read by the trigger server-side and
+// passed in. This helper is the pure policy layer — testable
+// without the Admin SDK.
+//
+// Policy matrix (per Manus 1.2):
+//   Author        | Recipients
+//   --------------+----------------------------------------
+//   couple/owner  | assigned vendor (optional), assigned helper (optional)
+//   vendor        | owner + active co-owners
+//   helper        | owner + active co-owners
+//   + The author is ALWAYS excluded (A1, A2, A3).
+//
+// Pure function — exported for unit tests.
+export interface BuildNotificationRecipientsInput {
+  authorUid: string;
+  // Required: owner of the event the comment was posted to.
+  ownerUid: string;
+  // Both nullable — items without an assigned vendor / helper.
+  assignedVendorUid: string | null;
+  assignedHelperUid: string | null;
+  // Co-owners are resolved by reading the event doc server-side.
+  activeCoOwnerUids?: readonly string[];
+}
+export interface BuildNotificationRecipientsOutput {
+  recipients: string[];
+  excluded: string[];
+}
+export function buildNotificationRecipients(
+  input: BuildNotificationRecipientsInput,
+): BuildNotificationRecipientsOutput {
+  const candidates = new Set<string>();
+  candidates.add(input.ownerUid);
+  for (const uid of input.activeCoOwnerUids ?? []) {
+    if (typeof uid === 'string' && uid.trim()) candidates.add(uid);
+  }
+  if (typeof input.assignedVendorUid === 'string' && input.assignedVendorUid.trim()) {
+    candidates.add(input.assignedVendorUid);
+  }
+  if (typeof input.assignedHelperUid === 'string' && input.assignedHelperUid.trim()) {
+    candidates.add(input.assignedHelperUid);
+  }
+  const excluded: string[] = [];
+  if (candidates.has(input.authorUid)) {
+    candidates.delete(input.authorUid);
+    excluded.push(input.authorUid);
+  }
+  return { recipients: [...candidates], excluded };
+}

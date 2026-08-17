@@ -3592,6 +3592,16 @@ export default function App() {
                           setFocusedTaskId(meta?.taskId || null);
                           setCurrentView('couple-checklist');
                         }}
+                        // 2026-08-17 — Vendor / helper comment on 大日流程 /
+                        // 物資. Routes to the Big Day view (wedding-day)
+                        // rather than the checklist because the
+                        // parent rundown / resource item lives there.
+                        onOpenCommentAlert={(meta) => {
+                          if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                            setCurrentEvent({ id: meta.eventId });
+                          }
+                          setCurrentView('wedding-day');
+                        }}
                         onOpenStatus={(meta) => {
                           if (meta?.eventId && currentEvent?.id !== meta.eventId) {
                             setCurrentEvent({ id: meta.eventId });
@@ -3666,6 +3676,14 @@ export default function App() {
                   }
                   setFocusedTaskId(meta?.taskId || null);
                   setCurrentView('couple-checklist');
+                }}
+                // 2026-08-17 — Vendor / helper comment on 大日流程 /
+                // 物資. Same routing logic as the bell above.
+                onOpenCommentAlert={(meta) => {
+                  if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                    setCurrentEvent({ id: meta.eventId });
+                  }
+                  setCurrentView('wedding-day');
                 }}
                 onOpenInvite={() => setCurrentView('helpers')}
               />

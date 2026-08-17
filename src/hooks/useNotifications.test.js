@@ -78,9 +78,13 @@ describe('useNotifications', () => {
     expect(mocks.onSnapshot).not.toHaveBeenCalled();
   });
 
-  it('does NOT subscribe when both ownerUid and coupleUid are null', async () => {
+  it('does NOT subscribe when all of ownerUid, coupleUid, and selfUid are null', async () => {
+    // 2026-08-17 (Manus step 11) — the comment-alert subscription
+    // now uses selfUid (per-user inbox) instead of ownerUid
+    // (per-event subcollection), so the "no recipient identity"
+    // guard now requires selfUid to also be null.
     renderHook(() =>
-      useNotifications({ ownerUid: null, coupleUid: null, selfUid: 's-1', eventId: 'e-1', enabled: true }),
+      useNotifications({ ownerUid: null, coupleUid: null, selfUid: null, eventId: 'e-1', enabled: true }),
     );
     await new Promise((r) => setTimeout(r, 10));
     expect(mocks.onSnapshot).not.toHaveBeenCalled();
@@ -331,5 +335,275 @@ describe('useNotifications', () => {
   it('exports MAX_BELL_DROPDOWN_ITEMS so BellNotifications can slice', () => {
     expect(typeof MAX_BELL_DROPDOWN_ITEMS).toBe('number');
     expect(MAX_BELL_DROPDOWN_ITEMS).toBe(20);
+  });
+
+  // 2026-08-17 — Big Day comment alert tests.
+  //
+  // The new bell category is `comment`, sourced from each
+  // recipient's PRIVATE inbox at
+  //   /artifacts/{appId}/users/{selfUid}/notifications/
+  //   where type == 'bigday-comment'
+  // The CF writes via Admin SDK (deterministic doc id
+  // `bigday-comment_{commentId}_{recipientUid}` so retries can't
+  // duplicate — acceptance A5). These tests pin:
+  //   - the subscription path (per-user inbox, type-filter)
+  //   - the envelope shape (category / actor / href / sourceKey)
+  //   - the per-event timestamp badge math
+  //   - mark-all-seen writes the right localStorage key
+  //   - the `type == bigday-comment` filter on the inbox
+  describe('comment alerts (Big Day recipient-private inbox)', () => {
+    function fireCommentSnapshot(docs) {
+      // Push to `refs` like the default factory impl does, so tests
+      // can introspect what subscriptions the hook registered.
+      mocks.onSnapshot.mockImplementation((q, onNext) => {
+        mocks.refs.push({ q, onNext });
+        const qHead = q.args[0];
+        const qWhere = q.args[1];
+        let docsForQ = [];
+        if (
+          qHead?.__isCollection &&
+          // /artifacts/{appId}/users/{selfUid}/notifications
+          qHead.args[1] === 'artifacts' &&
+          qHead.args[3] === 'users' &&
+          qHead.args[5] === 'notifications'
+        ) {
+          docsForQ = docs;
+        }
+        void qWhere; // The where('type','==','bigday-comment') filter
+                      // is exercised in a dedicated test below.
+        setTimeout(
+          () => onNext({ docs: docsForQ.map((d) => ({ id: d.id, data: d.data })) }),
+          0,
+        );
+        return () => {};
+      });
+    }
+
+    it('subscribes to /users/{selfUid}/notifications (per-user inbox, not per-event)', async () => {
+      fireCommentSnapshot([]);
+
+      renderHook(() =>
+        useNotifications({
+          ownerUid: 'owner-1',
+          coupleUid: 'c-1',
+          selfUid: 'self-uid-vendor', // vendor's own UID, NOT the couple's
+          eventId: 'e-1',
+          enabled: true,
+        }),
+      );
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      const matched = mocks.refs.some(({ q }) => {
+        const head = q.args[0];
+        return (
+          head?.__isCollection &&
+          head.args[1] === 'artifacts' &&
+          head.args[3] === 'users' &&
+          // the recipient's UID is the path's {ownerUid} — for
+          // vendors / helpers this is NOT the couple's UID.
+          head.args[4] === 'self-uid-vendor' &&
+          head.args[5] === 'notifications'
+        );
+      });
+      expect(matched).toBe(true);
+    });
+
+    it('applies the where(type == bigday-comment) filter to the inbox subscription', async () => {
+      fireCommentSnapshot([]);
+
+      renderHook(() =>
+        useNotifications({
+          ownerUid: 'owner-1',
+          coupleUid: 'c-1',
+          selfUid: 'self-uid',
+          enabled: true,
+        }),
+      );
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      const matched = mocks.refs.some(({ q }) => {
+        const head = q.args[0];
+        const filter = q.args[1];
+        if (
+          !head?.__isCollection ||
+          head.args[5] !== 'notifications'
+        ) return false;
+        // The filter MUST be `where('type', '==', 'bigday-comment')`.
+        return filter?.__isWhere
+          && filter.args[0] === 'type'
+          && filter.args[1] === '=='
+          && filter.args[2] === 'bigday-comment';
+      });
+      expect(matched).toBe(true);
+    });
+
+    it('builds the right envelope for a vendor comment on 大日流程', async () => {
+      window.localStorage.setItem('lastSeenCommentsAt_owner-1_e-1', '0');
+      fireCommentSnapshot([
+        {
+          id: 'alert-1',
+          data: () => ({
+            kind: 'rundown',
+            parentId: 'rd-42',
+            parentTitle: '兄弟姊妹集合',
+            commentId: 'c-1',
+            authorUid: 'vendor-uid',
+            authorName: 'Tiger Florist',
+            authorRole: 'vendor',
+            text: '會場已準備好',
+            createdAt: { toMillis: () => 5000 },
+          }),
+        },
+      ]);
+
+      const { result } = renderHook(() =>
+        useNotifications({
+          ownerUid: 'owner-1',
+          coupleUid: 'c-1',
+          selfUid: 'owner-1',
+          eventId: 'e-1',
+          enabled: true,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.items.find((i) => i.category === 'comment')).toBeTruthy();
+      });
+
+      const item = result.current.items.find((i) => i.category === 'comment');
+      expect(item).toMatchObject({
+        id: 'comment:alert-1',
+        category: 'comment',
+        actorRole: 'vendor',
+        actorName: 'Tiger Florist',
+        sourceKey: 'comment',
+        href: {
+          view: 'wedding-day',
+          eventId: 'e-1',
+          kind: 'rundown',
+          parentId: 'rd-42',
+          parentTitle: '兄弟姊妹集合',
+          source: 'comment',
+        },
+        meta: {
+          alertId: 'alert-1',
+          commentId: 'c-1',
+          parentId: 'rd-42',
+          parentTitle: '兄弟姊妹集合',
+          kind: 'rundown',
+          eventId: 'e-1',
+        },
+      });
+      expect(item.title).toContain('Tiger Florist');
+      expect(item.title).toContain('大日流程');
+      expect(item.preview).toBe('會場已準備好');
+    });
+
+    it('builds the right envelope for a helper comment on 物資', async () => {
+      window.localStorage.setItem('lastSeenCommentsAt_owner-1_e-1', '0');
+      fireCommentSnapshot([
+        {
+          id: 'alert-2',
+          data: () => ({
+            kind: 'resources',
+            parentId: 'rs-7',
+            parentTitle: '鮮花拱門',
+            authorUid: 'helper-uid',
+            authorName: '阿明',
+            authorRole: 'helper',
+            text: '已送到場地',
+            createdAt: { toMillis: () => 5000 },
+          }),
+        },
+      ]);
+
+      const { result } = renderHook(() =>
+        useNotifications({
+          ownerUid: 'owner-1',
+          coupleUid: 'c-1',
+          selfUid: 'owner-1',
+          eventId: 'e-1',
+          enabled: true,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.items.find((i) => i.category === 'comment')).toBeTruthy();
+      });
+
+      const item = result.current.items.find((i) => i.category === 'comment');
+      expect(item.actorRole).toBe('helper');
+      expect(item.href.kind).toBe('resources');
+      expect(item.href.parentId).toBe('rs-7');
+      expect(item.title).toContain('物資');
+    });
+
+    it('badges.comment counts alerts newer than the localStorage marker', async () => {
+      window.localStorage.setItem('lastSeenCommentsAt_owner-1_e-1', '1000');
+      fireCommentSnapshot([
+        { id: 'a-new', data: () => ({ kind: 'rundown', parentId: 'r1', text: 'new', createdAt: { toMillis: () => 2000 } }) },
+        { id: 'a-old', data: () => ({ kind: 'rundown', parentId: 'r2', text: 'old', createdAt: { toMillis: () => 500 } }) },
+      ]);
+
+      const { result } = renderHook(() =>
+        useNotifications({
+          ownerUid: 'owner-1',
+          coupleUid: 'c-1',
+          selfUid: 'owner-1',
+          eventId: 'e-1',
+          enabled: true,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.badges.comment).toBe(1);
+      });
+      expect(result.current.totalNew).toBe(1);
+    });
+
+    it('markAllNotificationsSeen writes lastSeenCommentsAt_<ownerUid>_<eventId>', () => {
+      markAllNotificationsSeen('owner-1', {
+        proposal: 0,
+        task: 0,
+        invite: 0,
+        comment: 12345,
+      }, 'e-99');
+
+      expect(window.localStorage.getItem('lastSeenCommentsAt_owner-1_e-99')).toBe('12345');
+    });
+
+    it('recomputes badges.comment after markAllNotificationsSeen', async () => {
+      window.localStorage.setItem('lastSeenCommentsAt_owner-1_e-1', '0');
+      fireCommentSnapshot([
+        { id: 'a1', data: () => ({ kind: 'rundown', parentId: 'r1', text: 'msg', createdAt: { toMillis: () => 2000 } }) },
+      ]);
+
+      const { result } = renderHook(() =>
+        useNotifications({
+          ownerUid: 'owner-1',
+          coupleUid: 'c-1',
+          selfUid: 'owner-1',
+          eventId: 'e-1',
+          enabled: true,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(result.current.badges.comment).toBe(1);
+      });
+
+      markAllNotificationsSeen('owner-1', {
+        proposal: 0,
+        task: 0,
+        invite: 0,
+        comment: Date.now() + 1_000_000, // future, so existing alerts are no longer "newer"
+      }, 'e-1');
+
+      await waitFor(() => {
+        expect(result.current.badges.comment).toBe(0);
+      });
+    });
   });
 });
