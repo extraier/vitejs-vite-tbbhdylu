@@ -1464,16 +1464,29 @@ export default function App() {
                 // <ItemComments/> in the vendor dashboard subscribes
                 // to the same `/comments/` subcollection the couple
                 // writes to.
+                // 2026-08-17 — FIX leftover from the parseEventScopedRef
+                // refactor. Line previously referenced `ownerUid` /
+                // `eventId` as if they were local variables, but those
+                // names only existed as PROPERTY KEYS in the returned
+                // object literal above — they are not visible in this
+                // scope. Reading from `parsed` instead. Symptom: vendor
+                // dashboard "Cannot load" — rundown/resources
+                // subscription callback threw ReferenceError on every
+                // doc, React error boundary caught it, full page
+                // crashed. Same root cause as the assignedTasks fix
+                // (one commit ago) — sweep for ALL references to
+                // `ownerUid` / `eventId` in the surrounding block and
+                // confirm they all read from `parsed`.
                 commentPath:
-                  ownerUid && eventId
+                  parsed?.ownerUid && parsed?.eventId
                     ? collection(
                         db,
                         'artifacts',
                         appId,
                         'users',
-                        ownerUid,
+                        parsed.ownerUid,
                         'events',
-                        eventId,
+                        parsed.eventId,
                         groupName,
                         d.id,
                         'comments',
