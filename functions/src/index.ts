@@ -264,16 +264,41 @@ function defaultHelperPerms(): HelperPerms {
 export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
 
-  const { email, displayName, perms, phone } = req.data as {
+  const { email, displayName, perms, phone, eventId } = req.data as {
     email: string;
     displayName: string;
     phone?: string;
     perms: Partial<HelperPerms>;
+    // 2026-08-15 — Vendor and Helper Onboarding & Assignment
+    // Architecture Audit (P0-B). eventId is required: every
+    // helper invitation must scope to a specific wedding so
+    // the Helper Dashboard's event-scoped queries can find
+    // the assigned work. Without eventId the helper lands in
+    // an empty workspace after accepting.
+    eventId: string;
   };
 
   if (!email || !displayName) {
     throw new HttpsError('invalid-argument', 'email and displayName required.');
   }
+
+  // 2026-08-15 — Helper onboarding audit (P0-B). Require eventId
+  // on every invite. The dashboard's per-event queries would
+  // silently no-op without it. Validate ownership too so a
+  // malicious client can't invite helpers into another owner's
+  // event.
+  if (!eventId || typeof eventId !== 'string') {
+    throw new HttpsError('invalid-argument', 'eventId required. Pick a current wedding first.');
+  }
+  const eventRef = db
+    .collection('artifacts').doc(appId)
+    .collection('users').doc(req.auth.uid)
+    .collection('events').doc(eventId);
+  const eventSnap = await eventRef.get();
+  if (!eventSnap.exists) {
+    throw new HttpsError('not-found', 'Event not found or not owned by caller.');
+  }
+  const eventName = (eventSnap.data()?.name as string | undefined) || '';
 
   // Merge incoming perms with defaults (so missing flags are explicitly false).
   const mergedPerms = { ...defaultHelperPerms(), ...perms };
@@ -295,6 +320,19 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
 
   const helperDoc = {
     ownerUid,
+    // 2026-08-15 — Helper onboarding audit (P0-B). Stash eventId
+    // + eventName on every helper doc. acceptHelperInvite copies
+    // these through to the helpers/{uid} collection via the
+    // `...data` spread, so the active assignment has them too.
+    eventId,
+    eventName,
+    // 2026-08-15 — Helper onboarding audit (P1 — pendingInvites
+    // collision). Stamp `kind: 'helper'` so acceptHelperInvite's
+    // collection-group scan can filter out vendor pending invites
+    // that share the same generic collection name. Vendors stamp
+    // `kind: 'vendor'` (or remain unset for legacy records). The
+    // acceptance path requires `kind == 'helper'`.
+    kind: 'helper' as const,
     email,
     displayName,
     phone: phone ?? null,
@@ -361,20 +399,64 @@ export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, 
   }
 
   // Find any owner who invited this email.
+  //
+  // 2026-08-15 — Helper onboarding audit (P1 — pendingInvites
+  // collision). The collection-group scan used to match every
+  // document named `pendingInvites` by email — including vendor
+  // outreach invitations at /vendors/{slug}/pendingInvites.
+  // A same-email vendor invite would be picked up here, fail to
+  // construct a valid helper doc path, and either 500 or
+  // silently corrupt the helper doc. Two safeguards:
+  //   1. Filter by `kind == 'helper'` (vendor invites either
+  //      stamp `kind: 'vendor'` or remain unset; either way
+  //      excluded).
+  //   2. Defensive: skip docs that lack the required helper
+  //      shape (ownerUid, perms, eventId) so legacy records
+  //      without `kind` still don't poison acceptance.
   const pending = await db
     .collectionGroup('pendingInvites')
     .where('email', '==', authEmail)
+    .where('kind', '==', 'helper')
     .get();
 
   if (pending.empty) {
-    throw new HttpsError('not-found', 'No invite found for this email.');
+    // Fall back to the legacy lookup (no kind field on old
+    // docs) — but only if there's at least one matching
+    // document that ALSO has the helper-shaped fields.
+    const legacy = await db
+      .collectionGroup('pendingInvites')
+      .where('email', '==', authEmail)
+      .get();
+    const legacyHelpers = legacy.docs.filter((d) => {
+      const x = d.data();
+      return (
+        x &&
+        typeof x.ownerUid === 'string' &&
+        x.perms &&
+        typeof x.eventId === 'string' &&
+        x.kind !== 'vendor' // exclude explicit vendor invites
+      );
+    });
+    if (legacyHelpers.length === 0) {
+      throw new HttpsError('not-found', 'No helper invite found for this email.');
+    }
+    return acceptHelperDocs(legacyHelpers, authUid);
   }
 
+  return acceptHelperDocs(pending.docs, authUid);
+});
+
+// Shared acceptance body — extracted so the kind-filtered and
+// legacy paths share the same migration logic. (2026-08-15)
+async function acceptHelperDocs(
+  pendingDocs: FirebaseFirestore.QueryDocumentSnapshot[],
+  authUid: string,
+) {
   // Accept all matching invites (a helper could be invited by multiple couples).
   const batch = db.batch();
-  const accepted: { ownerUid: string; perms: HelperPerms }[] = [];
+  const accepted: { ownerUid: string; perms: HelperPerms; eventId: string }[] = [];
 
-  for (const doc of pending.docs) {
+  for (const doc of pendingDocs) {
     const data = doc.data();
     const ownerUid = data.ownerUid;
     const newRef = db
@@ -390,12 +472,16 @@ export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, 
     });
     batch.delete(doc.ref);
 
-    accepted.push({ ownerUid, perms: data.perms as HelperPerms });
+    accepted.push({
+      ownerUid,
+      perms: data.perms as HelperPerms,
+      eventId: data.eventId as string,
+    });
   }
 
   await batch.commit();
   return { ok: true, accepted };
-});
+}
 
 /**
  * revokeHelper — owner-only. Marks a helper's status as 'revoked'.

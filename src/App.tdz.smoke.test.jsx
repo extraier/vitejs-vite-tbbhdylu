@@ -37,14 +37,23 @@ describe('App upload-preferences initialization order', () => {
 // threw `Cannot access 'Ye' before initialization` and the whole
 // app crashed with the generic error page.
 //
-// This test locks in the correct ordering: any future code that
-// reads `inquiries` inside a deps array must live AFTER the
-// `inquiries` useState declaration.
+// 2026-08-15 — Updated for the resolver refactor. The hook is now
+// `vendorsForPicker = useMemo(... resolveEligibleAssignedVendors(vendorContacts, inquiries) ..., [vendorContacts, inquiries])`.
+// The deps array still reads `inquiries`; the TDZ invariant
+// (hook AFTER inquiries declaration) is the same. The test now
+// matches `inquiries` as a dep-member instead of the literal
+// `[inquiries]` substring (deps array may have other members first).
 describe('App vendorsForPicker initialization order', () => {
   it('reads `inquiries` in a deps array AFTER the inquiries useState declaration', () => {
     const inquiriesDeclaration = appSource.indexOf('const [inquiries, setInquiries]');
     const vendorsPickerHook = appSource.indexOf('const vendorsForPicker = useMemo');
-    const vendorsPickerDeps = appSource.indexOf('[inquiries]', vendorsPickerHook);
+    // Match the deps array start — `}, [` followed by other
+    // optional members then `inquiries`. Covers `[inquiries]`
+    // (where the hook body might end with `]`) and
+    // `[vendorContacts, inquiries]` (ends with `}`). Both
+    // shapes must end up matching.
+    const depsRegex = /[\]\}]\s*,\s*\[[^\]]*\binquiries\b/;
+    const vendorsPickerDeps = appSource.slice(vendorsPickerHook).search(depsRegex);
 
     expect(inquiriesDeclaration).toBeGreaterThanOrEqual(0);
     expect(vendorsPickerHook).toBeGreaterThanOrEqual(0);

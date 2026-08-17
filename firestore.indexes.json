@@ -25,6 +25,14 @@
         { "fieldPath": "createdAt", "order": "DESCENDING" },
         { "fieldPath": "__name__", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "pendingInvites",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "email", "order": "ASCENDING" },
+        { "fieldPath": "kind", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

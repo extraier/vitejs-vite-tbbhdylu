@@ -127,6 +127,10 @@ async function inviteHelperFn(args: {
   displayName: string;
   phone?: string;
   perms: Partial<HelperPerms>;
+  // 2026-08-15 — Helper onboarding audit (P0-B). eventId is
+  // required so the Helper Dashboard can scope its queries.
+  // Cloud function rejects invites without eventId.
+  eventId: string;
 }) {
   const fns = getFunctions();
   const fn = httpsCallable(fns, 'inviteHelper');

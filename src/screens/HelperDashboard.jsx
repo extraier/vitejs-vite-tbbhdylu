@@ -30,6 +30,9 @@ import {
   CheckCircle2,
   Hourglass,
   PlayCircle,
+  CalendarDays,
+  Clock,
+  Package,
 } from 'lucide-react';
 import { collection, doc, query, updateDoc, where } from 'firebase/firestore';
 import { db, appId } from '../lib/firebase';
@@ -64,6 +67,14 @@ export function HelperDashboard({
   const availableTabs = useMemo(() => {
     const tabs = [];
     if (perms.canViewChecklist) tabs.push({ id: 'tasks', label: '任務', Icon: ListChecks });
+    // 2026-08-15 — Vendor and Helper Onboarding & Assignment
+    // Architecture Audit (P0-C). Big Day rundown + resources
+    // surface for helpers. Gates on canViewChecklist (same as
+    // Tasks) — helpers without task visibility don't get the
+    // Big Day view either. The tab shows even when the helper
+    // has zero assigned items (empty-state explains how to get
+    // assigned).
+    if (perms.canViewChecklist) tabs.push({ id: 'bigday', label: '大日', Icon: CalendarDays });
     if (perms.canViewGuestList) tabs.push({ id: 'guests', label: '賓客', Icon: Users });
     if (perms.canScan) tabs.push({ id: 'scan', label: '接待處掃描', Icon: QrCode });
     if (perms.canViewBudget) tabs.push({ id: 'budget', label: '預算總覽', Icon: Wallet });
@@ -158,6 +169,73 @@ export function HelperDashboard({
     [ownerUid, perms.canViewGuestList, helperAssignment?.eventId],
   );
 
+  // 2026-08-15 — Vendor and Helper Onboarding & Assignment
+  // Architecture Audit (P0-C). Helpers now see Big Day
+  // run-down + resource items assigned to them. Previously the
+  // Helper Dashboard had no rundown/resources surface, so a
+  // couple could assign a helper in 大日流程 via HelperPicker
+  // but the helper never saw the work.
+  //
+  // Rundown entries store helpers as `assignedHelpers: [{id,
+  // name, uid}]` — array of objects. We filter client-side by
+  // matching any helper's uid to the current auth.uid. Server-
+  // side gate stays on helperAssignment.eventId (the helper is
+  // event-scoped, so the path is structurally correct).
+  //
+  // Resources use the same shape (assignedHelpers array on the
+  // resource doc). Same client-side filter applies.
+  const rundownPath =
+    ownerUid && helperAssignment?.eventId && currentUser?.uid
+      ? collection(
+          db,
+          'artifacts',
+          appId,
+          'users',
+          ownerUid,
+          'events',
+          helperAssignment.eventId,
+          'rundown',
+        )
+      : null;
+  const { data: allRundown = [] } = useFirestoreCollection(rundownPath, [
+    ownerUid,
+    helperAssignment?.eventId,
+    currentUser?.uid,
+  ]);
+  const assignedRundown = useMemo(() => {
+    if (!currentUser?.uid) return [];
+    return allRundown.filter((e) =>
+      Array.isArray(e.assignedHelpers) &&
+      e.assignedHelpers.some((h) => h?.uid === currentUser.uid),
+    );
+  }, [allRundown, currentUser?.uid]);
+
+  const resourcesPath =
+    ownerUid && helperAssignment?.eventId && currentUser?.uid
+      ? collection(
+          db,
+          'artifacts',
+          appId,
+          'users',
+          ownerUid,
+          'events',
+          helperAssignment.eventId,
+          'resources',
+        )
+      : null;
+  const { data: allResources = [] } = useFirestoreCollection(resourcesPath, [
+    ownerUid,
+    helperAssignment?.eventId,
+    currentUser?.uid,
+  ]);
+  const assignedResources = useMemo(() => {
+    if (!currentUser?.uid) return [];
+    return allResources.filter((r) =>
+      Array.isArray(r.assignedHelpers) &&
+      r.assignedHelpers.some((h) => h?.uid === currentUser.uid),
+    );
+  }, [allResources, currentUser?.uid]);
+
   const headerTitle = helperAssignment?.ownerName
     ? `${helperAssignment.ownerName} 嘅婚禮 — 助手控制台`
     : '助手控制台';
@@ -216,6 +294,13 @@ export function HelperDashboard({
               currentUser={currentUser}
             />
           )}
+          {activeTab === 'bigday' && (
+            <HelperBigDayTab
+              rundown={assignedRundown}
+              resources={assignedResources}
+              eventId={helperAssignment?.eventId}
+            />
+          )}
           {activeTab === 'guests' && (
             <HelperGuestsTab guests={helperGuests} />
           )}
@@ -250,6 +335,129 @@ export function HelperDashboard({
 }
 
 /* ─── Per-tab helpers ─────────────────────────────────────────────────── */
+
+// 2026-08-15 — Vendor and Helper Onboarding & Assignment
+// Architecture Audit (P0-C). Big Day rundown + resources tab.
+// Renders items where this helper is in `assignedHelpers`.
+// Sorted by startTime for rundown, by category for resources.
+function HelperBigDayTab({ rundown = [], resources = [], eventId }) {
+  // Sort rundown by startTime (HH:MM string, lexicographic works
+  // for zero-padded 24h times). Empty/missing → push to end.
+  const sortedRundown = [...rundown].sort((a, b) => {
+    const at = String(a.startTime || '99:99');
+    const bt = String(b.startTime || '99:99');
+    return at.localeCompare(bt);
+  });
+
+  // Sort resources by category then label.
+  const sortedResources = [...resources].sort((a, b) => {
+    const ac = String(a.category || 'zzz');
+    const bc = String(b.category || 'zzz');
+    if (ac !== bc) return ac.localeCompare(bc);
+    return String(a.label || '').localeCompare(String(b.label || ''));
+  });
+
+  const isEmpty = sortedRundown.length === 0 && sortedResources.length === 0;
+
+  if (isEmpty) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 text-center">
+        <CalendarDays className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+        <p className="text-sm text-slate-700 font-medium mb-1">
+          暫時未有指派畀你嘅大日工作
+        </p>
+        <p className="text-xs text-slate-500 leading-relaxed">
+          當新人在「大日流程」或「物資分配」指派你做某個項目，你就會喺度睇到詳情，包括時間、地點、同備註。
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* 大日流程 — rundown */}
+      {sortedRundown.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-slate-500" />
+            大日流程
+            <span className="text-xs font-normal text-slate-400">
+              ({sortedRundown.length})
+            </span>
+          </h3>
+          <ul className="space-y-2">
+            {sortedRundown.map((e) => (
+              <li
+                key={e.id}
+                className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+              >
+                <div className="flex items-baseline justify-between gap-2 mb-1">
+                  <span className="text-sm font-semibold text-slate-800">
+                    {e.title || '未命名項目'}
+                  </span>
+                  <span className="text-xs font-mono text-slate-500 shrink-0">
+                    {e.startTime || '—'}
+                    {e.durationMin ? ` · ${e.durationMin} 分鐘` : ''}
+                  </span>
+                </div>
+                {e.location && (
+                  <p className="text-xs text-slate-600 mb-1">📍 {e.location}</p>
+                )}
+                {e.notes && (
+                  <p className="text-xs text-slate-500 whitespace-pre-wrap">
+                    {e.notes}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* 物資 — resources */}
+      {sortedResources.length > 0 && (
+        <section>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
+            <Package className="w-4 h-4 text-slate-500" />
+            物資分配
+            <span className="text-xs font-normal text-slate-400">
+              ({sortedResources.length})
+            </span>
+          </h3>
+          <ul className="space-y-2">
+            {sortedResources.map((r) => (
+              <li
+                key={r.id}
+                className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+              >
+                <div className="flex items-baseline justify-between gap-2 mb-1">
+                  <span className="text-sm font-semibold text-slate-800">
+                    {r.label || '未命名物資'}
+                  </span>
+                  {r.qty && (
+                    <span className="text-xs text-slate-500 shrink-0">
+                      數量：{r.qty}
+                    </span>
+                  )}
+                </div>
+                {r.category && (
+                  <p className="text-xs text-slate-600 mb-1">
+                    分類：{r.category}
+                  </p>
+                )}
+                {r.notes && (
+                  <p className="text-xs text-slate-500 whitespace-pre-wrap">
+                    {r.notes}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
 
 function HelperTasksTab({ tasks, loading, ownerUid, currentUser }) {
   const { showToast } = useToast();

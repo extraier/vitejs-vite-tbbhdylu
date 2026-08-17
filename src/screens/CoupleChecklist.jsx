@@ -21,6 +21,10 @@ import {
 import { TaskComments } from '../components/TaskComments';
 import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
 import { NotOnboardedEmailModal } from '../components/modals/NotOnboardedEmailModal';
+// 2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+// Same picker WeddingDay uses for 大日流程/物資 assignment. Backed by
+// the canonical resolver (vendorContacts + inquiries, dedupe by uid).
+import { VendorPicker } from '../components/VendorPicker';
 import { TASK_CATEGORIES, VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 
@@ -349,6 +353,13 @@ export function CoupleChecklist({
   onSelectVendor,
   myVendorsPanel,
   vendorContacts = [],
+  // 2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+  // Canonical assignable-vendor list resolved from vendorContacts
+  // + inquiries, deduped by uid. Same source VendorPicker uses in
+  // WeddingDay. Lets the to-do editor offer vendors the couple
+  // has chatted with even if they haven't saved them to the
+  // address book yet.
+  assignableVendors = [],
   // 2026-08-01 — owner (couple) names. Lets couples assign
   // any regular to-do list task to themselves (e.g. 志明
   // follows up on the 酒店 menu) without going through the
@@ -611,33 +622,45 @@ export function CoupleChecklist({
               onChange={(e) => onNewTaskFormChange({ ...newTaskForm, estimatedCost: e.target.value })}
             />
             {/*
-              2026-07-15 — vendor assignment dropdown. Lists every
-              contact in MyVendorsPanel. Empty value = "未指派".
-              Contacts that are already linked (linkedVendorUid set)
-              show a "✓ 已連結" badge; unlinked ones show
-              "未加入 (對方加入平台後商戶先睇到)" so the user
-              understands the limits.
+              2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+              Replaced the legacy contactId-only <select> with the
+              canonical <VendorPicker/> (same one WeddingDay uses for
+              大日流程/物資). Sources the deduped list from
+              `assignableVendors` (resolved from vendorContacts +
+              inquiries). Couples can now assign a vendor from the
+              catalog *or* from an active chat thread, without first
+              having to save them to the address book.
+
+              Backwards compat: the legacy `assignedContactId` field
+              still lives on newTaskForm (older saved tasks reference
+              it). The picker writes `assignedVendor` (the uid+name
+              pair); the save handler below translates to BOTH
+              `assignedContactId` (kept in sync when the chosen vendor
+              matches an existing contact) and `assignedVendorUid` /
+              `assignedVendorName` (the canonical write fields, read
+              by the vendor-side dashboard).
             */}
-            <select
-              value={newTaskForm.assignedContactId || ''}
-              onChange={(e) =>
-                onNewTaskFormChange({
-                  ...newTaskForm,
-                  assignedContactId: e.target.value,
-                })
-              }
-              className="col-span-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
-            >
-              <option value="">🏪 未指派商戶 (從下方「我嘅商戶」加入)</option>
-              {(vendorContacts || []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.linkedVendorUid ? '✓ ' : '⏳ '}
-                  {c.vendorName}
-                  {c.category ? ` · ${categoryLabel(c.category)}` : ''}
-                  {c.linkedVendorUid ? ' (已連結)' : ' (未加入)'}
-                </option>
-              ))}
-            </select>
+            <div className="col-span-2">
+              <VendorPicker
+                vendors={assignableVendors}
+                value={newTaskForm.assignedVendor || null}
+                onChange={(v) =>
+                  onNewTaskFormChange({
+                    ...newTaskForm,
+                    assignedVendor: v,
+                    // Backwards-compat sync: keep assignedContactId
+                    // pointing at the matching address-book entry
+                    // when one exists, so older tasks still resolve.
+                    assignedContactId:
+                      (vendorContacts || []).find(
+                        (c) => c.linkedVendorUid === v?.uid,
+                      )?.id ||
+                      newTaskForm.assignedContactId ||
+                      '',
+                  })
+                }
+              />
+            </div>
             {/*
               2026-07-17 — Helper (兄弟姊妹) assignment. Two visual
               modes share the same `col-span-2` slot as the vendor
@@ -828,6 +851,12 @@ function TaskRow({
       <TaskFullEditor
         task={task}
         vendorContacts={vendorContacts}
+        // 2026-08-15 — Vendor Onboarding & Assignment Audit
+        // (Root Cause 2). Forward the canonical assignable-vendor
+        // list (vendorContacts + inquiries, deduped by uid) so the
+        // edit-form vendor picker can use the same VendorPicker
+        // the add-form and WeddingDay use.
+        assignableVendors={assignableVendors}
         helpers={helpers}
         helpersLoading={helpersLoading}
         onSave={onUpdateTask}
@@ -1206,6 +1235,10 @@ function TaskFullEditor({
   helpers,
   helpersLoading,
   vendorContacts,
+  // 2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+  // Canonical assignable-vendor list (vendorContacts + inquiries,
+  // deduped by uid). Same source VendorPicker uses elsewhere.
+  assignableVendors = [],
   onSave,
   onCancel,
   // 2026-08-01 — owner (couple) names. Lets couples assign a
@@ -1243,6 +1276,18 @@ function TaskFullEditor({
   const [assignedContactId, setAssignedContactId] = useState(
     task.assignedContactId || '',
   );
+  // 2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+  // The canonical picker writes a { uid, name } pair. Seed it from
+  // the task's existing assignedVendorUid/assignedVendorName so
+  // editing a previously-saved task shows the right vendor. If
+  // only the legacy contactId was saved (older tasks), the picker
+  // starts empty but the save handler resolves the contact on
+  // submit.
+  const [assignedVendor, setAssignedVendor] = useState(
+    task.assignedVendorUid
+      ? { uid: task.assignedVendorUid, name: task.assignedVendorName || '' }
+      : null,
+  );
   const [assignedHelperMode, setAssignedHelperMode] = useState(
     task.assignedHelperUid ? 'pick' : 'custom',
   );
@@ -1257,8 +1302,23 @@ function TaskFullEditor({
   const [error, setError] = useState(null);
 
   const handleSave = async () => {
-    setError(null);
-    const chosenContact = vendorContacts.find((c) => c.id === assignedContactId);
+  setError(null);
+  const chosenContact = vendorContacts.find((c) => c.id === assignedContactId);
+  // 2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+  // The edit-form <VendorPicker/> writes a { uid, name } pair to
+  // `assignedVendor`. For inquiry-only vendors (no matching
+  // address-book entry), assignedContactId stays empty but
+  // assignedVendor.{uid,name} is populated — exactly the case the
+  // old contactId-only path couldn't handle. Prefer the picker
+  // value; fall back to the contact lookup.
+  const resolvedVendorUid =
+    assignedVendor?.uid ||
+    chosenContact?.linkedVendorUid ||
+    '';
+  const resolvedVendorName =
+    assignedVendor?.name ||
+    chosenContact?.vendorName ||
+    '';
     let chosenHelperId = '';
     let chosenHelperName = '';
     let chosenHelperUid = '';
@@ -1318,8 +1378,8 @@ function TaskFullEditor({
         estimatedCost: cleanedEst,
         actualCost: cleanedAct,
         assignedContactId: chosenContact?.id || '',
-        assignedVendorName: chosenContact?.vendorName || '',
-        assignedVendorUid: chosenContact?.linkedVendorUid || '',
+        assignedVendorName: resolvedVendorName,
+        assignedVendorUid: resolvedVendorUid,
         assignedHelperId: chosenHelperId,
         assignedHelperName: chosenHelperName,
         assignedHelperUid: chosenHelperUid,
@@ -1439,21 +1499,40 @@ function TaskFullEditor({
         </div>
       </div>
 
-      <select
-        value={assignedContactId || ''}
-        onChange={(e) => setAssignedContactId(e.target.value)}
-        className="w-full mt-2 p-2.5 border border-slate-300 rounded-lg text-sm outline-none bg-white"
-      >
-        <option value="">🏪 未指派商戶</option>
-        {(vendorContacts || []).map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.linkedVendorUid ? '✓ ' : '⏳ '}
-            {c.vendorName}
-            {c.category ? ` · ${categoryLabel(c.category)}` : ''}
-            {c.linkedVendorUid ? ' (已連結)' : ' (未加入)'}
-          </option>
-        ))}
-      </select>
+      {/*
+        2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+        Replaced the legacy contactId-only <select> with the
+        canonical <VendorPicker/> (same one the add-form and
+        WeddingDay use). Backed by `assignableVendors` (vendorContacts
+        + inquiries, dedupe by uid). Mirrors the new-task form's
+        behavior so editing and adding feel identical.
+
+        Picker writes to `assignedVendor` (uid+name pair); save
+        handler resolves that first, falls back to the contact
+        lookup, writes both `assignedVendorUid` and
+        `assignedVendorName` on the task doc.
+      */}
+      <div className="mt-2">
+        <VendorPicker
+          vendors={assignableVendors}
+          value={assignedVendor}
+          onChange={(v) => {
+            setAssignedVendor(v);
+            // Backwards-compat: keep assignedContactId pointing
+            // at the matching address-book entry when one exists,
+            // so older tasks still resolve. Don't clear an existing
+            // contactId when the user picks an inquiry-only vendor
+            // (no matching contact) — leave the previous mapping
+            // intact in case the user reverts.
+            if (v?.uid) {
+              const match = (vendorContacts || []).find(
+                (c) => c.linkedVendorUid === v.uid,
+              );
+              if (match) setAssignedContactId(match.id);
+            }
+          }}
+        />
+      </div>
 
       <div className="mt-2">
         {assignedHelperMode === 'pick' ? (

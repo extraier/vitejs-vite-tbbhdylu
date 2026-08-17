@@ -19,7 +19,7 @@ import {
   HELPER_PERM_LABELS,
 } from '../../lib/helpers';
 
-export function HelperManager({ ownerUid, onClose }) {
+export function HelperManager({ ownerUid, currentEvent, onClose }) {
   const [activeTab, setActiveTab] = useState('active');
     const [helpers, setHelpers] = useState([]);
     const [pendingInvites, setPendingInvites] = useState([]);
@@ -118,6 +118,17 @@ export function HelperManager({ ownerUid, onClose }) {
   const handleInvite = async (e) => {
     e.preventDefault();
     if (!inviteEmail || !inviteName) return;
+    // 2026-08-15 — Helper onboarding audit (P0-B). Require a
+    // current event before writing a helper doc. The dashboard
+    // gates every query on helperAssignment.eventId, so an
+    // eventId-less invite would land the helper in an empty
+    // workspace. Surface the missing-event case as a clear UI
+    // error instead of silently accepting.
+    if (!currentEvent?.id) {
+      setError('請先�總大堂揀一個婚禮先可以邀請兄弟姊妹。每位兄弟姊妹都會綁定去一個特定婚禮。');
+      setBusy(false);
+      return;
+    }
     setBusy(true);
     setError(null);
     setCopyLink(null);  // 2026-07-18 — clear stale copy-link on retry
@@ -130,6 +141,17 @@ export function HelperManager({ ownerUid, onClose }) {
         email: inviteEmail.trim().toLowerCase(),
         displayName: inviteName.trim(),
         perms: invitePerms,
+        // 2026-08-15 — Vendor and Helper Onboarding & Assignment
+        // Architecture Audit (P0-B). Every helper invitation must
+        // carry an eventId so the Helper Dashboard can scope its
+        // queries (assigned tasks, guests, photos, budget all gate
+        // on helperAssignment.eventId). Without eventId, an
+        // accepted helper routes into the dashboard but sees no
+        // assigned work — the original bug. HelperManager is now
+        // mounted with `currentEvent` (see App.jsx); missing
+        // currentEvent surfaces a clear error below instead of
+        // silently writing an eventId-less helper doc.
+        eventId: currentEvent?.id || null,
       });
       // 2026-07-18 — Step 2: dispatch the passwordless sign-in email.
       // We use Firebase Auth's built-in delivery (no third-party

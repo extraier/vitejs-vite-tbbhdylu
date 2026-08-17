@@ -58,6 +58,7 @@ import {
   inquiryIdFor,
 } from './lib/chat';
 import { tryAutoLinkContacts } from './lib/contactLink';
+import { resolveEligibleAssignedVendors } from './lib/eligibleVendors';
 import { parseEventScopedRef } from './lib/firestorePaths';
 import { useAuth } from './hooks/useAuth';
 import { usePartnerInvitePreview } from './hooks/usePartnerInvitePreview';
@@ -1244,36 +1245,31 @@ export default function App() {
      return unsub;
    }, [user?.uid, userRole]);
 
-   // 2026-08-09 — Vendor list for VendorPicker (大日流程 / 物資
-   // assignment). Source: couple's `inquiries` (vendors they've
-   // started a chat with). Couples may also tag vendors they haven't
-   // contacted yet — that path uses the VendorPicker free-text
-   // fallback so we don't need a separate vendor-master subscription.
-   // Memoized so WeddingDay's memoization doesn't churn on every
-   // inquiry read.
+   // 2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+   // The canonical assignable-vendor list now reads from BOTH the
+   // couple's address book (linked contacts) AND their inquiry/chat
+   // threads, deduped by uid. The previous inquiry-only version
+   // created a circular dependency: "must chat before assigning" but
+   // chat only opened if the catalog-picked vendor had a link — and
+   // that link was being erased in handleAddVendorContact. Now fixed
+   // in both places.
    //
-   // 2026-08-09 — TDZ-fix: this hook MUST live AFTER the `inquiries`
-   // declaration above. Putting it earlier (next to dataOwnerUid)
-   // caused `Cannot access 'inquiries' before initialization` because
-   // the deps array reads the variable at hook-eval time, before
-   // any subsequent useState/useEffect in the same component has
-   // run. Symptom: app crashes on first render with a minified
-   // "Cannot access 'Ye' before initialization" — see Hermes
-   // session 2026-08-09.
+   // Source priority: linked-contact > inquiry. A vendor the couple
+   // explicitly saved wins over a passive chat thread (their intent
+   // is the explicit signal). The resolver preserves the source tag
+   // for analytics / future badge styling.
+   //
+   // TDZ-fix caveat (unchanged from 2026-08-09): this hook MUST
+   // stay AFTER both the `inquiries` and `vendorContacts`
+   // declarations. Putting it earlier causes `Cannot access 'X'
+   // before initialization` because the deps array reads the
+   // variables at hook-eval time.
    const vendorsForPicker = useMemo(() => {
-     const seen = new Set();
-     const out = [];
-     for (const i of inquiries || []) {
-       if (!i || !i.vendorUid) continue;
-       if (seen.has(i.vendorUid)) continue;
-       seen.add(i.vendorUid);
-       out.push({
-         uid: i.vendorUid,
-         name: i.vendorName || i.vendorDisplayName || '商戶',
-       });
-     }
-     return out;
-   }, [inquiries]);
+     return resolveEligibleAssignedVendors(vendorContacts, inquiries).map((v) => ({
+       uid: v.uid,
+       name: v.name,
+     }));
+   }, [vendorContacts, inquiries]);
 
    // 2026-07-15 — assigned tasks for the current vendor. Uses a
    // collectionGroup query on /tasks subcollections, filtered by
@@ -1754,15 +1750,28 @@ export default function App() {
    // (separate step per user direction).
    const handleAddVendorContact = async (data) => {
      if (!user) return;
+     // 2026-08-15 — Vendor onboarding audit fix (Root Cause 1).
+     // The catalog picker (e.g. <AddVendorPicker/>) passes
+     // `linkedVendorUid` for catalog vendors, `null` for custom
+     // contacts. The previous handler unconditionally reset the
+     // field to `null`, so the contact always came back as
+     // '未加入' even when the user had picked a real onboarded
+     // vendor. Preserve what the picker sent. Long-term server
+     // validation belongs in a callable (separate task) — the
+     // client-side fix here is the immediate unblock.
+     const linkedUid = data?.linkedVendorUid || null;
      await addDoc(
        collection(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts'),
        {
          ...data,
          ownerUid: user.uid, // H-02 denormalization — see comment above
          addedAt: serverTimestamp(),
-         linkedVendorUid: null,
+         linkedVendorUid: linkedUid,
          invitationSentAt: null,
-         invitationAccepted: false,
+         // invitationAccepted is true iff a vendor link exists —
+         // mirrors the contact's "已是平台商戶" state. Custom
+         // (off-platform) contacts stay false until they sign up.
+         invitationAccepted: Boolean(linkedUid),
        },
      );
      showToast('✅ 已新增商戶');
@@ -2163,6 +2172,24 @@ export default function App() {
       (c) => c.id === newTaskForm.assignedContactId,
     );
 
+    // 2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
+    // The new-task form's <VendorPicker/> writes BOTH the legacy
+    // `assignedContactId` (when matching a saved contact) AND the
+    // canonical `assignedVendor` (uid + name pair). For inquiry-only
+    // vendors (no matching address-book entry), assignedContactId
+    // stays empty but assignedVendor.{uid,name} is populated —
+    // exactly the case the old contactId-only path couldn't handle.
+    // Prefer the picker value; fall back to the contact lookup.
+    const pickedVendor = newTaskForm.assignedVendor;
+    const resolvedVendorUid =
+      pickedVendor?.uid ||
+      chosenContact?.linkedVendorUid ||
+      '';
+    const resolvedVendorName =
+      pickedVendor?.name ||
+      chosenContact?.vendorName ||
+      '';
+
     // 2026-07-17 — Resolve chosen helper for the task doc. In 'pick'
     // mode we look up by id; in 'custom' mode the helper is a free-form
     // typed name (no id, no auth uid yet — they haven't been invited).
@@ -2194,8 +2221,8 @@ export default function App() {
       // 2026-07-15 — vendor-assignment fields. Either or both may
       // be empty; vendor reads use assignedVendorUid to filter.
       assignedContactId: chosenContact?.id || '',
-      assignedVendorName: chosenContact?.vendorName || '',
-      assignedVendorUid: chosenContact?.linkedVendorUid || '',
+      assignedVendorName: resolvedVendorName,
+      assignedVendorUid: resolvedVendorUid,
       // 2026-07-17 — helper (兄弟姊妹) assignment fields. Same
       // parallel pattern as vendor above. We always store
       // `assignedHelperName` (so the chip never goes blank); we
@@ -3717,6 +3744,16 @@ export default function App() {
                 // send an inquiry (if onboarded) or browse the
                 // portfolio.
                 onSelectVendor={setViewingVendorProfile}
+                // 2026-08-15 — Vendor Onboarding & Assignment Audit
+                // (Root Cause 2). Pass the canonical assignable-vendor
+                // list (resolved from vendorContacts + inquiries,
+                // deduped by uid) so the couple's to-do editor can
+                // use the SAME picker as WeddingDay. Without this,
+                // the to-do vendor dropdown only knows about saved
+                // contacts; with this, the couple can also assign
+                // inquiry-only vendors (chat threads without an
+                // address-book entry).
+                assignableVendors={vendorsForPicker}
                 myVendorsPanel={
                   <MyVendorsPanel
                     contacts={vendorContacts}
@@ -4359,6 +4396,12 @@ export default function App() {
       {showHelperManager && user?.uid && (
         <HelperManager
           ownerUid={user.uid}
+          // 2026-08-15 — Helper onboarding audit (P0-B). Pass
+          // currentEvent so every helper invitation carries an
+          // eventId. Without eventId, the Helper Dashboard's
+          // event-scoped queries resolve to null and the helper
+          // sees an empty workspace.
+          currentEvent={currentEvent}
           onClose={() => setShowHelperManager(false)}
         />
       )}
