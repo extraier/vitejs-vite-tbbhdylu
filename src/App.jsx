@@ -1317,7 +1317,14 @@ export default function App() {
                              // events. (eventName / eventDate come from the doc
                              // body via denormalized fields — see App.jsx upsert
                              // helpers.)
-                             eventId: eventsIdx >= 0 ? segs[eventsIdx + 1] : null,
+                             // 2026-08-17 — FIX leftover from the parseEventScopedRef
+                             // refactor. Line previously referenced `eventsIdx` /
+                             // `segs` which are local to the helper (firestorePaths.ts),
+                             // not visible in this scope. Reading from `parsed` instead.
+                             // Symptom: vendor dashboard "Cannot load" — assignedTasks
+                             // subscription callback threw ReferenceError on every doc,
+                             // React error boundary caught it, full page crashed.
+                             eventId: parsed?.eventId ?? null,
                            };
                          });
              list.sort((a, b) => {
