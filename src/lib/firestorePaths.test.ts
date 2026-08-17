@@ -71,6 +71,17 @@ describe('parseCommentPath', () => {
     });
   });
 
+  it('parses a comments collection reference for Cloud Function writes', () => {
+    const path = 'artifacts/app/users/UID/events/EVT/rundown/ITEM1/comments';
+    expect(parseCommentPath(path)).toEqual({
+      ownerUid: 'UID',
+      eventId: 'EVT',
+      kind: 'rundown',
+      itemId: 'ITEM1',
+      commentId: null,
+    });
+  });
+
   it('returns null if the comments segment is missing', () => {
     expect(parseCommentPath('artifacts/app/users/UID/events/EVT/rundown/ITEM1')).toBeNull();
   });

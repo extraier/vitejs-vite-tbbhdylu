@@ -47,9 +47,10 @@ export function parseEventScopedRef(path: string): EventScopedPath | null {
 }
 
 /**
- * Parse a comment path like
- *   artifacts/{appId}/users/{ownerUid}/events/{eventId}/{kind}/{itemId}/comments/{commentId}
- * into {ownerUid, eventId, kind, itemId, commentId}.
+ * Parse a comment collection or document path like
+ *   artifacts/{appId}/users/{ownerUid}/events/{eventId}/{kind}/{itemId}/comments
+ * or a comment document below that collection into
+ * {ownerUid, eventId, kind, itemId, commentId}.
  *
  * `kind` is one of 'rundown' or 'resources' (per the comment-rule paths in
  * firestore.rules). Returns null if the path doesn't match.
@@ -59,7 +60,7 @@ export interface CommentPath {
   eventId: string;
   kind: string;
   itemId: string;
-  commentId: string;
+  commentId: string | null;
 }
 
 export function parseCommentPath(path: string): CommentPath | null {
@@ -67,12 +68,13 @@ export function parseCommentPath(path: string): CommentPath | null {
   const segs = path.split('/').filter(Boolean);
   const commentsIdx = segs.indexOf('comments');
   if (commentsIdx < 0) return null;
-  // The 'comments' segment sits at: .../{kind}/{itemId}/comments/{commentId}
+  // A CollectionReference ends at `/comments`; a comment document appends an
+  // ID. Cloud Function writes need the parent components and accept either.
   const commentId = segs[commentsIdx + 1] || null;
   const itemId = segs[commentsIdx - 1] || null;
   const kind = segs[commentsIdx - 2] || null;
   const eventScoped = parseEventScopedRef(path);
-  if (!eventScoped || !kind || !itemId || !commentId) return null;
+  if (!eventScoped || !kind || !itemId) return null;
   return { ...eventScoped, kind, itemId, commentId };
 }
 
