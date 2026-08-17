@@ -263,50 +263,20 @@ export const vendorPostComment = onCall(
       text: cleanText,
       createdAt: now,
     });
-    // 2026-08-17 — Bidirectional migration (Manus handoff, step 11).
+    // 2026-08-17 — Alert fan-out is now handled by the trigger
+    // (functions/src/commentAlertTrigger.ts) which subscribes to
+    // EVERY comment write (vendor, helper, couple, co-owner, direct
+    // SDK). Previously this CF wrote the alert doc inline; that
+    // caused double-fan-out for vendor/helper comments because the
+    // trigger ALSO fires when the CF writes the comment. The trigger
+    // is the single source of truth for fan-out.
     //
-    // Old path (deprecated): /events/{eventId}/commentsAlerts/{alertId}
-    //   - alerts lived in a per-event subcollection
-    //   - Firestore-generated doc IDs (not idempotent on retry)
-    //   - only the owner / co-owner / helper-on-the-event could read
-    //
-    // New path (per Manus spec): /users/{recipientUid}/notifications/
-    //   bigday-comment_{commentId}_{recipientUid}
-    //   - alerts live in each recipient's PRIVATE notification inbox
-    //   - one inbox per role participant (owner, co-owner, vendor,
-    //     helper) — each subscribes to their own /notifications/ path
-    //   - deterministic doc id derived from (commentId, recipientUid)
-    //     so a Cloud Function retry writes to the same doc and we
-    //     never duplicate alerts (acceptance A5)
-    //   - rule intent: clients can read only their own inbox;
-    //     client create/delete denied; clients can update readAt
-    //     only (acceptance A7)
-    //
-    // This CF (vendorPostComment) currently writes to the OLD path.
-    // For step 11 we migrate the write to the new path while keeping
-    // the existing single-recipient owner fan-out. Step 12+ will
-    // add the vendor/helper fan-out via a separate trigger (per
-    // Manus, an onDocumentCreated trigger is preferred over
-    // expanding this CF, because couple and co-owner replies
-    // bypass this CF entirely).
-    const recipientUid = ownerUidStr;
-    const notificationId = buildCommentNotificationId(ref.id, recipientUid);
-    const recipientInboxRef = db
-      .collection('artifacts').doc(APP_ID)
-      .collection('users').doc(recipientUid)
-      .collection('notifications');
-    // Deterministic .doc(id) + .set() — a Cloud Functions retry
-    // (network blip, transient error) will overwrite the same
-    // document rather than creating a second alert (A5). set() is
-    // safe because the payload is fully derived from the comment
-    // doc + parent doc + recipient; it is deterministic.
-    await recipientInboxRef.doc(notificationId).set({
-      ...alertDoc,
-      type: 'bigday-comment',
-      notificationVersion: 1,
-      recipientUid,
-      // readAt intentionally absent — absence == unread (Manus A10).
-    });
+    // We still build `alertDoc` here so the existing CF unit tests
+    // (`buildCommentAlertDoc`) keep working — the helper is still
+    // pure and exercised.
+    void alertDoc;
+    void buildCommentNotificationId;
+    void buildNotificationRecipients;
 
     return { id: ref.id, createdAt: now };
   },

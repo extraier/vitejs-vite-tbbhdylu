@@ -1251,6 +1251,7 @@ export { mintPhotoDeleteToken } from './photoDeleteToken';
 // on the next tick, no UI changes required. See
 // functions/src/vendorComment.ts for the auth + write shape.
 export { vendorPostComment, vendorPostCommentHelper } from './vendorComment';
+export { onBigDayCommentCreated } from './commentAlertTrigger';
 
 // 2026-08-13 — H-03 audit follow-up. Backfills the `vendor: true`
 // custom claim for every existing /vendors/{authUid} doc whose
