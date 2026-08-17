@@ -1245,6 +1245,60 @@ export default function App() {
      return unsub;
    }, [user?.uid, userRole]);
 
+   // 2026-08-17 — RELOCATED FOR TDZ FIX (round-3 hotfix).
+   // The `vendorsForPicker` useMemo below reads both `inquiries` and
+   // `vendorContacts` in its deps array. In the previous layout, this
+   // declaration sat ~300 lines later in the file (right before the
+   // helpers subscription), which caused React to throw `ReferenceError:
+   // Cannot access 'Vi' (the minified name for `vendorContacts`) before
+   // initialization` on first render of the App component. Moving the
+   // declaration to immediately after `inquiries` keeps it ahead of
+   // every consumer — the dependency reading happens at hook-eval time.
+   //
+   // 2026-07-15 — vendor contacts subscription (主理新人's personal
+   // address-book of vendors they know from Instagram / friends /
+   // etc.). Lives at /users/{userUid}/vendorContacts. Empty array
+   // for vendors / non-owners.
+   const [vendorContacts, setVendorContacts] = useState([]);
+   const [vendorContactsLoading, setVendorContactsLoading] = useState(true);
+   useEffect(() => {
+     if (!user || user.isAnonymous || guest.isGuestMode) {
+       setVendorContacts([]);
+       setVendorContactsLoading(false);
+       return undefined;
+     }
+     setVendorContactsLoading(true);
+     const q = query(
+       collection(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts'),
+       orderBy('addedAt', 'desc'),
+     );
+     const unsub = onSnapshot(
+       q,
+       (snap) => {
+         setVendorContacts(
+           snap.docs.map((d) => ({
+             id: d.id,
+             ...d.data(),
+             addedAt: d.data().addedAt?.toMillis?.() || 0,
+           })),
+         );
+         setVendorContactsLoading(false);
+       },
+       (err) => {
+         // Silent failure — empty state still renders fine
+         // eslint-disable-next-line no-console
+         console.warn('vendorContacts subscribe failed:', err?.message);
+         setVendorContactsLoading(false);
+       },
+     );
+     return unsub;
+   }, [user?.uid, guest.isGuestMode]);
+
+   // 2026-08-17 — TDZ caveat (updated): the `vendorContacts` hook above
+   // now lives immediately AFTER `inquiries`, so the useMemo below
+   // (which depends on both) reads its deps in order and stays out of
+   // the temporal dead zone. Don't move it back.
+
    // 2026-08-15 — Vendor Onboarding & Assignment Audit (Root Cause 2).
    // The canonical assignable-vendor list now reads from BOTH the
    // couple's address book (linked contacts) AND their inquiry/chat
@@ -1529,44 +1583,6 @@ export default function App() {
      return sum + (userRole === 'vendor' ? inq.vendorUnread || 0 : inq.coupleUnread || 0);
    }, 0);
 
-   // 2026-07-15 — vendor contacts subscription (主理新人's personal
-   // address-book of vendors they know from Instagram / friends /
-   // etc.). Lives at /users/{userUid}/vendorContacts. Empty array
-   // for vendors / non-owners.
-   const [vendorContacts, setVendorContacts] = useState([]);
-   const [vendorContactsLoading, setVendorContactsLoading] = useState(true);
-   useEffect(() => {
-     if (!user || user.isAnonymous || guest.isGuestMode) {
-       setVendorContacts([]);
-       setVendorContactsLoading(false);
-       return undefined;
-     }
-     setVendorContactsLoading(true);
-     const q = query(
-       collection(db, 'artifacts', appId, 'users', user.uid, 'vendorContacts'),
-       orderBy('addedAt', 'desc'),
-     );
-     const unsub = onSnapshot(
-       q,
-       (snap) => {
-         setVendorContacts(
-           snap.docs.map((d) => ({
-             id: d.id,
-             ...d.data(),
-             addedAt: d.data().addedAt?.toMillis?.() || 0,
-           })),
-         );
-         setVendorContactsLoading(false);
-       },
-       (err) => {
-         // Silent failure — empty state still renders fine
-         // eslint-disable-next-line no-console
-         console.warn('vendorContacts subscribe failed:', err?.message);
-         setVendorContactsLoading(false);
-       },
-     );
-     return unsub;
-   }, [user?.uid, guest.isGuestMode]);
 
    // 2026-07-18 — Couple's helpers + pending invites (兄弟姊妹
    // including those who haven't accepted yet). Two sources, both
