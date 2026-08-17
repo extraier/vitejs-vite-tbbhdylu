@@ -547,6 +547,148 @@ export const updateHelperPerms = onCall({ cors: true, region: "us-central1" }, a
 
   return { ok: true };
 });
+/**
+ * linkVendorContact — owner-only. Re-stamps `linkedVendorUid` on a
+ * vendorContact whose catalog link was previously erased (e.g. the
+ * 2026-08-09 incident where `handleAddVendorContact` defaulted
+ * `linkedVendorUid` to null instead of preserving the picked
+ * vendor's id). Same validation as a fresh link: the vendor doc
+ * must exist at `/vendors/{vendorUid}`. The owner can also pass
+ * `dryRun: true` to preview which vendor would be linked without
+ * writing — useful for a "重新連結商戶" UI control that lets the
+ * couple confirm before stamping.
+ *
+ * Audit fields stamped on write:
+ *   linkedVendorUid   — the vendor's uid (slug)
+ *   invitationAccepted — true (the link is restored)
+ *   linkedAt          — server timestamp
+ *   linkSource        — 'manual-relink' (vs 'catalog-pick' for fresh adds)
+ */
+export const linkVendorContact = onCall({ cors: true, region: "us-central1" }, async (req) => {
+  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+
+  const { contactId, vendorUid, dryRun } = req.data as {
+    contactId: string;
+    vendorUid: string;
+    dryRun?: boolean;
+  };
+
+  if (!contactId || !vendorUid) {
+    throw new HttpsError('invalid-argument', 'contactId and vendorUid required.');
+  }
+
+  const ownerUid = req.auth.uid;
+
+  // Validate ownership of the contact. Path-bound ownerUid matches
+  // the caller for owner-scoped reads (rules check `isOwner(ownerUid)`).
+  const contactRef = db
+    .collection('artifacts').doc(appId)
+    .collection('users').doc(ownerUid)
+    .collection('vendorContacts').doc(contactId);
+
+  const contactSnap = await contactRef.get();
+  if (!contactSnap.exists) {
+    throw new HttpsError('not-found', 'Contact not found.');
+  }
+  const contactData = contactSnap.data()!;
+
+  // Validate the vendor exists at /vendors/{vendorUid}. The
+  // vendor directory is publicly readable so this is a cheap
+  // existence check.
+  const vendorRef = db.collection('vendors').doc(vendorUid);
+  const vendorSnap = await vendorRef.get();
+  if (!vendorSnap.exists) {
+    throw new HttpsError('not-found', `Vendor ${vendorUid} not found in directory.`);
+  }
+  const vendorData = vendorSnap.data()!;
+
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      wouldLink: {
+        contactId,
+        vendorUid,
+        vendorName: vendorData.name || vendorUid,
+        vendorCategory: vendorData.category || '',
+        currentLinkedVendorUid: contactData.linkedVendorUid || null,
+      },
+    };
+  }
+
+  await contactRef.update({
+    linkedVendorUid: vendorUid,
+    invitationAccepted: true,
+    linkedAt: FieldValue.serverTimestamp(),
+    linkSource: 'manual-relink',
+    // 2026-08-15 — also stamp vendorName from the directory
+    // doc so the contact card shows the canonical name (in
+    // case the contact's local vendorName had been hand-edited
+    // or stale). Don't overwrite the contact's own notes.
+    vendorName: vendorData.name || contactData.vendorName || vendorUid,
+  });
+
+  return {
+    ok: true,
+    linked: {
+      contactId,
+      vendorUid,
+      vendorName: vendorData.name || vendorUid,
+      vendorCategory: vendorData.category || '',
+    },
+  };
+});
+
+/**
+ * searchVendorsByName — owner-only. Lightweight lookup against the
+ * `/vendors` directory for the "重新連結商戶" picker. Filters by
+ * case-insensitive substring on `name` and optional `category`.
+ * Caps results at 20 to keep payloads small; the UI does the
+ * rest of the matching.
+ */
+export const searchVendorsByName = onCall({ cors: true, region: "us-central1" }, async (req) => {
+  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+
+  const { name, category, limit } = req.data as {
+    name?: string;
+    category?: string;
+    limit?: number;
+  };
+
+  const cap = Math.min(Number(limit) || 20, 50);
+
+  // /vendors is publicly readable; no per-owner filter needed.
+  let q = db.collection('vendors').limit(cap);
+  if (category && typeof category === 'string') {
+    q = q.where('category', '==', category);
+  }
+  const snap = await q.get();
+
+  // Filter by case-insensitive substring on name. Firestore
+  // doesn't support `contains` natively without a 3rd-party
+  // search service, so we filter in-memory after the category
+  // query (which is index-supported). Cap stays on the
+  // post-filter set.
+  const needle = String(name || '').trim().toLowerCase();
+  const hits = snap.docs
+    .filter((d) => {
+      if (!needle) return true;
+      const n = (d.data().name || '').toLowerCase();
+      return n.includes(needle);
+    })
+    .slice(0, cap)
+    .map((d) => {
+      const v = d.data();
+      return {
+        uid: d.id,
+        name: v.name || d.id,
+        category: v.category || '',
+        serviceAreaCity: v.serviceAreaCity || '',
+      };
+    });
+
+  return { ok: true, hits };
+});
 // ─── Admin Bootstrap ─────────────────────────────────────────────────────
 //
 // First-call: NO admin exists yet. Anyone signed in can call this once

@@ -1802,6 +1802,66 @@ export default function App() {
      // After the link lands, also back-fills assignedVendorUid on
      // every task in this owner's /tasks/ where assignedContactId
      // matches — same logic the auto-linker applies cross-owner.
+     // 2026-08-15 — Vendor Onboarding & Assignment Audit (Fix 4).
+     // Extracted from the old handleLinkContact prompt() flow so
+     // both the prompt-based fallback and the new
+     // RelinkVendorModal (search /vendors + confirm) can reuse
+     // the same task back-fill. Stamps assignedVendorUid on
+     // every task where assignedContactId matches the contact,
+     // skipping tasks that already have an assignedVendorUid
+     // (don't overwrite a manually-corrected one). Counts the
+     // touched tasks for the toast.
+     const backfillVendorUidOnTasks = async (contact, vendorUid) => {
+       if (!dataOwnerUid || !currentEvent?.id || !contact?.id || !vendorUid) return 0;
+       try {
+         const { getDocs } = await import('firebase/firestore');
+         const tasksQ = query(
+           collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks'),
+           where('assignedContactId', '==', contact.id),
+         );
+         const snap = await getDocs(tasksQ);
+         let count = 0;
+         for (const t of snap.docs) {
+           if (t.data().assignedVendorUid) continue;
+           await updateDoc(
+             doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks', t.id),
+             {
+               assignedVendorUid: vendorUid,
+               assignedVendorName:
+                 t.data().assignedVendorName || contact.vendorName || '',
+             },
+           );
+           count++;
+         }
+         return count;
+       } catch (e) {
+         // eslint-disable-next-line no-console
+         console.warn('backfillVendorUidOnTasks failed:', e?.message);
+         return -1;
+       }
+     };
+
+     // 2026-08-15 — Relink callback. Called by RelinkVendorModal
+     // after linkVendorContact writes the new linkedVendorUid.
+     // Same back-fill as the prompt() flow but with a toast that
+     // doesn't reference "輸入 uid" — couples picked this vendor
+     // from a list, not typed a uid.
+     const handleRelinkedContact = async ({ contactId, vendorUid, vendorName }) => {
+       if (!user || !contactId || !vendorUid) return;
+       // Find the contact in the local list (we have it in
+       // MyVendorsPanel state, but the modal only passed the id).
+       const contact = vendorContacts.find((c) => c.id === contactId);
+       if (!contact) return;
+       const count = await backfillVendorUidOnTasks(contact, vendorUid);
+       if (count > 0) {
+         showToast(`🔗 已連結「${vendorName}」！同步咗 ${count} 個指派任務`);
+       } else if (count === 0) {
+         showToast(`🔗 已連結「${vendorName}」！`);
+       } else {
+         showToast(`🔗 已連結 (任務同步失敗，請聯絡管理員)`);
+       }
+     };
+
      const handleLinkContact = async (contact) => {
        if (!user || !contact?.id) return;
        const raw = window.prompt(
@@ -1820,34 +1880,15 @@ export default function App() {
            showToast(`✗ 連結失敗：${result.reason}`);
            return;
          }
-         // Back-fill tasks for this contact in this owner scope.
-         // 2026-07-27 — Migrated to event-scoped path.
-                 try {
-                   const { getDocs } = await import('firebase/firestore');
-                   const tasksQ = query(
-                     collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks'),
-                     where('assignedContactId', '==', contact.id),
-                   );
-                   const snap = await getDocs(tasksQ);
-                   let count = 0;
-                   for (const t of snap.docs) {
-                     if (t.data().assignedVendorUid) continue;
-                     await updateDoc(
-                       doc(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'tasks', t.id),
-               {
-                 assignedVendorUid: vendorUid,
-                 assignedVendorName:
-                   t.data().assignedVendorName || contact.vendorName || '',
-               },
-             );
-             count++;
-           }
-           showToast(
-             `🔗 已連結！${count > 0 ? `同步咗 ${count} 個指派任務` : ''}`,
-           );
-         } catch (e) {
-           // eslint-disable-next-line no-console
-           console.warn('task back-fill failed:', e?.message);
+         // 2026-08-15 — Use the extracted helper for the
+         // back-fill so the prompt flow and the modal flow
+         // share the exact same code path.
+         const count = await backfillVendorUidOnTasks(contact, vendorUid);
+         if (count > 0) {
+           showToast(`🔗 已連結！${count > 0 ? `同步咗 ${count} 個指派任務` : ''}`);
+         } else if (count === 0) {
+           showToast(`🔗 已連結！`);
+         } else {
            showToast('🔗 已連結 (任務同步失敗)');
          }
        } catch (err) {
@@ -3762,6 +3803,15 @@ export default function App() {
                     onUpdateContact={handleUpdateVendorContact}
                     onDeleteContact={handleDeleteVendorContact}
                     onLinkContact={handleLinkContact}
+                    // 2026-08-15 — Vendor Onboarding & Assignment
+                    // Audit (Fix 4). RelinkVendorModal uses this
+                    // callback after linkVendorContact writes
+                    // the new linkedVendorUid. Same back-fill
+                    // logic as the prompt() flow (assignedVendorUid
+                    // stamped on tasks where assignedContactId
+                    // matches). Modal handles its own success
+                    // state — this is just the task-sync toast.
+                    onRelinkedContact={handleRelinkedContact}
                     onChatContact={(contact) =>
                       handleOpenChat({
                         otherUid: contact.linkedVendorUid,

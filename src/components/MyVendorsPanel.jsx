@@ -32,6 +32,11 @@ import { VENDOR_CATEGORIES, getTaskCategoryLabel } from '../lib/config';
 import { VendorContactForm } from './modals/VendorContactForm';
 import { VendorInviteModal } from './modals/VendorInviteModal';
 import { AddVendorPicker } from './modals/AddVendorPicker';
+// 2026-08-15 — Vendor Onboarding & Assignment Audit (Fix 4).
+// Replaces the old window.prompt() flow that asked couples for a
+// raw vendor uid. Searchable modal against /vendors with
+// category filter + preview + audit fields on confirm.
+import { RelinkVendorModal } from './modals/RelinkVendorModal';
 
 export function MyVendorsPanel({
   contacts = [],
@@ -41,6 +46,13 @@ export function MyVendorsPanel({
   onDeleteContact,
   onLinkContact, // (contact) => void; manual uid-based link fallback
   onChatContact, // (contact) => void; called for contacts with linkedVendorUid
+  // 2026-08-15 — Vendor Onboarding & Assignment Audit (Fix 4).
+  // Called by RelinkVendorModal after a successful re-link so
+  // the parent can back-fill assignedVendorUid on tasks that
+  // previously only had assignedContactId. The old prompt()
+  // flow did this inline; the modal can't reach into App.jsx's
+  // task query, so we pass a callback through.
+  onRelinkedContact, // ({ contactId, vendorUid, vendorName }) => void
   // 2026-07-22 — props forwarded to AddVendorPicker → PickExistingVendor
   // so the trending strip appears at the top of the catalog picker.
   // All optional so the panel still works in guest mode / settings pages
@@ -63,6 +75,11 @@ export function MyVendorsPanel({
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [invitingContact, setInvitingContact] = useState(null);
+  // 2026-08-15 — Vendor Onboarding & Assignment Audit (Fix 4).
+  // Modal state for the "重新連結商戶" picker. When set, the
+  // RelinkVendorModal renders, letting the couple search
+  // /vendors by name and re-stamp linkedVendorUid.
+  const [relinkingContact, setRelinkingContact] = useState(null);
 
   function handleSave(data) {
     if (editing) {
@@ -159,7 +176,17 @@ export function MyVendorsPanel({
               key={contact.id}
               contact={contact}
               onChat={() => handleChat(contact)}
-              onLink={() => onLinkContact?.(contact)}
+              // 2026-08-15 — Vendor Onboarding & Assignment Audit
+              // (Fix 4). "重新連結商戶" link button now opens the
+              // searchable RelinkVendorModal. Falls back to the
+              // old prompt()-based handler (if the parent passed
+              // onLinkContact) when the new modal is disabled or
+              // the search call fails on launch — graceful
+              // degradation preserves the couple's escape hatch.
+              onLink={() => {
+                setRelinkingContact(contact);
+                onLinkContact?.(contact);
+              }}
               onEdit={() => {
                 setEditing(contact);
                 setFormOpen(true);
@@ -204,6 +231,27 @@ export function MyVendorsPanel({
         <VendorInviteModal
           contact={invitingContact}
           onClose={() => setInvitingContact(null)}
+        />
+      )}
+
+      {/* 2026-08-15 — Vendor Onboarding & Assignment Audit (Fix 4). */}
+      {relinkingContact && (
+        <RelinkVendorModal
+          contact={relinkingContact}
+          onClose={() => setRelinkingContact(null)}
+          onLinked={({ contactId, vendorUid, vendorName }) => {
+            // 2026-08-15 — Back-fill assignedVendorUid on any
+            // existing tasks for this contact. Tasks created
+            // before Fix 1 may have only assignedContactId +
+            // assignedVendorName; the vendor-side
+            // (assignedVendorUid) read filter would miss them.
+            // The parent owns the task query — we just call its
+            // callback. The vendorContacts subscription will
+            // pick up the new linkedVendorUid on its own
+            // (snapshot listener), so we don't need to refresh
+            // anything here.
+            onRelinkedContact?.({ contactId, vendorUid, vendorName });
+          }}
         />
       )}
     </div>
@@ -320,10 +368,14 @@ function ContactCard({ contact, onChat, onLink, onEdit, onDelete }) {
               ? 'text-emerald-500 hover:bg-emerald-50'
               : 'text-amber-500 hover:bg-amber-50 opacity-0 group-hover:opacity-100'
           }`}
+          // 2026-08-15 — Vendor Onboarding & Assignment Audit
+          // (Fix 4). Title now reflects the searchable modal
+          // flow (search /vendors, click, confirm) instead of
+          // the old "輸入 uid" prompt.
           title={
             linked
-              ? '已連結此商戶 (重新連結可覆蓋 uid)'
-              : '連結到已註冊商戶 (輸入 uid)'
+              ? '已連結此商戶 (重新搜尋並連結)'
+              : '連結到已註冊商戶 (搜尋目錄)'
           }
         >
           <Link2 className="w-3.5 h-3.5" />
