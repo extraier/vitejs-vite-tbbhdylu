@@ -601,8 +601,62 @@ export default function App() {
       ownerUid: a.ownerUid,
       ownerName: a.displayName || a.email || null,
       perms: a.perms || {},
+      // 2026-08-17 — Manus A9: include eventId so the helper's bell
+      // can scope localStorage hydration + the focused-parent deep
+      // link to the helper's active wedding. Cloud function gates
+      // invites on eventId at create time (P0-B audit 2026-08-15).
+      eventId: a.eventId || null,
     };
   }, [helperCtx.assignments]);
+
+  // 2026-08-17 — Manus A9: per-role bell props + eligibility.
+  //
+  // The comment-alert inbox path is keyed by SELF UID (the signed-in
+  // user), not by couple — so owner / vendor / helper each have their
+  // own inbox at /users/{selfUid}/notifications. The bell needs only
+  // selfUid to be enabled; ownerUid + coupleUid + eventId are used
+  // by the OTHER bell sources (proposals, tasks, helpers) which are
+  // only meaningful for the couple role.
+  //
+  // Eligibility per role:
+  //   owner / co-owner — bell renders, all sources active
+  //   vendor           — bell renders; proposal/task sources are no-ops
+  //                      (coupleUid is null); comment source is cross-event
+  //   helper           — bell renders; same shape as vendor, but eventId
+  //                      is scoped to helperActiveAssignment.eventId
+  //   reception        — bell does NOT render (single-purpose QR role,
+  //                      no /notifications/ inbox needed)
+  //   guest_portal     — bell does NOT render (short-lived read-only)
+  //
+  // TDZ note (2026-08-17): bellProps reads `dataOwnerUid` which is
+  // declared further down (line ~1030). React function bodies run
+  // top-to-bottom so referencing it here used to TDZ. Wrapping in
+  // a useMemo with dataOwnerUid in deps doesn't help — useMemo
+  // evaluates the factory on first render BEFORE the destructure
+  // ordering resolves. The fix: declare bellProps WITHOUT the
+  // dataOwnerUid read at the top, then merge it in at the
+  // declaration site (after dataOwnerUid is initialized) via a
+  // useMemo that returns a fresh object. See the SECOND declaration
+  // below the dataOwnerUid block.
+  const bellEligibleRole =
+    userRole === 'owner' ||
+    userRole === 'vendor' ||
+    userRole === 'helper';
+  // Skeleton computed inline; the final bellProps with dataOwnerUid
+  // merged in is declared further down. The bell mount point
+  // references `bellProps` from the LATER declaration so this
+  // skeleton is unused at render time.
+  const bellPropsSkeleton = {
+    selfUid: user?.uid || null,
+    coupleUid: bellEligibleRole && userRole === 'owner' ? user?.uid : null,
+    eventId:
+      userRole === 'helper'
+        ? helperActiveAssignment?.eventId || null
+        : userRole === 'owner' || userRole === 'co-owner' || !userRole
+        ? currentEvent?.id || null
+        : null,
+    enabled: bellEligibleRole && !!user?.uid,
+  };
 
   // 2026-07-19 — auto-route active helpers (兄弟姊妹) to their
   // dashboard. Co-located with `helperActiveAssignment` because
@@ -846,6 +900,26 @@ export default function App() {
   // can scroll to the right task and open its comments panel. Cleared
   // by the checklist view on mount (or by the next click).
   const [focusedTaskId, setFocusedTaskId] = useState(null);
+  // 2026-08-17 — Manus A8: bell-click deep-link focus for Big Day
+  // comment alerts. The alert doc carries `kind` ∈ {rundown, resources}
+  // and `parentId`. When the couple clicks the alert, App.jsx sets
+  // these; <WeddingDay> switches its subtab and scrolls the matching
+  // row into view (with a brief ring highlight).
+  const [focusedParentId, setFocusedParentId] = useState(null);
+  const [focusedParentKind, setFocusedParentKind] = useState(null);
+  // 2026-08-17 — Manus A8: clear the focused-parent pointer when
+  // the user navigates AWAY from `wedding-day`. This prevents a
+  // stale focus from re-firing if they return later, AND lets a
+  // second click on the same alert (same id) re-trigger the
+  // focus effect after a navigate-back: the parent state will be
+  // null when they leave, then re-set to non-null when they
+  // click the alert again.
+  useEffect(() => {
+    if (currentView !== 'wedding-day') {
+      setFocusedParentId(null);
+      setFocusedParentKind(null);
+    }
+  }, [currentView]);
 
   // 2026-08-01 — sync the new 'event-settings' tab to the modal state.
   // When the owner clicks the ⚙️ 婚禮設定 tab (added in tabs.ts), we
@@ -956,6 +1030,19 @@ export default function App() {
     // the signed-in user's uid (the original-owner case).
     return currentEvent._ownerUid || user?.uid;
   }, [currentEvent, user?.uid, guest.isGuestMode, guest.qOwner]);
+
+  // 2026-08-17 — Manus A9: full bellProps (with ownerUid merged
+  // in from dataOwnerUid). This MUST be placed after the dataOwnerUid
+  // declaration because the factory reads dataOwnerUid. The earlier
+  // `bellPropsSkeleton` above provides the other 4 fields; we
+  // re-merge here so the bell mount point gets the full object.
+  const bellProps = useMemo(
+    () => ({
+      ...bellPropsSkeleton,
+      ownerUid: dataOwnerUid,
+    }),
+    [bellPropsSkeleton, dataOwnerUid],
+  );
 
   // 2026-08-09 — Comment-path resolvers for <ItemComments/>. The
   // component takes a Firestore CollectionReference and subscribes
@@ -3570,16 +3657,24 @@ export default function App() {
                       </button>
                     )}
                     {/* 2026-08-08 — header buttons moved next to the user
-                        profile icon. Order is: 🔔 商戶報價 bell (owners
-                        only) → 💬 訊息收件匣 (owners + vendors) → UserMenu.
-                        Both bells sit tight against the avatar so the
-                        couple sees "you have new stuff" at a glance. */}
-                    {userRole === 'owner' && (
+                        profile icon. Order is: 🔔 商戶報價 bell → 💬 訊息收件匣
+                        (owners + vendors) → UserMenu. Both bells sit tight
+                        against the avatar so the couple sees "you have new
+                        stuff" at a glance. */}
+                    {/* 2026-08-17 — Manus A9: render the bell for ALL roles
+                        that have a comment-alert inbox, not just owners.
+                        The inbox path is users/{selfUid}/notifications
+                        (per-user, NOT per-couple), so vendors and helpers
+                        each see alerts addressed to their own auth uid.
+                        Reception + guest_portal are excluded — those roles
+                        are short-lived or single-purpose (no inbox needed). */}
+                    {bellEligibleRole && (
                       <BellNotifications
-                        ownerUid={dataOwnerUid}
-                        coupleUid={user?.uid}
-                        selfUid={user?.uid}
-                        eventId={currentEvent?.id}
+                        ownerUid={bellProps.ownerUid}
+                        coupleUid={bellProps.coupleUid}
+                        selfUid={bellProps.selfUid}
+                        eventId={bellProps.eventId}
+                        enabled={bellProps.enabled}
                         onOpenProposal={(jobId) => setViewingProposals(jobId)}
                         onOpenComment={(meta) => {
                           // 2026-08-09 — bell notification click: scroll
@@ -3589,18 +3684,58 @@ export default function App() {
                           if (meta?.eventId && currentEvent?.id !== meta.eventId) {
                             setCurrentEvent({ id: meta.eventId });
                           }
+                          // 2026-08-17 — A8: clear the Big Day
+                          // focus state so the checklist click
+                          // doesn't accidentally re-scroll later.
+                          setFocusedParentId(null);
+                          setFocusedParentKind(null);
                           setFocusedTaskId(meta?.taskId || null);
                           setCurrentView('couple-checklist');
                         }}
                         // 2026-08-17 — Vendor / helper comment on 大日流程 /
-                        // 物資. Routes to the Big Day view (wedding-day)
-                        // rather than the checklist because the
-                        // parent rundown / resource item lives there.
+                        // 物資. Routes the recipient to the right view
+                        // based on their role:
+                        //   owner    -> wedding-day (Big Day view)
+                        //   vendor   -> vendor-dashboard (per-task
+                        //              comment panel — vendor has no
+                        //              Big Day view)
+                        //   helper   -> helper-dashboard (same shape)
+                        // Also seeds focusedParent* for owners only
+                        // (A8 deep-link scroll into the entry).
                         onOpenCommentAlert={(meta) => {
                           if (meta?.eventId && currentEvent?.id !== meta.eventId) {
                             setCurrentEvent({ id: meta.eventId });
                           }
-                          setCurrentView('wedding-day');
+                          // A8: `kind` field on the alert doc tells us
+                          // which Big Day subtab to switch to:
+                          //   'rundown'   -> 大日流程
+                          //   'resources' -> 物資
+                          // `parentId` is the doc id of the entry/item
+                          // the comment is attached to. <WeddingDay>
+                          // watches these and scrolls to it.
+                          if (meta?.kind === 'rundown' || meta?.kind === 'resources') {
+                            setFocusedParentKind(meta.kind);
+                            setFocusedParentId(meta.parentId || null);
+                          } else {
+                            // Defensive: unknown kind -> clear stale focus.
+                            setFocusedParentKind(null);
+                            setFocusedParentId(null);
+                          }
+                          // Step 16: role-aware routing. Owner -> Big Day;
+                          // vendor / helper -> their own dashboards. The
+                          // dashboards don't yet honour focusedParent* —
+                          // that's a step 16+ future item — but at least
+                          // the click doesn't drop them onto a missing
+                          // view.
+                          if (userRole === 'owner' || userRole === 'co-owner' || !userRole) {
+                            setCurrentView('wedding-day');
+                          } else if (userRole === 'vendor') {
+                            setCurrentView('vendor-dashboard');
+                          } else if (userRole === 'helper') {
+                            setCurrentView('helper-dashboard');
+                          } else {
+                            setCurrentView('wedding-day');
+                          }
                         }}
                         onOpenStatus={(meta) => {
                           if (meta?.eventId && currentEvent?.id !== meta.eventId) {
@@ -4091,6 +4226,11 @@ export default function App() {
                 // (entryId) => CollectionReference | null
                 rundownCommentPathFor={rundownCommentPathFor}
                 resourceCommentPathFor={resourceCommentPathFor}
+                // 2026-08-17 — Manus A8: bell-click deep-link focus.
+                // <WeddingDay> watches these and scrolls the matching
+                // rundown / resources row into view with a brief ring.
+                focusedParentId={focusedParentId}
+                focusedParentKind={focusedParentKind}
               />
             )}
 

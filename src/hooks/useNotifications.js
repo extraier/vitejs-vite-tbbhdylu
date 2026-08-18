@@ -426,6 +426,22 @@ function commentItems(docs, ownerUid, eventId) {
       },
       createdAt: toMillis(d.createdAt),
       sourceKey: 'comment',
+      // 2026-08-17 — Manus step 16: surface `readAt` on the bell
+      // item so the dropdown can render an unread dot AND the
+      // click handler can mark just THIS alert read (vs the
+      // existing mark-all-read which nukes the whole inbox's
+      // unread state). `null` means unread.
+      //
+      // Other categories (proposal / task / invite) are
+      // mark-all-seen via localStorage only — there's no
+      // per-doc readAt for them, so this field is intentionally
+      // omitted from those item shapes.
+      readAt: d.readAt || null,
+      // The alert doc id (without the `comment:` prefix the
+      // hook adds to make it unique per category). Used by
+      // markCommentAlertsRead(selfUid, [alert], eventId) which
+      // takes the underlying doc ids.
+      alertDocId: d.id,
     };
   });
 }

@@ -51,7 +51,11 @@
 //   - "✨ 暫時無新通知"
 
 import { useEffect, useRef, useState } from 'react';
-import { Bell, Check, ExternalLink, Loader2 } from 'lucide-react';
+import { Bell, Check, ExternalLink, Loader2, X } from 'lucide-react';
+// 2026-08-17 — Manus step 17: animated bell badge. Count tweens
+// up/down between renders instead of snapping. Lives in /hooks
+// so it's unit-testable in isolation (see useCountUp.test.js).
+import { useCountUp } from '../hooks/useCountUp';
 import {
   useNotifications,
   markAllNotificationsSeen,
@@ -99,6 +103,12 @@ export function BellNotifications({
   onOpenStatus,
   onOpenInvite,
   onOpenDashboard,
+  // 2026-08-17 — Manus A9: explicit `enabled` flag from the caller.
+  // Defaults to true so the bell subscribes eagerly (the badge needs
+  // to appear the moment an alert arrives, without waiting for the
+  // user to open the dropdown). App.jsx passes false for
+  // reception / guest_portal roles that have no inbox.
+  enabled: enabledProp = true,
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
@@ -129,8 +139,44 @@ export function BellNotifications({
     // The hook also reads from localStorage, so the fresh markers are
     // already there when this re-render runs.
     refreshKey: localSeenTick,
-    enabled: open || liveTotalNew > 0,
+    // 2026-08-17 — Manus A9: honor the caller's enabled flag. The
+    // bell used to gate subscriptions on `open || liveTotalNew > 0`
+    // which made vendors/helpers invisible until the first alert
+    // arrived. Now App.jsx computes `enabled` per-role and we use
+    // it directly. The `open || liveTotalNew > 0` heuristic is no
+    // longer needed: the cost of 1-4 onSnapshot listeners per
+    // signed-in user is acceptable for the badge to be live.
+    enabled: enabledProp,
   });
+  // 2026-08-17 — Manus step 17: animated badge. `useCountUp` returns
+  // a tweened integer that interpolates from the previous `totalNew`
+  // to the current one over ~420ms. Each render the bell passes the
+  // latest `totalNew`; the hook handles the rest.
+  //
+  // We also compute `displayedTotal` here (the rounded animated
+  // value) so the badge renders the tweened number, not the snap-to
+  // target. `9+` is preserved when the animated value crosses 9.
+  //
+  // TDZ note: this MUST come AFTER the useNotifications destructure
+  // above, because we read `totalNew` from it. The 2026-08-09 TDZ
+  // regression test (smoke.test.jsx) catches a similar pattern; the
+  // ordering here is intentional.
+  const animatedTotal = useCountUp(totalNew, { durationMs: 420 });
+  const displayedTotal = Math.min(99, Math.max(0, Math.round(animatedTotal)));
+  const badgeText = displayedTotal > 9 ? '9+' : displayedTotal;
+  // 2026-08-17 — Manus step 17: brief scale pulse on new-arrival.
+  // We track the previous displayed value via a ref. When the count
+  // goes UP (new alert arrived) we toggle a CSS class for ~600ms
+  // so the badge pops. We do NOT pulse on count-down (mark-read)
+  // because that's expected behavior, not a "new!" moment.
+  const [pulseKey, setPulseKey] = useState(0);
+  const prevDisplayedRef = useRef(displayedTotal);
+  useEffect(() => {
+    if (displayedTotal > prevDisplayedRef.current) {
+      setPulseKey((k) => k + 1);
+    }
+    prevDisplayedRef.current = displayedTotal;
+  }, [displayedTotal]);
   useEffect(() => {
     setLiveTotalNew(totalNew);
   }, [totalNew]);
@@ -194,6 +240,31 @@ export function BellNotifications({
   const handleItemClick = (item) => {
     setOpen(false);
     if (!item) return;
+    // 2026-08-17 — Manus step 16: per-item mark-as-read. When the
+    // user clicks a `comment`-category bell item that is still
+    // unread, optimistically update Firestore so the badge drops
+    // on this device + every other device the user has open.
+    //
+    // For non-comment categories (proposal / task / invite) the
+    // mark-all-seen model still applies — there's no per-doc
+    // readAt to set. Clicking those just navigates.
+    if (
+      item.category === 'comment' &&
+      !item.readAt &&
+      item.alertDocId &&
+      selfUid
+    ) {
+      // Fire-and-forget: the Firestore snapshot will catch up on
+      // its own and the localStorage hydration gate is bumped
+      // inside markCommentAlertsRead for cold-start safety. We
+      // don't await here so the navigation feels instant.
+      markCommentAlertsRead(selfUid, [{ id: item.alertDocId }], eventId).catch(
+        (err) => {
+          // eslint-disable-next-line no-console
+          console.warn('[BellNotifications] per-item mark-read failed', err?.message);
+        },
+      );
+    }
     switch (item.category) {
       case 'proposal':
         if (item.href?.jobId && onOpenProposal) onOpenProposal(item.href.jobId);
@@ -204,7 +275,12 @@ export function BellNotifications({
       // 2026-08-17 — Vendor / helper comment on 大日流程 / 物資.
       // Routes to the Big Day view (wedding-day) instead of the
       // checklist because rundown / resource comments live there.
+      // Also seeds focusedParent* for A8 deep-link.
       case 'comment':
+        // 2026-08-17 — Manus step 16: prefer onOpenCommentAlert if
+        // provided (deep-links to wedding-day + scrolls). Fall
+        // back to onOpenComment for callers that haven't migrated
+        // to the alert handler yet.
         if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
         else if (onOpenComment) onOpenComment(item.meta);
         break;
@@ -214,6 +290,25 @@ export function BellNotifications({
       default:
         break;
     }
+  };
+
+  // 2026-08-17 — Manus step 16: per-item "X" dismiss. Stops event
+  // propagation so the X click doesn't also trigger the row's
+  // main onClick (which would navigate + mark-read as a side
+  // effect). Only meaningful for `comment` items because other
+  // categories don't have a per-doc readAt to write — for those,
+  // the X is hidden so the user isn't tempted to use it.
+  const handleDismiss = (item, e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!item || item.category !== 'comment') return;
+    if (item.readAt || !item.alertDocId || !selfUid) return;
+    markCommentAlertsRead(selfUid, [{ id: item.alertDocId }], eventId).catch(
+      (err) => {
+        // eslint-disable-next-line no-console
+        console.warn('[BellNotifications] dismiss mark-read failed', err?.message);
+      },
+    );
   };
 
   const proposalCount = items.filter((i) => i.category === 'proposal').length;
@@ -242,16 +337,26 @@ export function BellNotifications({
           totalNew > 0 ? `通知，有 ${totalNew} 個新` : '通知'
         }
         title={totalNew > 0 ? `有 ${totalNew} 個新通知` : '通知'}
-        className={`relative text-slate-600 hover:text-slate-800 p-2 rounded-lg hover:bg-slate-100 transition-colors ${
-          totalNew > 0 ? 'animate-pulse' : ''
-        }`}
+        className={`relative text-slate-600 hover:text-slate-800 p-2 rounded-lg hover:bg-slate-100 transition-colors`}
       >
         <Bell
           className={`w-5 h-5 ${totalNew > 0 ? 'text-rose-500 fill-rose-200' : ''}`}
         />
-        {totalNew > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-tight ring-2 ring-white">
-            {totalNew > 9 ? '9+' : totalNew}
+        {/* 2026-08-17 — Manus step 17: animated badge. Renders
+            the tweened `displayedTotal` instead of the snap
+            `totalNew` so the count rolls up/down smoothly.
+            `pulseKey` is bumped on count-up to retrigger the
+            CSS scale-pulse animation per arrival (vs. playing
+            once and never again). */}
+        {displayedTotal > 0 && (
+          <span
+            key={pulseKey}
+            data-testid="bell-badge"
+            className={`absolute -top-0.5 -right-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full px-1.5 py-0.5 min-w-[18px] text-center leading-tight ring-2 ring-white ${
+              pulseKey > 0 ? 'animate-bell-pulse' : ''
+            }`}
+          >
+            {badgeText}
           </span>
         )}
       </button>
@@ -334,12 +439,36 @@ export function BellNotifications({
               <ul className="divide-y divide-slate-100">
                 {bellItems.map((item) => {
                   const meta = CATEGORY_META[item.category] || CATEGORY_META.system;
+                  // 2026-08-17 — Manus step 16: unread styling.
+                  // `comment` items have a per-doc readAt; other
+                  // categories use localStorage hydration so we
+                  // can't render a per-item unread dot for them.
+                  // Proposal items always feel "fresh" since they
+                  // require explicit click — no dot.
+                  const isUnread =
+                    item.category === 'comment' && !item.readAt;
+                  // 2026-08-17 — Manus step 16: refactored the row
+                  // from <button> to <div role="button"> so the
+                  // X-dismiss child can also be a real <button>
+                  // (was previously <span role="button">, which
+                  // triggered an HTML "button in button" dev-mode
+                  // warning). <div role="button"> keeps the same
+                  // click + keyboard surface without the nesting
+                  // problem. Mouse + Enter / Space are handled here.
+                  const onRowKeyDown = (e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleItemClick(item);
+                    }
+                  };
                   return (
                     <li key={item.id}>
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => handleItemClick(item)}
-                        className={`w-full text-left px-4 py-3 transition-colors flex gap-3 items-start ${meta.hoverBgClass}`}
+                        onKeyDown={onRowKeyDown}
+                        className={`w-full text-left px-4 py-3 transition-colors flex gap-3 items-start cursor-pointer ${meta.hoverBgClass}`}
                       >
                         {/* Avatar circle — first letter, tinted by category */}
                         <div className={`w-9 h-9 rounded-full text-white text-sm font-black flex items-center justify-center flex-shrink-0 ${avatarGradient(item.category)}`}>
@@ -348,6 +477,18 @@ export function BellNotifications({
                         <div className="min-w-0 flex-1">
                           <div className="flex items-baseline justify-between gap-2">
                             <span className="font-bold text-slate-800 text-sm truncate flex items-center gap-1">
+                              {/* 2026-08-17 — Manus step 16: small unread
+                              dot to the left of the actor name. Only
+                              shown for comment items with readAt
+                              null. Uses rose-500 so it pops on a
+                              white background without competing with
+                              the avatar tint. */}
+                              {isUnread && (
+                                <span
+                                  aria-label="未讀"
+                                  className="inline-block w-2 h-2 rounded-full bg-rose-500 flex-shrink-0"
+                                />
+                              )}
                               <span className="text-[10px]">{meta.icon}</span>
                               {item.actorName}
                             </span>
@@ -366,7 +507,24 @@ export function BellNotifications({
                             <span>{formatTimeAgo(item.createdAt)}</span>
                           </div>
                         </div>
-                      </button>
+                        {/* 2026-08-17 — Manus step 16: per-item X
+                        dismiss. Only on unread `comment` items.
+                        Real <button> (not span role="button") — the
+                        outer row is now a div with role="button"
+                        so HTML nesting is valid. */}
+                        {isUnread && (
+                          <button
+                            type="button"
+                            aria-label="標為已讀"
+                            title="標為已讀"
+                            onClick={(e) => handleDismiss(item, e)}
+                            className="flex-shrink-0 w-6 h-6 rounded-full hover:bg-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-700 transition-colors"
+                            data-testid={`bell-dismiss-${item.id}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
                     </li>
                   );
                 })}

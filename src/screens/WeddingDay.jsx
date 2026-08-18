@@ -1522,8 +1522,12 @@ function ResourcesTab({
           ) : (
             <div className="divide-y divide-slate-100">
               {list.map((item) => (
+                // 2026-08-17 — Manus A8: data-row-id on the non-drag
+                // resources row too, so bell-click focus works in
+                // both manual-sort and time-sort groups.
                 <div
                   key={item.id}
+                  data-row-id={item.id}
                   className={`${editing === item.id ? 'hidden' : 'flex flex-col'} ${item.checked ? 'bg-slate-50 opacity-60' : ''}`}
                 >
                 <div className="flex items-center gap-3 px-4 py-2.5">
@@ -1932,7 +1936,14 @@ function SortableRow({ id, disabled = false, children }) {
   // listeners + attributes to attach to whatever element should
   // initiate the drag (typically a GripVertical icon button).
   return (
-    <div ref={setNodeRef} style={style} className="touch-none">
+    // 2026-08-17 — Manus A8: data-row-id attribute lets App.jsx's
+    // bell-click focus handler scroll the matching row into view
+    // via document.querySelector. SortableRow is shared between
+    // rundown + resources; we use a generic attribute name and let
+    // the focus effect in WeddingDay.jsx scope by `[data-row-id="${id}"]`.
+    // setNodeRef still owns the dnd-kit sortable ref; the attribute
+    // is purely an anchor for the focus effect.
+    <div ref={setNodeRef} style={style} className="touch-none" data-row-id={id}>
       {typeof children === 'function'
         ? children({ dragHandleProps: { ...attributes, ...listeners } })
         : children}
@@ -3340,8 +3351,58 @@ export function WeddingDay({
   eventId,
   rundownCommentPathFor,
   resourceCommentPathFor,
+  // 2026-08-17 — Manus A8: bell-click deep-link focus. When the
+  // couple clicks a Big Day comment alert, App.jsx sets these:
+  //   focusedParentId   = the parentKind doc id (e.g. rundown entry id)
+  //   focusedParentKind = 'rundown' | 'resources'
+  // We switch the active tab and scroll the matching row into view.
+  // Optional; default no-op keeps existing callers untouched.
+  focusedParentId = null,
+  focusedParentKind = null,
 }) {
   const [active, setActive] = useState('rundown');
+
+  // 2026-08-17 — Manus A8: bell-click deep-link focus. Effect:
+  //   1. Switch the active subtab to whichever kind the alert is for.
+  //   2. After React commits the new layout, query the DOM for the
+  //      row with matching data-row-id and scrollIntoView it.
+  //   3. Briefly apply a ring highlight so the user lands on the
+  //      right entry even if the page was scrolled away from it.
+  // The querySelector + setTimeout give the tab switch a microtask
+  // to mount before we try to find it.
+  useEffect(() => {
+    if (!focusedParentId || !focusedParentKind) return;
+    if (focusedParentKind !== 'rundown' && focusedParentKind !== 'resources') return;
+    if (focusedParentKind !== active) setActive(focusedParentKind);
+    const id = focusedParentId;
+    const attemptScroll = (tries = 5) => {
+      // 2026-08-17 — guard CSS.escape. It's a standard Web API but
+      // jsdom (vitest's default test env) doesn't polyfill it, so
+      // production code crashes in tests when the bell-focus effect
+      // runs. Fall back to a regex-safe replace that handles the
+      // common Firestore doc-id character set (alphanumeric + -_).
+      // CSS.escape() is the right tool in browsers; the regex is
+      // a guard for environments where it's missing.
+      const safeId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(id)
+        : String(id).replace(/([^\w-])/g, '\\$1');
+      const el = document.querySelector(`[data-row-id="${safeId}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Highlight so the user knows where they landed. Tailwind's
+        // ring utilities compose cleanly with the existing card.
+        el.classList.add('ring-2', 'ring-rose-400', 'ring-offset-2');
+        setTimeout(() => {
+          el.classList.remove('ring-2', 'ring-rose-400', 'ring-offset-2');
+        }, 2400);
+        return;
+      }
+      // Tab switch may not have re-rendered yet; retry up to 5x.
+      if (tries > 0) setTimeout(() => attemptScroll(tries - 1), 80);
+    };
+    // scheduleScroll after the tab switch has had a chance to mount.
+    setTimeout(() => attemptScroll(5), 80);
+  }, [focusedParentId, focusedParentKind, active]);
 
   return (
     <div className="max-w-4xl mx-auto mt-8 animate-in slide-in-from-bottom-4 duration-500">
