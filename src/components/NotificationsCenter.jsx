@@ -49,6 +49,8 @@ import {
 import {
   useNotifications,
   markAllNotificationsSeen,
+  // 2026-08-17 — Manus A10.
+  markCommentAlertsRead,
   CATEGORY_META,
 } from '../hooks/useNotifications';
 
@@ -99,7 +101,7 @@ export function NotificationsCenter({
 }) {
   const [filter, setFilter] = useState('all');
   const [liveTotalNew, setLiveTotalNew] = useState(0);
-  const { items, badges, totalNew, loading, errors } = useNotifications({
+  const { items, badges, totalNew, loading, errors, commentAlerts } = useNotifications({
     ownerUid,
     coupleUid,
     selfUid,
@@ -140,6 +142,10 @@ export function NotificationsCenter({
       // 2026-08-17 — per-event timestamp, same shape as task.
       comment: Date.now(),
     });
+    // 2026-08-17 — Manus A10: per-device readAt sync via Firestore.
+    if (selfUid && Array.isArray(commentAlerts)) {
+      markCommentAlertsRead(selfUid, commentAlerts, eventId).catch(() => {});
+    }
   };
 
   const handleItemClick = (item) => {

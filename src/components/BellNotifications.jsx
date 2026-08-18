@@ -55,6 +55,8 @@ import { Bell, Check, ExternalLink, Loader2 } from 'lucide-react';
 import {
   useNotifications,
   markAllNotificationsSeen,
+  // 2026-08-17 — Manus A10: per-device readAt sync via Firestore.
+  markCommentAlertsRead,
   CATEGORY_META,
   MAX_BELL_DROPDOWN_ITEMS,
 } from '../hooks/useNotifications';
@@ -116,7 +118,7 @@ export function BellNotifications({
   // The local state update is synchronous, so the badge clears on
   // the very next render no matter what.
   const [localSeenTick, setLocalSeenTick] = useState(0);
-  const { items, badges, totalNew, loading, errors } = useNotifications({
+  const { items, badges, totalNew, loading, errors, commentAlerts } = useNotifications({
     ownerUid,
     coupleUid,
     selfUid,
@@ -171,6 +173,17 @@ export function BellNotifications({
       // 2026-08-17 — per-event timestamp, same shape as task.
       comment: Date.now(),
     });
+    // 2026-08-17 — Manus A10: also mark every unread comment alert
+    // as read on Firestore. The localStorage marker above is for
+    // cold-start hydration; this batch write is the live sync
+    // (cross-device, cross-tab). Fire-and-forget — the onSnapshot
+    // on the inbox will pick up the readAt flips within one tick
+    // and the badges useMemo recomputes against the new state.
+    if (selfUid && Array.isArray(commentAlerts)) {
+      markCommentAlertsRead(selfUid, commentAlerts, eventId).catch(() => {
+        // Already logged inside the helper; nothing else to do.
+      });
+    }
     // Bump local tick so this component re-renders immediately
     // against the fresh localStorage markers. The hook also listens
     // for the dispatched event, but using local state here is

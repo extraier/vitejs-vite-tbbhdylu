@@ -50,10 +50,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   collection,
+  doc,
+  FieldValue,
   onSnapshot,
   query,
   where,
   limit as fsLimit,
+  writeBatch,
 } from 'firebase/firestore';
 import { db, appId } from '../lib/firebase';
 
@@ -218,6 +221,71 @@ export function markAllNotificationsSeen(ownerUid, badges, eventId) {
       // ignore
     }
   }
+}
+
+// 2026-08-17 — Manus A10. Marks every unread Big Day comment
+// alert as read on Firestore (per-recipient inbox). The rules
+// permit this: client `update` is allowed when ONLY `readAt`
+// changes. We batch the writes so cross-device sync is atomic
+// per-tick — the bell on every other device will clear within
+// one snapshot.
+//
+// `alerts` is the current `commentAlerts` array (with `id` and
+// `readAt` fields already populated from the inbox snapshot).
+// We skip entries that already have a `readAt` to avoid pointless
+// writes (and to keep the rules' `request.resource.data.diff(
+// resource.data).affectedKeys().hasOnly(['readAt'])` happy when
+// the new value equals the existing value — actually that's fine,
+// but no point burning a write).
+//
+// Returns the number of alerts that were marked read.
+export async function markCommentAlertsRead(selfUid, alerts, eventId) {
+  if (!selfUid || !Array.isArray(alerts) || alerts.length === 0) return 0;
+  const unread = alerts.filter((a) => !a.readAt && a.id);
+  if (unread.length === 0) return 0;
+  const batch = writeBatch(db);
+  for (const a of unread) {
+    const ref = doc(
+      db,
+      'artifacts',
+      appId,
+      'users',
+      selfUid,
+      'notifications',
+      a.id,
+    );
+    batch.update(ref, { readAt: FieldValue.serverTimestamp() });
+  }
+  // Also bump the localStorage hydration gate so subsequent
+  // cold starts don't suddenly show historical alerts as unread
+  // (the Firestore write covers the cross-device case; this
+  // covers the cold-start-from-clean-localStorage case).
+  const markerKey = SEEN_KEYS.comment(selfUid, eventId);
+  try {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(markerKey, String(Date.now()));
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    await batch.commit();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[useNotifications] markCommentAlertsRead batch failed', err?.message);
+    return 0;
+  }
+  // Notify other mounted bells in this tab so their badges
+  // recompute synchronously (Firestore snapshot will catch
+  // up async but this is instant).
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(new CustomEvent(MARK_SEEN_EVENT, { detail: { selfUid, eventId } }));
+    } catch {
+      // ignore
+    }
+  }
+  return unread.length;
 }
 
 // ---- Helpers to build notification items from raw docs ----
@@ -636,10 +704,33 @@ export function useNotifications({
       return ts > lastSeenInviteAt;
     }).length;
 
-    // 2026-08-17 — Comments: marker is a per-event timestamp. New =
-    // alerts createdAt > marker. Same semantics as tasks.
+    // 2026-08-17 — Manus A10: unread state lives on Firestore
+    // (`readAt == null`), NOT localStorage. The query is realtime;
+    // mark-all-read writes `readAt: serverTimestamp()` on every
+    // unread alert (see markCommentAlertsRead below) and the bell
+    // recomputes instantly on the next snapshot tick. Cross-device
+    // sync is automatic — open the bell on phone after marking
+    // read on desktop and the badge clears on the phone too.
+    //
+    // The localStorage marker is retained ONLY as a one-time
+    // hydration gate so the FIRST sync doesn't show "99 unread"
+    // to a long-time user whose historical alerts are all unread
+    // in Firestore. Once the user clicks 全部已讀 (or any
+    // individual alert), the marker catches up and Firestore
+    // takes over.
     const lastSeenCommentAt = readSeen(ownerUid, 'comment', eventId);
-    const commentNew = commentAlerts.filter((c) => toMillis(c.createdAt) > lastSeenCommentAt).length;
+    const commentNew = (commentAlerts || []).filter((c) => {
+      if (c.readAt) return false; // server-side acknowledged read
+      const createdMs = toMillis(c.createdAt);
+      // Hydration gate: ignore historical alerts from before the
+      // first time this device saw the inbox. After hydration,
+      // the localStorage marker should be >= every unread alert's
+      // createdAt — so a non-zero marker filters them all.
+      if (lastSeenCommentAt > 0 && createdMs <= lastSeenCommentAt) {
+        return false;
+      }
+      return true;
+    }).length;
 
     return {
       proposal: proposalNew,
@@ -659,5 +750,12 @@ export function useNotifications({
     totalNew,
     loading,
     errors,
+    // 2026-08-17 — Manus A10: expose the raw comment-alert list so
+    // the bell can call markCommentAlertsRead on click. The merged
+    // `items` is the labeled/aggregated form (it strips `readAt`
+    // and renames fields for display), so passing it directly to
+    // markCommentAlertsRead wouldn't work — the writer needs the
+    // raw doc id + readAt field.
+    commentAlerts,
   };
 }

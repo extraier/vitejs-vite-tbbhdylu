@@ -22,6 +22,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const mocks = vi.hoisted(() => {
   const ref = { current: null };
   const refs = []; // collected onSnapshot calls in order
+  // 2026-08-17 — A10: shared capture array for batch.update calls.
+  // Lives at module scope via vi.hoisted so the test body can
+  // read what markCommentAlertsRead wrote.
+  const updateCalls = [];
   const onSnapshot = vi.fn((q, onNext, onError) => {
     ref.current = q;
     refs.push({ q, onNext, onError });
@@ -31,20 +35,94 @@ const mocks = vi.hoisted(() => {
     }, 0);
     return () => {};
   });
-  return { ref, refs, onSnapshot };
+  // 2026-08-17 — hoist fireCommentSnapshot so all A10 describes
+  // (siblings of the 'comment alerts' describe, not children) can
+  // call it. Previously it was a function declaration inside the
+  // 'comment alerts' describe and not visible to other describes.
+  function fireCommentSnapshot(docs) {
+    // 2026-08-17 — bug fix. The previous implementation only set
+    // `mockImplementation` for FUTURE onSnapshot calls; the
+    // existing hook subscription was already bound to the default
+    // impl (which fires empty docs immediately) and would never
+    // re-fire. Re-call the LATEST matching `onNext` synchronously
+    // so an already-mounted hook sees the new data. mockImplementation
+    // is also kept up-to-date for any hook that subscribes AFTER
+    // fireCommentSnapshot is called (common in test sequencing).
+    onSnapshot.mockImplementation((q, onNext) => {
+      refs.push({ q, onNext });
+      const qHead = q.args[0];
+      let docsForQ = [];
+      if (
+        qHead?.__isCollection &&
+        qHead.args[1] === 'artifacts' &&
+        qHead.args[3] === 'users' &&
+        qHead.args[5] === 'notifications'
+      ) {
+        docsForQ = docs;
+      }
+      setTimeout(
+        () => onNext({ docs: docsForQ.map((d) => ({ id: d.id, data: d.data })) }),
+        0,
+      );
+      return () => {};
+    });
+    // Re-fire on the latest matching subscription already in `refs`.
+    for (let i = refs.length - 1; i >= 0; i--) {
+      const { q, onNext } = refs[i];
+      const qHead = q?.args?.[0];
+      if (
+        qHead?.__isCollection &&
+        qHead.args[1] === 'artifacts' &&
+        qHead.args[3] === 'users' &&
+        qHead.args[5] === 'notifications'
+      ) {
+        onNext({
+          docs: docs.map((d) => ({ id: d.id, data: d.data })),
+        });
+        return;
+      }
+    }
+  }
+  return { ref, refs, onSnapshot, updateCalls, fireCommentSnapshot };
 });
 
 vi.mock('firebase/firestore', async (importOriginal) => {
   const actual = await importOriginal();
+  const docMock = vi.fn((...args) => ({
+    // Last arg is the doc id; everything before is the path.
+    __isDocRef: true,
+    path: args,
+    id: args[args.length - 1],
+  }));
+  const batch = {
+    update: vi.fn((ref, data) => {
+      mocks.updateCalls.push({ path: ref.path, id: ref.id, data });
+      return batch;
+    }),
+    commit: vi.fn(async () => undefined),
+  };
+  const writeBatch = vi.fn(() => batch);
   return {
     ...actual,
     collection: vi.fn((...args) => ({ __isCollection: true, args })),
-    where: vi.fn((...args) => ({ __isWhere: true, args })),
+    doc: docMock,
+    FieldValue: { serverTimestamp: () => ({ __isServerTimestamp: true }) },
     limit: vi.fn((n) => ({ __isLimit: true, n })),
+    // 2026-08-17 — re-add `where` (accidentally dropped in the A10
+    // mock rewrite). The existing proposal + comment tests assert
+    // on whereClause.args so this needs to be a tracking vi.fn.
+    where: vi.fn((...args) => ({ __isWhere: true, args })),
     query: vi.fn((...args) => ({ __isQuery: true, args })),
     onSnapshot: mocks.onSnapshot,
+    writeBatch,
   };
 });
+
+// 2026-08-17 — bridge so the A10 tests can inspect the closure-bound
+// updateCalls array AND call the hoisted fireCommentSnapshot helper
+// without re-importing firestore.
+globalThis.__getUpdateCalls = () => mocks.updateCalls;
+globalThis.__fireCommentSnapshot = (docs) => mocks.fireCommentSnapshot(docs);
 
 vi.mock('../lib/firebase', () => ({
   db: { __isDb: true },
@@ -52,7 +130,7 @@ vi.mock('../lib/firebase', () => ({
 }));
 
 import { renderHook, waitFor } from '@testing-library/react';
-import { useNotifications, markAllNotificationsSeen, MAX_BELL_DROPDOWN_ITEMS } from './useNotifications';
+import { useNotifications, markAllNotificationsSeen, markCommentAlertsRead, MAX_BELL_DROPDOWN_ITEMS } from './useNotifications';
 
 describe('useNotifications', () => {
   beforeEach(() => {
@@ -606,4 +684,185 @@ describe('useNotifications', () => {
       });
     });
   });
+// 2026-08-17 — Manus A10: readAt-on-Firestore unread sync.
+//
+// Before A10: badge math relied on a localStorage timestamp
+// (lastSeenCommentsAt_<ownerUid>_<eventId>) and counted alerts
+// with createdAt > marker. The marker is per-device, so two
+// devices saw two different badge counts.
+//
+// After A10: readAt is written on the alert doc itself (via a
+// client batch that the rules allow because the update changes
+// ONLY the readAt field). The bell subscription filters unread
+// by readAt == null. Mark-all-read on one device clears the
+// badge on every other device within one snapshot.
+
+
+
+describe('A10 readAt sync', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    // Reset the captured update calls between tests so each
+    // assertion starts from a clean slate.
+    globalThis.__getUpdateCalls().length = 0;
+  });
+
+  it('exports markCommentAlertsRead', () => {
+    expect(typeof markCommentAlertsRead).toBe('function');
+  });
+
+  it('does nothing when selfUid is null', async () => {
+    const result = await markCommentAlertsRead(null, [{ id: 'a1', readAt: null }], 'e-1');
+    expect(result).toBe(0);
+    expect(globalThis.__getUpdateCalls().length).toBe(0);
+  });
+
+  it('does nothing when alerts array is empty', async () => {
+    const result = await markCommentAlertsRead('self-1', [], 'e-1');
+    expect(result).toBe(0);
+    expect(globalThis.__getUpdateCalls().length).toBe(0);
+  });
+
+  it('skips alerts that already have readAt (no pointless writes)', async () => {
+    const result = await markCommentAlertsRead(
+      'self-1',
+      [{ id: 'a1', readAt: { toMillis: () => 1000 } }],
+      'e-1',
+    );
+    expect(result).toBe(0);
+    expect(globalThis.__getUpdateCalls().length).toBe(0);
+  });
+
+  it('writes readAt: serverTimestamp() to each unread alert', async () => {
+    const result = await markCommentAlertsRead(
+      'self-1',
+      [
+        { id: 'a1', readAt: null },
+        { id: 'a2', readAt: null },
+        { id: 'a3', readAt: { toMillis: () => 5000 } }, // already read
+      ],
+      'e-1',
+    );
+    expect(result).toBe(2);
+    const updated = globalThis.__getUpdateCalls().map((c) => c.id);
+    expect(updated).toContain('a1');
+    expect(updated).toContain('a2');
+    expect(updated).not.toContain('a3');
+    // Every update wrote a readAt field (serverTimestamp placeholder).
+    for (const call of globalThis.__getUpdateCalls()) {
+      expect(call.data).toHaveProperty('readAt');
+      expect(call.data.readAt).toEqual({ __isServerTimestamp: true });
+    }
+  });
+
+  it('targets the right Firestore path (artifacts/{appId}/users/{selfUid}/notifications/{id})', async () => {
+    await markCommentAlertsRead(
+      'self-42',
+      [{ id: 'bigday-comment_xyz_self-42', readAt: null }],
+      'e-1',
+    );
+    const call = globalThis.__getUpdateCalls()[0];
+    expect(call).toBeDefined();
+    const pathStr = Array.isArray(call.path)
+      ? call.path.join('/')
+      : String(call.path);
+    expect(pathStr).toContain('artifacts');
+    expect(pathStr).toContain('savetheday-production');
+    expect(pathStr).toContain('users');
+    expect(pathStr).toContain('self-42');
+    expect(pathStr).toContain('notifications');
+    expect(pathStr).toContain('bigday-comment_xyz_self-42');
+  });
+
+  it('seeds the localStorage hydration gate to Date.now()', async () => {
+    const before = Date.now();
+    await markCommentAlertsRead(
+      'self-1',
+      [{ id: 'a1', readAt: null }],
+      'e-1',
+    );
+    const after = Date.now();
+    const marker = window.localStorage.getItem('lastSeenCommentsAt_self-1_e-1');
+    expect(marker).not.toBeNull();
+    expect(Number(marker)).toBeGreaterThanOrEqual(before);
+    expect(Number(marker)).toBeLessThanOrEqual(after);
+  });
+
+  it('dispatches bell:mark-all-seen so other bells in the same tab update instantly', async () => {
+    const handler = vi.fn();
+    window.addEventListener('bell:mark-all-seen', handler);
+    await markCommentAlertsRead(
+      'self-1',
+      [{ id: 'a1', readAt: null }],
+      'e-1',
+    );
+    expect(handler).toHaveBeenCalledTimes(1);
+    window.removeEventListener('bell:mark-all-seen', handler);
+  });
 });
+
+describe('A10 badge math', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    globalThis.__getUpdateCalls().length = 0;
+  });
+
+  it('treats alerts with readAt as read (NOT counted in badges.comment)', async () => {
+    // First snapshot: 2 unread.
+    globalThis.__fireCommentSnapshot([
+      { id: 'a1', data: () => ({ kind: 'rundown', parentId: 'r1', text: 'msg-1', createdAt: { toMillis: () => 2000 } }) },
+      { id: 'a2', data: () => ({ kind: 'resources', parentId: 'p1', text: 'msg-2', createdAt: { toMillis: () => 3000 } }) },
+    ]);
+
+    const { result } = renderHook(() =>
+      useNotifications({
+        ownerUid: 'owner-1',
+        coupleUid: 'c-1',
+        selfUid: 'owner-1',
+        eventId: 'e-1',
+        enabled: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.badges.comment).toBe(2);
+    });
+
+    // Second snapshot: a2 marked read on the server side.
+    globalThis.__fireCommentSnapshot([
+      { id: 'a1', data: () => ({ kind: 'rundown', parentId: 'r1', text: 'msg-1', createdAt: { toMillis: () => 2000 } }) },
+      { id: 'a2', data: () => ({ kind: 'resources', parentId: 'p1', text: 'msg-2', createdAt: { toMillis: () => 3000 }, readAt: { toMillis: () => 9999 } }) },
+    ]);
+
+    await waitFor(() => {
+      expect(result.current.badges.comment).toBe(1);
+    });
+  });
+
+  it('does NOT count a historical alert (createdAt <= localStorage marker) even without readAt — first-sync hydration gate', async () => {
+    // Seed the localStorage marker so historical alerts are filtered.
+    window.localStorage.setItem('lastSeenCommentsAt_owner-1_e-1', '5000');
+    globalThis.__fireCommentSnapshot([
+      // OLD: createdAt before marker, no readAt — should NOT count.
+      { id: 'a1', data: () => ({ kind: 'rundown', parentId: 'r1', text: 'old', createdAt: { toMillis: () => 1000 } }) },
+      // NEW: createdAt after marker — counts.
+      { id: 'a2', data: () => ({ kind: 'rundown', parentId: 'r1', text: 'new', createdAt: { toMillis: () => 7000 } }) },
+    ]);
+
+    const { result } = renderHook(() =>
+      useNotifications({
+        ownerUid: 'owner-1',
+        coupleUid: 'c-1',
+        selfUid: 'owner-1',
+        eventId: 'e-1',
+        enabled: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.badges.comment).toBe(1);
+    });
+  });
+});
+});
+
