@@ -79,11 +79,21 @@ function avatarGradient(category) {
   return `bg-gradient-to-br ${meta.bgClass}`;
 }
 
-const FILTERS = [
+// 2026-08-19 — Manus P0.3: extend the centre to vendor / helper
+// roles. Owner / co-owner see all four tabs; vendor / helper
+// see only the "全部" + "留言" tabs because their private
+// inbox contains comment alerts only (proposals, tasks, and
+// helper-invites are owner-only sources per P0.4).
+const ALL_FILTERS = [
   { key: 'all', label: '全部' },
   { key: 'proposal', label: '商戶報價' },
   { key: 'task', label: '待辦事項' },
   { key: 'invite', label: '兄弟姊妹邀請' },
+  { key: 'comment', label: '留言通知' },
+];
+const NON_OWNER_FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'comment', label: '留言通知' },
 ];
 
 export function NotificationsCenter({
@@ -91,6 +101,10 @@ export function NotificationsCenter({
   coupleUid,
   selfUid,
   eventId,
+  // 2026-08-19 — Manus P0.3: pass the current role so we can
+  // scope the visible filter tabs. Default 'owner' so existing
+  // callers don't accidentally land in the non-owner tab set.
+  userRole = 'owner',
   onBack,
   onOpenProposal,
   onOpenComment,
@@ -101,6 +115,16 @@ export function NotificationsCenter({
 }) {
   const [filter, setFilter] = useState('all');
   const [liveTotalNew, setLiveTotalNew] = useState(0);
+  // 2026-08-19 — Manus P0.3: scope the visible filter tabs by
+  // role. Owner / co-owner get the full set (proposals, tasks,
+  // invites, comments); vendor / helper get a stripped-down
+  // set because their private inbox is comments-only (the
+  // proposal / task / invite sources are role-gated at the
+  // hook level per P0.4, so they'd never appear in items[]).
+  const activeFilters =
+    userRole === 'owner' || userRole === 'co-owner'
+      ? ALL_FILTERS
+      : NON_OWNER_FILTERS;
   const { items, badges, totalNew, loading, errors, commentAlerts } = useNotifications({
     ownerUid,
     coupleUid,
@@ -232,7 +256,7 @@ export function NotificationsCenter({
 
       {/* Filter tabs */}
       <div className="flex flex-wrap gap-2 mb-6 border-b border-slate-200 pb-1">
-        {FILTERS.map((f) => {
+        {activeFilters.map((f) => {
           const isActive = filter === f.key;
           const count = filterCounts[f.key] || 0;
           return (
@@ -280,7 +304,7 @@ export function NotificationsCenter({
           <div className="px-4 py-16 text-center">
             <div className="text-4xl mb-2">✨</div>
             <div className="text-base font-bold text-slate-700">
-              {filter === 'all' ? '暫時無通知' : `暫時無${FILTERS.find((f) => f.key === filter)?.label || '通知'}`}
+              {filter === 'all' ? '暫時無通知' : `暫時無${activeFilters.find((f) => f.key === filter)?.label || '通知'}`}
             </div>
             <div className="text-sm text-slate-500 mt-1">
               新嘅商戶報價、待辦、邀請接受會即刻顯示

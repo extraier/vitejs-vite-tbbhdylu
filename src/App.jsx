@@ -3798,6 +3798,7 @@ export default function App() {
                 coupleUid={user?.uid}
                 selfUid={user?.uid}
                 eventId={currentEvent?.id}
+                userRole="owner"
                 onBack={() => setCurrentView(
                   currentEvent ? 'couple-checklist' : 'events-dashboard',
                 )}
@@ -3823,6 +3824,42 @@ export default function App() {
                 onOpenInvite={() => setCurrentView('helpers')}
               />
             )}
+            {/* 2026-08-19 — Manus P0.3: extend the centre to vendor
+                + helper roles. Same component, narrower filter set
+                (proposals / tasks / invites are owner-only sources
+                per P0.4 so the non-owner just sees their private
+                comment inbox). */}
+            {(userRole === 'vendor' || userRole === 'helper') &&
+              currentView === 'notifications-center' && (
+                <NotificationsCenter
+                  ownerUid={dataOwnerUid}
+                  coupleUid={user?.uid}
+                  selfUid={user?.uid}
+                  eventId={userRole === 'helper' ? helperActiveAssignment?.eventId || null : null}
+                  userRole={userRole}
+                  onBack={() => setCurrentView(
+                    userRole === 'vendor' ? 'vendor-dashboard' : 'helper-dashboard',
+                  )}
+                  onOpenProposal={null}
+                  onOpenComment={null}
+                  onOpenCommentAlert={(meta) => {
+                    if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                      setCurrentEvent({ id: meta.eventId });
+                    }
+                    if (meta?.kind === 'rundown' || meta?.kind === 'resources') {
+                      setFocusedParentKind(meta.kind);
+                      setFocusedParentId(meta.parentId || null);
+                    } else {
+                      setFocusedParentKind(null);
+                      setFocusedParentId(null);
+                    }
+                    setCurrentView(
+                      userRole === 'vendor' ? 'vendor-dashboard' : 'helper-dashboard',
+                    );
+                  }}
+                  onOpenInvite={null}
+                />
+              )}
 
             {!currentEvent && currentView === 'events-dashboard' && (
               <EventsDashboard

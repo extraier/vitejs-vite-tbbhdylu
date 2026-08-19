@@ -393,10 +393,26 @@ function inviteItems(docs) {
 //     createdAt,                      // server timestamp (millis)
 //     readAt intentionally absent — absence == unread (Manus A10).
 //   }
-function commentItems(docs, ownerUid, eventId) {
+// 2026-08-19 — Exported for unit tests. The P0.2 normalizer
+// fix needs to be tested with multiple eventId permutations
+// (data.eventId present, missing, with/without hook fallback).
+export function commentItems(docs, ownerUid, eventId) {
   return docs.map((d) => {
     const kind = d.kind === 'resources' ? 'resources' : 'rundown';
     const actorName = d.authorName || (d.authorRole === 'vendor' ? '商戶' : '助手');
+    // 2026-08-19 — Manus P0.2: prefer the alert doc's own eventId
+    // (which the trigger writes from event.params.eventId at
+    // fan-out time) over the hook's currently selected event.
+    // Why: a vendor bell commonly has no currentEvent set (the
+    // vendor views jobs across many weddings), and a user with
+    // multiple events could be on event B while a comment lands
+    // on event A. Clicking the alert in that state previously
+    // routed to event B (the hook's eventId) instead of event A
+    // (the alert's actual event). `data.eventId` is the
+    // authoritative source; the hook's eventId is only a
+    // fallback for legacy docs that pre-date the trigger writing
+    // eventId.
+    const resolvedEventId = d.eventId || eventId || null;
     return {
       id: `comment:${d.id}`,
       category: 'comment',
@@ -414,11 +430,11 @@ function commentItems(docs, ownerUid, eventId) {
         parentId: d.parentId || null,
         parentTitle: d.parentTitle || null,
         kind,
-        eventId,
+        eventId: resolvedEventId,
       },
       href: {
         view: 'wedding-day',
-        eventId,
+        eventId: resolvedEventId,
         kind,
         parentId: d.parentId || null,
         parentTitle: d.parentTitle || null,
@@ -457,6 +473,13 @@ export function useNotifications({
   coupleUid,
   selfUid,
   eventId,
+  // 2026-08-19 — Manus P0.4: role-gate the owner-only sources
+  // (proposals, tasks, helper-invites) so vendor / helper
+  // sessions don't open their listeners. Defaults to 'owner' so
+  // existing callers keep the current behaviour. The Big Day
+  // comment inbox (Source 4) stays open for every role because
+  // it's selfUid-scoped and serves the bell across roles.
+  userRole = 'owner',
   // 2026-08-09 — refreshKey is an opaque counter the caller bumps
   // whenever they want to force a badges recomputation (e.g. after
   // writing localStorage markers via markAllNotificationsSeen). The
@@ -466,6 +489,11 @@ export function useNotifications({
   refreshKey = 0,
   enabled = true,
 }) {
+  // 2026-08-19 — Manus P0.4: explicit predicate. Co-owner mirrors
+  // owner for the purposes of the proposals/tasks/invites sources
+  // because both roles own the wedding. Vendor / helper / partner
+  // / reception only get the comment inbox.
+  const isOwner = userRole === 'owner' || userRole === 'co-owner';
   const [proposals, setProposals] = useState(null); // null = loading
   const [tasks, setTasks] = useState([]);
   const [helpers, setHelpers] = useState([]);
@@ -487,7 +515,11 @@ export function useNotifications({
 
   // ---- Source 1: vendor proposals (coupleUid scoped) ----
   useEffect(() => {
-    if (!enabled || !coupleUid) {
+    // 2026-08-19 — Manus P0.4: gate on isOwner. Proposals are an
+    // owner-only concern (the inbox is logged in as the couple);
+    // vendor / helper sessions shouldn't pay the cost of
+    // subscribing or the noise of empty results.
+    if (!enabled || !isOwner || !coupleUid) {
       setProposals([]);
       return undefined;
     }
@@ -521,14 +553,18 @@ export function useNotifications({
       },
     );
     return () => { cancelled = true; unsub(); };
-  }, [coupleUid, enabled]);
+  }, [coupleUid, enabled, isOwner]);
 
   // ---- Source 2: new tasks for the current event (per-event subscription) ----
   // Reads /users/{ownerUid}/events/{eventId}/tasks — the path the existing
   // /events/{eventId}/tasks/{taskId} read rule already covers (owner /
   // co-owner / vendor / helper). No new top-level rule needed.
   useEffect(() => {
-    if (!enabled || !ownerUid || !eventId) {
+    // 2026-08-19 — Manus P0.4: tasks are an owner-only notification
+    // source. The vendor / helper already sees their assignments
+    // through their role-specific dashboard subcollections; the
+    // "new task" bell entry is meant for the couple and their co-owner.
+    if (!enabled || !isOwner || !ownerUid || !eventId) {
       setTasks([]);
       return undefined;
     }
@@ -565,14 +601,17 @@ export function useNotifications({
       },
     );
     return () => { cancelled = true; unsub(); };
-  }, [ownerUid, eventId, enabled]);
+  }, [ownerUid, eventId, enabled, isOwner]);
 
   // ---- Source 3: helpers (any "active" flip is a notification) ----
   // We subscribe to the owner's helpers collection. The docs are kept
   // around even after acceptance (they're the perms record), so we
   // detect "newly active" by comparing against the lastSeen timestamp.
   useEffect(() => {
-    if (!enabled || !ownerUid) {
+    // 2026-08-19 — Manus P0.4: helper-invite notifications are
+    // owner-only; the accepting vendor / helper doesn't need a
+    // self-ping and the couple wants the "X just joined" alert.
+    if (!enabled || !isOwner || !ownerUid) {
       setHelpers([]);
       return undefined;
     }
@@ -596,7 +635,7 @@ export function useNotifications({
       },
     );
     return () => { cancelled = true; unsub(); };
-  }, [ownerUid, enabled]);
+  }, [ownerUid, enabled, isOwner]);
 
   // ---- Source 4 (2026-08-17): Big Day comment alerts ----
   //
