@@ -422,6 +422,69 @@ async function _handler(req, res) {
     return;
   }
 
+  // 2026-08-19 — Manus P1.4.a: storage-quota enforcement.
+  // The proxy now reads the per-event counter
+  // (event.storageUsageBytes) and the entitlement-derived
+  // limit (event.storageQuotaBytes, seeded by
+  // getUploadPreferencesToken). If the upload would exceed
+  // the quota, reject with HTTP 413 + a structured error
+  // before minting the NAS HMAC. This is the audit's
+  // acceptance criterion: a customer who hits the storage
+  // cap sees a friendly message instead of getting a token,
+  // uploading to the NAS, and finding the bytes are 'on
+  // the card' but invisible to the quota display.
+  //
+  // For inv-bg / non-events, skip the check — those are
+  // (a) the couple's own invitation background upload, not
+  // subject to the cap, and (b) rate-limited separately
+  // above. The proxy path is still resilient to quota-less
+  // event docs (older events created before this commit):
+  // missing storageUsageBytes defaults to 0; missing
+  // storageQuotaBytes falls back to 200 MB (the free tier).
+  if (eventId !== 'inv-bg') {
+    try {
+      const eventDocRef = admin.db.doc(
+        `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}`,
+      );
+      const eventSnap = await eventDocRef.get();
+      if (eventSnap.exists) {
+        const eventData = eventSnap.data() || {};
+        const usedBytes = Number.isFinite(eventData.storageUsageBytes)
+          ? eventData.storageUsageBytes
+          : 0;
+        const limitBytes = Number.isFinite(eventData.storageQuotaBytes)
+          && eventData.storageQuotaBytes > 0
+          ? eventData.storageQuotaBytes
+          : 200 * 1024 * 1024; // 200 MB free-tier default
+        const addBytes = body.length;
+        if (usedBytes + addBytes > limitBytes) {
+          const usedMb = (usedBytes / (1024 * 1024)).toFixed(1);
+          const limitMb = (limitBytes / (1024 * 1024)).toFixed(1);
+          const addMb = (addBytes / (1024 * 1024)).toFixed(1);
+          log('quota-exceeded', {
+            usedBytes,
+            limitBytes,
+            addBytes,
+          });
+          res.status(413).json({
+            error: `storage quota exceeded: currently ${usedMb} MB, this upload is ${addMb} MB, limit is ${limitMb} MB.`,
+            code: 'STORAGE_QUOTA_EXCEEDED',
+            usedBytes,
+            limitBytes,
+            addBytes,
+          });
+          return;
+        }
+      }
+    } catch (quotaErr) {
+      // 2026-08-19 — Don't fail the upload if the quota read
+      // errors (e.g. transient Firestore failure). Log loud
+      // and proceed; the client display will catch the next
+      // quota check on the next upload.
+      log('quota-check-error', { err: quotaErr && quotaErr.message ? quotaErr.message : String(quotaErr) });
+    }
+  }
+
   // (7) All pre-flight checks passed. Mint the HMAC token and
   // forward to the NAS.
   const expiresMs = Date.now() + TOKEN_TTL_MS;
@@ -475,6 +538,34 @@ async function _handler(req, res) {
     bodyBytes: body.length,
     responseBytes: responseText.length,
   });
+
+  // 2026-08-19 — Manus P1.4.a: atomically increment the
+  // per-event storageUsageBytes counter after a successful
+  // upload. We use the response status (2xx) as the
+  // success signal — 4xx/5xx from the NAS means the
+  // photo wasn't stored, so we don't add to the counter.
+  // This is the "increment-after-success" pattern from
+  // the storageQuota docstring. The reservation pattern
+  // is P1.4.b; this is enough to make the counter
+  // accurate for happy-path uploads.
+  if (eventId !== 'inv-bg' && upstream.status >= 200 && upstream.status < 300) {
+    try {
+      await admin.db.doc(
+        `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}`,
+      ).update({
+        storageUsageBytes: FieldValue.increment(body.length),
+        storageUsageUpdatedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (incErr) {
+      // 2026-08-19 — Counter failure must NOT fail the
+      // upload (the photo is already on the NAS). Log
+      // loud so this can be reconciled by the daily
+      // cron in P1.4.c.
+      log('storage-counter-increment-failed', {
+        err: incErr && incErr.message ? incErr.message : String(incErr),
+      });
+    }
+  }
 
   // Forward the response. If JSON, pass through with the original
   // status; if not, send raw text.

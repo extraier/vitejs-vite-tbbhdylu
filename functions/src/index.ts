@@ -1226,7 +1226,10 @@ export { sendBrandedVerificationV2 } from './brandedEmail';
 // This is what makes the RewardsBanner's "+500MB + 移除浮水印"
 // promise actually true end-to-end — the watermark is applied
 // on the NAS during the upload itself, not in Firebase.
-export { getUploadPreferencesToken } from './uploadPreferencesToken';
+export {
+  getUploadPreferencesToken,
+  recordUploadBytesUsed,
+} from './uploadPreferencesToken';
 
 // 2026-08-05 — Photo-delete authorization token. Mirrors the
 // getUploadPreferencesToken shape: the client calls this CF,

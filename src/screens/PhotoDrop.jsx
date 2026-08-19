@@ -34,6 +34,7 @@ import { FREE_TIER_LIMIT_MB } from '../lib/config';
 export function PhotoDrop({
   photos,
   storageUsedMB,
+  storageQuotaMB,
   isPremium,
   currentUserUid,
   onPlaySlideshow,
@@ -42,6 +43,17 @@ export function PhotoDrop({
   onDeletePhoto,   // (photoId) => Promise<void>
   onShowToast,     // (msg) => void
 }) {
+  // 2026-08-19 — Manus P1.4.a: the entitlement-derived
+  // quota flows down from App.jsx (storageQuotaMB), which
+  // already converted from the resolver's bytes. If the
+  // caller hasn't upgraded yet (legacy test harness /
+  // older storybook), fall back to the 100 MB constant
+  // the rest of the app uses. Newer tests pass the real
+  // value, e.g. 200 (free) or 700 (extraStorage).
+  const effectiveQuotaMB = Number.isFinite(storageQuotaMB) && storageQuotaMB > 0
+    ? storageQuotaMB
+    : FREE_TIER_LIMIT_MB;
+  const isFull = storageUsedMB >= effectiveQuotaMB;
   // Filter state
   const [uploaderFilter, setUploaderFilter] = useState('all');
 
@@ -171,14 +183,14 @@ export function PhotoDrop({
             <div className="text-right">
               <span
                 className={`text-lg font-black ${
-                  storageUsedMB >= FREE_TIER_LIMIT_MB ? 'text-red-500' : 'text-slate-800'
+                  isFull ? 'text-red-500' : 'text-slate-800'
                 }`}
               >
                 {storageUsedMB.toFixed(1)} MB
               </span>
               {!isPremium && (
                 <span className="text-sm text-slate-500 font-medium">
-                  {' '}/ {FREE_TIER_LIMIT_MB} MB
+                  {' '}/ {effectiveQuotaMB} MB
                 </span>
               )}
             </div>
@@ -187,10 +199,10 @@ export function PhotoDrop({
             <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
               <div
                 className={`h-full transition-all duration-500 ${
-                  storageUsedMB >= FREE_TIER_LIMIT_MB ? 'bg-red-500' : 'bg-slate-800'
+                  isFull ? 'bg-red-500' : 'bg-slate-800'
                 }`}
                 style={{
-                  width: `${Math.min((storageUsedMB / FREE_TIER_LIMIT_MB) * 100, 100)}%`,
+                  width: `${Math.min((storageUsedMB / effectiveQuotaMB) * 100, 100)}%`,
                 }}
               />
             </div>

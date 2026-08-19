@@ -1104,7 +1104,7 @@ export default function App() {
   // the Vercel proxy can ask the NAS to skip the watermark step.
   // If minting fails, the hook leaves the token null and uploads keep
   // the safe default-on watermark behavior.
-  const { prefsToken: uploadPrefsToken } = useUploadPreferencesToken({
+  const { prefsToken: uploadPrefsToken, storageUsageBytes: prefsStorageUsageBytes, storageQuotaBytes: prefsStorageQuotaBytes } = useUploadPreferencesToken({
     ownerUid: dataOwnerUid,
     eventId: currentEvent?.id,
     unlocks: _userUnlocksForUpload,
@@ -2186,7 +2186,17 @@ export default function App() {
     (sum, t) => sum + (t.isCompleted ? 0 : t.estimatedCost || 0),
     0,
   );
-  const storageUsedMB = eventPhotos.length * 1.5;
+  // 2026-08-19 — Manus P1.4.a: prefer the real byte count
+  // from the upload-prefs CF when available (incremented
+  // atomically by the Vercel proxy after each successful
+  // upload). Fall back to the per-photo estimate when the
+  // CF hasn't replied yet (first paint of the screen). The
+  // estimate is also retained as a UI fallback for
+  // component-prop compatibility.
+  const prefsStorageUsedMB = Number.isFinite(prefsStorageUsageBytes)
+    ? prefsStorageUsageBytes / (1024 * 1024)
+    : null;
+  const storageUsedMB = prefsStorageUsedMB ?? eventPhotos.length * 1.5;
   // 2026-08-19 — Manus P1.2: prefer the canonical event
   // entitlement resolver over the legacy `currentEvent.tier`
   // flag for premium gating. The legacy flag is kept AS-IS
@@ -2208,6 +2218,9 @@ export default function App() {
   // 2026-08-19 — Storage gate uses the resolver's reported
   // limit when available, falls back to the legacy constant
   // otherwise. The resolver reports bytes; the legacy is in MB.
+  // The upload-prefs CF also surfaces a quota value; we
+  // prefer the entitlement resolver because it reflects live
+  // unlocks (a refund flows through immediately).
   const entitlementStorageLimitMb = entitlementBytes
     ? entitlementBytes / (1024 * 1024)
     : FREE_TIER_LIMIT_MB;
@@ -4219,6 +4232,14 @@ export default function App() {
               <PhotoDrop
                 photos={eventPhotos}
                 storageUsedMB={storageUsedMB}
+                // 2026-08-19 — Manus P1.4.a: pass the
+                // entitlement-derived quota through so the
+                // storage meter shows the real denominator
+                // (200 MB / 700 MB) instead of the legacy
+                // 100 MB constant. The CF seeds this into
+                // event.storageQuotaBytes on first upload-prefs
+                // call.
+                storageQuotaMB={Number.isFinite(prefsStorageQuotaBytes) ? prefsStorageQuotaBytes / (1024 * 1024) : entitlementStorageLimitMb}
                 isPremium={isPremium}
                 currentUserUid={user?.uid}
                 onPlaySlideshow={() => setIsFullscreen(true)}

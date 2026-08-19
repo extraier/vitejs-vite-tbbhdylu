@@ -50,7 +50,19 @@ const mockState = {
   events: new Map(),           // path → { exists, data }
   guestLinks: new Map(),       // path → { exists, data }
   rateCounters: new Map(),     // path → count
+  // 2026-08-19 — Manus P1.4.a: storage counter the proxy
+  // increments via db.doc(...).update(FieldValue.increment(...)).
+  // The mock honors FieldValue.increment() exactly like the
+  // real SDK so the proxy's "post-success increment" path is
+  // testable here.
+  storageUsage: new Map(),     // path → number (bytes used)
   firebaseAdminImportable: true,
+  // 2026-08-19 — Manus P1.4.a: when non-null, the global
+  // fetch mock returns this status (otherwise 200). Lets
+  // quota tests verify "no increment on non-2xx" without
+  // racing vi.hoisted() / globalThis.fetch reassignment.
+  upstreamStatus: null,
+  upstreamBody: null,
 };
 
 vi.mock('./photo-upload.js', async (importOriginal) => {
@@ -121,6 +133,28 @@ const mockFirebaseAdminFs = vi.hoisted(() => {
           inc = 0;
         }
         mockState.rateCounters.set(path, prev + inc);
+      },
+      // 2026-08-19 — Manus P1.4.a: honor the proxy's
+      // post-success `update({ storageUsageBytes: FieldValue.increment(n) })`
+      // call so we can assert the counter actually moves after
+      // a successful upload. The increment is a NO-OP for any
+      // field other than `storageUsageBytes` — the proxy only
+      // touches that one. Plain (non-FieldValue) writes are
+      // also accepted so the quota-seed path in the CF can be
+      // mirrored in tests if needed.
+      update: async (patch) => {
+        if (!patch || typeof patch !== 'object') return;
+        const incVal = patch.storageUsageBytes;
+        if (incVal && incVal._isFieldValue && typeof incVal.increment === 'number') {
+          const prev = mockState.storageUsage.get(path) || 0;
+          mockState.storageUsage.set(path, prev + incVal.increment);
+        }
+        // 2026-08-19 — Merge plain fields onto the stored event
+        // doc so the next .get() reflects the new shape.
+        if (mockState.events.has(path)) {
+          const prev = mockState.events.get(path) || {};
+          mockState.events.set(path, { ...prev, ...patch });
+        }
       },
     }),
     FieldValue: mockFieldValue,
@@ -280,9 +314,11 @@ async function invokeWithPrefsToken({ prefsToken, eventId = 'ev1', guestId = 'g1
   const origFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
     headersToNas = init.headers;
+    const status = mockState.upstreamStatus || 200;
+    const text = mockState.upstreamBody || JSON.stringify({ ok: true });
     return {
-      status: 200,
-      text: async () => JSON.stringify({ ok: true }),
+      status,
+      text: async () => text,
       headers: { get: () => 'application/json' },
     };
   };
@@ -530,5 +566,157 @@ describe('photo-upload proxy — verifyUploadPreferencesToken', () => {
     } finally {
       process.env.UPLOAD_PREFERENCES_HMAC_SECRET = original;
     }
+  });
+});
+
+// 2026-08-19 — Manus P1.4.a — storage-quota enforcement + atomic
+// counter increment on success. These tests live in a separate
+// describe block so the setup (event docs that carry quota
+// fields + counter state) doesn't leak between quota and
+// watermark test groups.
+describe('photo-upload proxy — P1.4.a storage quota', () => {
+  const EVENT_PATH = `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/events/ev1`;
+  let handler;
+
+  beforeEach(async () => {
+    mockState.uidByToken.clear();
+    mockState.events.clear();
+    mockState.guestLinks.clear();
+    mockState.rateCounters.clear();
+    mockState.storageUsage.clear();
+    // 2026-08-19 — clear upstream mock state too
+    mockState.upstreamStatus = null;
+    mockState.upstreamBody = null;
+    mockState.uidByToken.set(DEFAULT_BEARER, DEFAULT_OWNER_UID);
+    await installFakeAdmin();
+    const mod = await import('./photo-upload.js?bust=' + Math.random());
+    handler = mod.default;
+    __proxyHandler = handler;
+  });
+
+  // ---- quota gate ----
+
+  it('rejects with 413 STORAGE_QUOTA_EXCEEDED when upload would exceed the quota', async () => {
+    // Seed the event doc with a 200 MB quota and a body that
+    // already exceeds it. The simplest deterministic test:
+    // make the body longer than the remaining quota.
+    mockState.events.set(EVENT_PATH, {
+      _ownerUid: DEFAULT_OWNER_UID,
+      coOwners: [],
+      assignedVendorUid: null,
+      storageUsageBytes: 199 * 1024 * 1024, // 199 MB used
+      storageQuotaBytes: 200 * 1024 * 1024, // 1 MB remaining
+    });
+    const bigBody = 'A'.repeat(2_000_000); // 2 MB body
+    const { res } = await invokeWithPrefsToken({ body: bigBody });
+    expect(res.statusCode).toBe(413);
+    expect(res._body).toEqual(
+      expect.objectContaining({
+        code: 'STORAGE_QUOTA_EXCEEDED',
+        usedBytes: 199 * 1024 * 1024,
+        limitBytes: 200 * 1024 * 1024,
+      }),
+    );
+    // Body shape sanity — friendly message
+    expect(typeof res._body.error).toBe('string');
+    expect(res._body.error).toContain('storage quota exceeded');
+    // Counter must NOT have been touched by a rejected upload.
+    expect(mockState.storageUsage.get(EVENT_PATH) || 0).toBe(0);
+  });
+
+  it('accepts the upload (200) when used + addBytes <= quota', async () => {
+    // 100 MB used, 200 MB quota — a 6 MB body fits comfortably.
+    mockState.events.set(EVENT_PATH, {
+      _ownerUid: DEFAULT_OWNER_UID,
+      coOwners: [],
+      assignedVendorUid: null,
+      storageUsageBytes: 100 * 1024 * 1024,
+      storageQuotaBytes: 200 * 1024 * 1024,
+    });
+    const body = 'B'.repeat(6_000_000);
+    const { res } = await invokeWithPrefsToken({ body });
+    expect(res.statusCode).toBe(200);
+    // Counter MUST have been incremented by the proxy's
+    // body.length — which equals the full multipart
+    // envelope (header + body + footer), not the raw
+    // payload bytes. We assert the counter is exactly the
+    // size of the proxy's body (reqBody length), which is
+    // what the proxy actually sent to NAS. This is the
+    // upper-bound metric — in real uploads the NAS stores
+    // less (multipart overhead is stripped), so the quota
+    // is over-counted by ~200-500 bytes per upload. That's
+    // acceptable for v1; the cron-based drift correction
+    // (P1.4.c) reconciles periodically.
+    expect(mockState.storageUsage.get(EVENT_PATH)).toBeGreaterThanOrEqual(6_000_000);
+  });
+
+  it('falls back to a 200 MB quota when storageQuotaBytes is missing (transition safety)', async () => {
+    // No storageQuotaBytes on the event doc → free-tier default
+    // kicks in (200 MB), used = 0 → small upload fits.
+    mockState.events.set(EVENT_PATH, {
+      _ownerUid: DEFAULT_OWNER_UID,
+      coOwners: [],
+      assignedVendorUid: null,
+      // no storageUsageBytes / storageQuotaBytes
+    });
+    const { res } = await invokeWithPrefsToken({ body: 'C'.repeat(50_000) });
+    expect(res.statusCode).toBe(200);
+    expect(mockState.storageUsage.get(EVENT_PATH)).toBeGreaterThanOrEqual(50_000);
+  });
+
+  it('does NOT check quota for inv-bg (couple\'s own invitation backgrounds)', async () => {
+    // inv-bg is rate-limited separately above and is the
+    // couple's own photo, not the event gallery. Counter
+    // must not be touched even if 'storageUsageBytes' were
+    // somehow populated on the inv-bg doc (which it
+    // shouldn't be).
+    mockState.events.set(
+      'artifacts/savetheday-production/users/INVBG/events/inv-bg',
+      { storageUsageBytes: 999 * 1024 * 1024 },
+    );
+    const { res } = await invokeWithPrefsToken({ eventId: 'inv-bg' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  // ---- post-success counter increment ----
+
+  it('does NOT increment the counter when the upstream NAS returns 4xx', async () => {
+    mockState.events.set(EVENT_PATH, {
+      _ownerUid: DEFAULT_OWNER_UID,
+      coOwners: [],
+      assignedVendorUid: null,
+      storageUsageBytes: 10 * 1024 * 1024,
+      storageQuotaBytes: 200 * 1024 * 1024,
+    });
+    // Set the upstream mock to return 502. The proxy
+    // forwards upstream.status to the client and skips
+    // the storage-counter increment on non-2xx.
+    mockState.upstreamStatus = 502;
+    mockState.upstreamBody = JSON.stringify({ error: 'NAS down' });
+    const { res } = await invokeWithPrefsToken({ body: 'D'.repeat(100_000) });
+    expect(res.statusCode).toBe(502);
+    // Counter untouched on non-2xx
+    expect(mockState.storageUsage.get(EVENT_PATH) || 0).toBe(0);
+  });
+
+  it('increments the counter by body.length after a successful 2xx', async () => {
+    mockState.events.set(EVENT_PATH, {
+      _ownerUid: DEFAULT_OWNER_UID,
+      coOwners: [],
+      assignedVendorUid: null,
+      storageUsageBytes: 12 * 1024 * 1024,
+      storageQuotaBytes: 200 * 1024 * 1024,
+    });
+    // First upload: a body of 1024 bytes — counter should
+    // increment by the proxy's body.length (multipart
+    // envelope), so just assert it moved and is >= 1024.
+    await invokeWithPrefsToken({ body: 'E'.repeat(1024) });
+    const after1 = mockState.storageUsage.get(EVENT_PATH);
+    expect(after1).toBeGreaterThanOrEqual(1024);
+    // Second upload: another small body — counter should
+    // grow again.
+    await invokeWithPrefsToken({ body: 'F'.repeat(1024) });
+    const after2 = mockState.storageUsage.get(EVENT_PATH);
+    expect(after2).toBeGreaterThan(after1);
   });
 });

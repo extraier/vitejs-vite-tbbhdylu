@@ -50,9 +50,15 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import { getHmacKey, signToken } from './hmac';
+import {
+  resolveStorageQuota,
+  buildStorageIncrement,
+  type EventEntitlement,
+} from './storageQuota';
+import { computeEntitlement } from './entitlementResolver';
 
 // Lazy-init admin (singleton — matches vendorInviteTrigger.ts
 // pattern). getApps() avoids the "already initialized" warning
@@ -73,6 +79,22 @@ const HMAC_KEY = defineSecret('HMAC_KEY');
 // 1 hour. Short enough that abandoned tokens expire before the
 // owner's unlock status can meaningfully change again.
 const TOKEN_TTL_MS = 60 * 60 * 1000;
+
+// ---- Path helpers ---------------------------------------------------
+
+function userRef(uid: string) {
+  return db
+    .collection('artifacts').doc(APP_ID)
+    .collection('users').doc(uid);
+}
+
+function unlocksCol(uid: string) {
+  return userRef(uid).collection('unlocks');
+}
+
+function eventRef(uid: string, eventId: string) {
+  return userRef(uid).collection('events').doc(eventId);
+}
 
 /**
  * getUploadPreferencesToken — owner calls this to mint an
@@ -118,11 +140,8 @@ export const getUploadPreferencesToken = onCall(
     // /artifacts/{appId}/users/{ownerUid}/events/{eventId}. If
     // the doc doesn't exist under the claimed ownerUid, this
     // isn't their event and we 403.
-    const eventRef = db
-      .collection('artifacts').doc(APP_ID)
-      .collection('users').doc(ownerUid)
-      .collection('events').doc(eventId);
-    const eventSnap = await eventRef.get();
+    const eventDocRef = eventRef(ownerUid, eventId);
+    const eventSnap = await eventDocRef.get();
     if (!eventSnap.exists) {
       throw new HttpsError('not-found', 'event not found.');
     }
@@ -136,15 +155,62 @@ export const getUploadPreferencesToken = onCall(
     // Look up the owner's unlocks. We only care about the
     // 'watermark-removed' type, but the same query also serves
     // as proof that the owner exists.
-    const unlocksSnap = await db
-      .collection('artifacts').doc(APP_ID)
-      .collection('users').doc(ownerUid)
-      .collection('unlocks')
+    const unlocksSnap = await unlocksCol(ownerUid)
       .where('type', '==', 'watermark-removed')
       .limit(1)
       .get();
 
     const watermarkDisabled = !unlocksSnap.empty;
+
+    // 2026-08-19 — Manus P1.4.a: also compute the entitlement
+    // and surface the storage quota + current usage so the
+    // photo drop can render a real "X MB / Y MB" indicator
+    // instead of the per-photo estimate. The entitlement
+    // resolver is the source of truth for the limit; the
+    // counter on the event doc is the source of truth for
+    // usage. We also seed the quota into the event doc on
+    // first read so the proxy can read it directly without
+    // a second resolver round-trip.
+    const allUnlocksSnap = await unlocksCol(ownerUid).get();
+    const entitlement: EventEntitlement = computeEntitlement(
+      ownerUid,
+      eventId,
+      allUnlocksSnap.docs.map((d) => {
+        const data = d.data() || {};
+        const grantedAt = data.grantedAt;
+        let grantedAtMs = 0;
+        if (typeof grantedAt === 'number') {
+          grantedAtMs = grantedAt;
+        } else if (grantedAt && typeof grantedAt.toMillis === 'function') {
+          grantedAtMs = grantedAt.toMillis();
+        }
+        return {
+          type: data.type || d.id,
+          source: data.source,
+          paymentId: data.paymentId,
+          grantedAt: grantedAtMs,
+        };
+      }),
+    );
+    const eventData = eventSnap.data() || {};
+    const storageUsageBytes = Number.isFinite(eventData.storageUsageBytes)
+      ? eventData.storageUsageBytes
+      : 0;
+    const storageQuotaBytes = resolveStorageQuota(entitlement);
+    if (eventData.storageQuotaBytes !== storageQuotaBytes) {
+      try {
+        await eventDocRef.update({
+          storageQuotaBytes,
+          storageQuotaSetAt: FieldValue.serverTimestamp(),
+        });
+      } catch (seedErr) {
+        // 2026-08-19 — Don't fail the upload-prefs call if the
+        // seed write loses a race to a concurrent unlock grant.
+        // The proxy will fall back to reading the entitlement
+        // directly when quota is missing. Log + continue.
+        console.warn('[uploadPreferencesToken] storageQuotaBytes seed failed:', seedErr);
+      }
+    }
 
     const issuedAt = Date.now();
     const expiresAt = issuedAt + TOKEN_TTL_MS;
@@ -157,6 +223,62 @@ export const getUploadPreferencesToken = onCall(
       token,
       expiresAt,
       watermarkDisabled,
+      // 2026-08-19 — Manus P1.4.a: surface the quota so the
+      // client can render "X MB / Y MB" with real numbers.
+      // Field names are deliberately byte-aligned with the
+      // event doc fields so the proxy and the client agree.
+      storageUsageBytes,
+      storageQuotaBytes,
+      remainingBytes: Math.max(storageQuotaBytes - storageUsageBytes, 0),
     };
+  },
+);
+
+/**
+ * recordUploadBytesUsed — 2026-08-19 — Manus P1.4.a: callable
+ * the proxy hits AFTER a successful NAS upload to atomically
+ * increment the storageUsageBytes counter.
+ *
+ * Auth: caller MUST be the event owner (cross-checked against
+ * the event ref). Co-owners / assigned vendors use a different
+ * surface (the proxy validates membership before calling here
+ * and uses the OWNER's uid for the counter).
+ *
+ * addBytes: the recorded payload. The proxy passes the
+ * Content-Length of the multipart body minus a small
+ * multipart overhead estimate. The helper floors the value
+ * and rejects anything <= 0.
+ */
+export const recordUploadBytesUsed = onCall(
+  {
+    cors: true,
+    region: 'us-central1',
+  },
+  async (req) => {
+    if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+    const { eventId, ownerUid, addBytes } = (req.data || {}) as {
+      eventId?: string;
+      ownerUid?: string;
+      addBytes?: number;
+    };
+    const SAFE_ID = /^[A-Za-z0-9_\-]{1,64}$/;
+    if (!eventId || !SAFE_ID.test(eventId)) {
+      throw new HttpsError('invalid-argument', 'eventId required.');
+    }
+    if (!ownerUid || !SAFE_ID.test(ownerUid)) {
+      throw new HttpsError('invalid-argument', 'ownerUid required.');
+    }
+    if (!Number.isFinite(addBytes) || (addBytes as number) <= 0) {
+      throw new HttpsError('invalid-argument', 'addBytes must be > 0.');
+    }
+    if (req.auth.uid !== ownerUid) {
+      throw new HttpsError('permission-denied', 'caller is not this event owner.');
+    }
+    const inc = buildStorageIncrement(addBytes as number);
+    await eventRef(ownerUid, eventId).update({
+      storageUsageBytes: FieldValue.increment(inc.storageUsageBytes),
+      storageUsageUpdatedAt: FieldValue.serverTimestamp(),
+    });
+    return { ok: true, addedBytes: inc.storageUsageBytes };
   },
 );

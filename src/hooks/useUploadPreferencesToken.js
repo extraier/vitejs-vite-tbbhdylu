@@ -45,6 +45,13 @@ const REFRESH_BUFFER_MS = 10 * 60 * 1000;
 export function useUploadPreferencesToken({ ownerUid, eventId, unlocks }) {
   const [prefsToken, setPrefsToken] = useState(null);
   const [watermarkDisabled, setWatermarkDisabled] = useState(false);
+  // 2026-08-19 — Manus P1.4.a: also surface the storage
+  // quota + current usage so the photo drop can render a
+  // real "X MB / Y MB" indicator. The CF is the source of
+  // truth; on first error or missing event the hook falls
+  // back to defaults so legacy screen code keeps working.
+  const [storageUsageBytes, setStorageUsageBytes] = useState(0);
+  const [storageQuotaBytes, setStorageQuotaBytes] = useState(200 * 1024 * 1024);
   // Track which (ownerUid, eventId) tuple the cached token was
   // minted for so we re-fetch when the user switches events.
   const mintedForRef = useRef(null);
@@ -100,6 +107,16 @@ export function useUploadPreferencesToken({ ownerUid, eventId, unlocks }) {
         if (result && result.token) {
           setPrefsToken(result.token);
           setWatermarkDisabled(result.watermarkDisabled === true);
+          // 2026-08-19 — Manus P1.4.a: surface the quota +
+          // current usage. Bytes are bytes; the UI converts
+          // to MB. Missing field on the CF means we're
+          // looking at a stale build (rare) — defaults hold.
+          if (Number.isFinite(result.storageUsageBytes)) {
+            setStorageUsageBytes(result.storageUsageBytes);
+          }
+          if (Number.isFinite(result.storageQuotaBytes)) {
+            setStorageQuotaBytes(result.storageQuotaBytes);
+          }
           mintedForRef.current = { ownerUid, eventId, expiresAt: result.expiresAt };
           // Schedule the next refresh.
           const refreshIn = Math.max(
@@ -130,5 +147,15 @@ export function useUploadPreferencesToken({ ownerUid, eventId, unlocks }) {
     };
   }, [ownerUid, eventId, unlocks ? unlocks.join(',') : '']);
 
-  return { prefsToken, watermarkDisabled };
+  return {
+    prefsToken,
+    watermarkDisabled,
+    // 2026-08-19 — Manus P1.4.a: quota + current usage.
+    // The UI passes these into the photo drop instead of
+    // the photo-count * 1.5 estimate. Backwards-compatible
+    // — screens that don't read these still work.
+    storageUsageBytes,
+    storageQuotaBytes,
+    remainingBytes: Math.max(storageQuotaBytes - storageUsageBytes, 0),
+  };
 }
