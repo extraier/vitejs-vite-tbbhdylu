@@ -10,10 +10,6 @@
 //   - functions/node_modules/firebase + firebase-admin installed
 //   - ~/.firebase-keys/savetheday-2377a.json readable
 
-const admin = require('firebase-admin');
-const { initializeApp } = require('firebase/app');
-const { getAuth, signInWithCustomToken } = require('firebase/auth');
-const { getFunctions, httpsCallable } = require('firebase/functions');
 const fs = require('node:fs');
 
 const SA_PATH = '/Users/roger/.firebase-keys/savetheday-2377a.json';
@@ -23,6 +19,15 @@ const fb = fs.readFileSync(
   'utf8'
 );
 const apiKey = fb.match(/apiKey:\s*["']([^"']+)["']/)[1];
+
+// Resolve firebase + firebase-admin from functions/node_modules regardless
+// of where the script is invoked from. (The script lives in scripts/ but
+// the deps live in functions/node_modules for the Cloud Functions runtime.)
+const FUNCTIONS_NODE_MODULES = '/Users/roger/projects/vitejs-vite-tbbhdylu/functions/node_modules';
+const admin = require(require.resolve('firebase-admin', { paths: [FUNCTIONS_NODE_MODULES] }));
+const { initializeApp } = require(require.resolve('firebase/app', { paths: [FUNCTIONS_NODE_MODULES] }));
+const { getAuth, signInWithCustomToken } = require(require.resolve('firebase/auth', { paths: [FUNCTIONS_NODE_MODULES] }));
+const { getFunctions, httpsCallable } = require(require.resolve('firebase/functions', { paths: [FUNCTIONS_NODE_MODULES] }));
 
 if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(sa) });
 

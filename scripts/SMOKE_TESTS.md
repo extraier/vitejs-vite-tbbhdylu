@@ -12,11 +12,15 @@ they hit the real live endpoints and require:
 ## Usage
 
 ```bash
-# Run from the project root (npm script not needed; Node module
-# resolution requires running from a dir that has functions/node_modules)
-cd functions
-node ../scripts/_smoke-p1-4-a.cjs
+# Run from the project root. The script uses require.resolve to find
+# firebase-admin + firebase/* in functions/node_modules regardless of CWD.
+node scripts/_smoke-p1-4-a.cjs
 ```
+
+> **Why the script lives in `scripts/`:** keeping all ad-hoc verification
+> scripts in one place. The script uses `require.resolve(path, paths: [...])`
+> to load firebase-admin and firebase/* from `functions/node_modules`
+> (Cloud Functions runtime deps) so it can run from anywhere.
 
 Tests:
 1. `getEventEntitlement` — full entitlement shape for FREE-tier event
