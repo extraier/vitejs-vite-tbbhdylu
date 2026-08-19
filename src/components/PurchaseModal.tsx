@@ -73,6 +73,11 @@ interface PurchaseModalProps {
   onClose: () => void;
   ownerUid: string;
   onSuccess: () => void;
+  // 2026-08-19 — Manus P1.1: eventId is required on the receipt
+  // (server validates it). We guard the submit button so a user
+  // without a selected event sees a friendly message rather
+  // than getting the server's "event not found" error.
+  eventId: string | null;
   // 2026-07-30 — lockedTypes is optional. The hooks below read
   // `.length` on first render, so an undefined value crashes the
   // whole React tree even when `isOpen === false` (the conditional
@@ -94,7 +99,7 @@ async function uploadPaymentReceiptHelper(
   return await getDownloadURL(storageRef);
 }
 
-export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedTypes = [] }: PurchaseModalProps) {
+export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedTypes = [], eventId }: PurchaseModalProps) {
   const [choice, setChoice] = useState<UnlockChoice>(
     lockedTypes.length === 3 ? 'premium' : (lockedTypes[0] ?? 'premium'),
   );
@@ -174,6 +179,17 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
     setSubmitting(true);
     setError(null);
     try {
+      if (!eventId) {
+        // 2026-08-19 — Manus P1.1: server requires eventId.
+        // The submit button is gated earlier (rendered disabled
+        // when eventId is null) so reaching this branch means
+        // the parent component bypassed that guard. Surface a
+        // friendly HK-zh message instead of submitting an
+        // invalid receipt.
+        setError('請先選擇一個婚禮活動再付款。');
+        setSubmitting(false);
+        return;
+      }
       const screenshotUrl = await uploadPaymentReceiptHelper(ownerUid, screenshot);
       const fn = httpsCallable(functions, 'submitPaymentReceipt');
       const result = await fn({
@@ -182,6 +198,7 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
         paymentMethod: method,
         screenshotUrl,
         reference: reference || undefined,
+        eventId,
       });
       const data = result.data as any;
       setSuccess({ estimatedTime: data.estimatedReviewTime });
@@ -423,7 +440,8 @@ export function PurchaseModal({ isOpen, onClose, ownerUid, onSuccess, lockedType
                 <button
                   type="button"
                   onClick={handleSubmitReceipt}
-                  disabled={submitting || !screenshot}
+                  disabled={submitting || !screenshot || !eventId}
+                  title={!eventId ? '請先選擇一個婚禮活動' : undefined}
                   className="w-full bg-rose-600 text-white font-bold py-2.5 rounded-lg hover:bg-rose-700 disabled:opacity-40 flex items-center justify-center gap-2"
                 >
                   {submitting ? (

@@ -68,6 +68,7 @@ import { useFirestoreDoc } from './hooks/useFirestoreDoc';
 import { useUserProfile } from './hooks/useUserProfile';
 import { useUploadPreferencesToken } from './hooks/useUploadPreferencesToken';
 import { useEventOwnerNames } from './hooks/useEventOwnerNames';
+import { useEventEntitlement } from './hooks/useEventEntitlement';
 import { useToast } from './hooks/useToast';
 // 2026-07-26 — Co-owners (couples / partners) front-end bindings.
 // See src/lib/partnerInvite.ts for the shapes; the Cloud Functions
@@ -2186,8 +2187,31 @@ export default function App() {
     0,
   );
   const storageUsedMB = eventPhotos.length * 1.5;
-  const isPremium = currentEvent?.tier === 'premium';
-  const isStorageFull = !isPremium && storageUsedMB >= FREE_TIER_LIMIT_MB;
+  // 2026-08-19 — Manus P1.2: prefer the canonical event
+  // entitlement resolver over the legacy `currentEvent.tier`
+  // flag for premium gating. The legacy flag is kept AS-IS
+  // for a transition period (so existing unlocks + paid
+  // receipts still work) but `isPremium` now uses the
+  // resolver. The `currentEvent.tier === 'premium'` check is
+  // retained as a `legacyTierIsPremium` defensively in case
+  // the resolver is mid-fetch (loading=true) and defaults to
+  // false — a couple who has paid should NOT see their
+  // premium UI vanish during the ~200ms resolver round-trip.
+  const { features: entitlementFeatures, storageLimitBytes: entitlementBytes, refresh: refreshEntitlement } =
+    useEventEntitlement(currentEvent?.id || null);
+  const entitlementIsPremium = !!(entitlementFeatures.customInvitation
+    || entitlementFeatures.watermarkRemoved
+    || entitlementFeatures.extraStorage
+    || entitlementFeatures.lifetimeRetention);
+  const legacyTierIsPremium = currentEvent?.tier === 'premium';
+  const isPremium = entitlementIsPremium || legacyTierIsPremium;
+  // 2026-08-19 — Storage gate uses the resolver's reported
+  // limit when available, falls back to the legacy constant
+  // otherwise. The resolver reports bytes; the legacy is in MB.
+  const entitlementStorageLimitMb = entitlementBytes
+    ? entitlementBytes / (1024 * 1024)
+    : FREE_TIER_LIMIT_MB;
+  const isStorageFull = !isPremium && storageUsedMB >= entitlementStorageLimitMb;
 
   // Slideshow state
   const [currentSlideIndex, setCurrentSlideIndex] = useState(0);
@@ -4520,6 +4544,10 @@ export default function App() {
         isOpen={purchaseModalOpen}
         onClose={() => setPurchaseModalOpen(false)}
         ownerUid={user?.uid || ''}
+        // 2026-08-19 — Manus P1.1: pass the selected event id
+        // so the receipt carries it; the modal's submit button
+        // is disabled when this is null (no event selected).
+        eventId={currentEvent?.id || null}
         onSuccess={() => {
           // Modal closes itself on success.
         }}
@@ -4717,7 +4745,16 @@ export default function App() {
             eventId={currentEvent.id}
             event={currentEvent}
             guests={eventGuests}
-            ownerTier={currentEvent.tier || 'free'}
+            // 2026-08-19 — Manus P1.3: prefer the canonical
+            // entitlement resolver over the legacy tier flag.
+            // The component still accepts `ownerTier` and
+            // treats `'premium'` as "may upload custom bg" —
+            // we OR the entitlement here so a pay-but-not-
+            // yet-tier-flagged customer isn't blocked. The
+            // server still enforces at /api/photo-upload
+            // (calls the same resolver) so the client can be
+            // safely optimistic here.
+            ownerTier={(entitlementFeatures.customInvitation || currentEvent.tier === 'premium') ? 'premium' : 'free'}
             isAdmin={isAdmin}
             onClose={() => setShowInvitationEditor(false)}
           />

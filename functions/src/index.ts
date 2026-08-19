@@ -1352,3 +1352,18 @@ export const admin_backfillVendorClaims = onCall(
     };
   },
 );
+
+// 2026-08-19 — Manus P1.2: single canonical event-scoped
+// entitlement resolver. Replaces the tier-flag / unlocks.* mix
+// with one server-authored object that the client, invitation
+// editor, upload token issuer, and (future) archive job all
+// consume. See functions/src/entitlementResolver.ts for the
+// data contract.
+//
+// Also bundles listPaymentReceipts so the customer payment-
+// status view (P1.1) has a single fetch.
+export {
+  getEventEntitlement,
+  listPaymentReceipts,
+  computeEntitlement,
+} from './entitlementResolver';

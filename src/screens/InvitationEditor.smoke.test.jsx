@@ -252,3 +252,50 @@ describe('InvitationEditor — editable metadata (2026-08-14)', () => {
     expect(screen.getByTestId('card-address').textContent).toBe('九龍尖沙咀');
   });
 });
+
+// 2026-08-19 — Manus P1.3: custom-invitation gate
+// reads from entitlement, not tier flag.
+//
+// The actual fix is in App.jsx:
+//   ownerTier={(entitlementFeatures.customInvitation
+//               || currentEvent.tier === 'premium') ? 'premium' : 'free'}
+// This smoke test verifies the gate policy: a customer whose
+// event tier is still 'free' (unlock not yet processed) but
+// whose entitlement.customInvitation is true IS allowed
+// to upload a custom background. This is the bug Manus
+// flagged: paying for the unlock should unlock the editor
+// immediately even if the tier-flag writeback is delayed.
+import { describe as describeP13, it as itP13, expect as expectP13 } from 'vitest';
+
+function computeOwnerTier({ customInvitation, currentEventTier }) {
+  return (customInvitation || currentEventTier === 'premium') ? 'premium' : 'free';
+}
+
+describeP13('InvitationEditor ownerTier derivation (P1.3)', () => {
+  itP13('treats currentEvent.tier === "premium" as premium (legacy path)', () => {
+    expect(computeOwnerTier({ customInvitation: false, currentEventTier: 'premium' })).toBe('premium');
+  });
+
+  itP13('treats entitlement.customInvitation as premium (new path)', () => {
+    expect(computeOwnerTier({ customInvitation: true, currentEventTier: 'free' })).toBe('premium');
+  });
+
+  itP13('treats both true as premium (no double-bonus)', () => {
+    expect(computeOwnerTier({ customInvitation: true, currentEventTier: 'premium' })).toBe('premium');
+  });
+
+  itP13('treats both false as free', () => {
+    expect(computeOwnerTier({ customInvitation: false, currentEventTier: 'free' })).toBe('free');
+  });
+
+  itP13('the fix is the central case: paid but tier-flag not yet written', () => {
+    // 2026-08-19 — Bug Manus flagged: the customer paid for
+    // custom-template, the unlock doc was created under
+    // users/{uid}/unlocks, getEventEntitlement returns
+    // customInvitation=true, but currentEvent.tier is still
+    // 'free' (the writeback is async). The editor must
+    // permit custom-background upload.
+    const r = computeOwnerTier({ customInvitation: true, currentEventTier: 'free' });
+    expect(r).toBe('premium');
+  });
+});

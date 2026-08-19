@@ -468,6 +468,36 @@ export const adminVerifyReferral = onCall(
  * submitPaymentReceipt — couple pays via PayMe/FPS and uploads a
  * screenshot. Status starts as 'pending'; admin verifies.
  */
+// 2026-08-19 — Manus P1.1: extracted from submitPaymentReceipt
+// so the price-derivation logic is unit-testable without an
+// emulator. Returns either { expectedAmount } or throws an error
+// string (caller maps to HttpsError).
+export function deriveExpectedAmount(
+  unlockType: UnlockType | 'bundle' | 'premium',
+  amount: number,
+  adminOverride: boolean,
+  overrideReason: string | undefined,
+): { expectedAmount: number } {
+  const expectedAmount =
+    unlockType === 'bundle' || unlockType === 'premium'
+      ? UNLOCK_PRICING['custom-template']
+        + UNLOCK_PRICING['storage-500mb']
+        + UNLOCK_PRICING['permanent-archive']
+        + UNLOCK_PRICING['watermark-removed']
+      : UNLOCK_PRICING[unlockType as UnlockType];
+  const amtDelta = Math.abs(amount - expectedAmount);
+  if (amtDelta > 1 && !adminOverride) {
+    throw new Error(
+      `amount ${amount} does not match expected ${expectedAmount}; ` +
+      `use adminOverride if intentional.`,
+    );
+  }
+  if (adminOverride && (!overrideReason || !overrideReason.trim())) {
+    throw new Error('overrideReason is required when adminOverride is true.');
+  }
+  return { expectedAmount };
+}
+
 export const submitPaymentReceipt = onCall(
   { cors: true, region: 'us-central1' },
   async (req) => {
@@ -479,6 +509,9 @@ export const submitPaymentReceipt = onCall(
       paymentMethod,
       screenshotUrl,
       reference,
+      eventId,
+      adminOverride,
+      overrideReason,
     } = req.data as {
       // 2026-07-30 — 'premium' replaces 'bundle' as the premium
       // membership label. Both accepted for backward compat with
@@ -488,6 +521,17 @@ export const submitPaymentReceipt = onCall(
       paymentMethod: 'payme' | 'fps';
       screenshotUrl: string;
       reference?: string;
+      // 2026-08-19 — Manus P1.3: eventId is now required on
+      // receipts. The entitlement resolver is event-scoped, so
+      // a receipt without an event cannot be approved into a
+      // specific entitlement. Legacy callers (pre-2026-08-19)
+      // that don't send eventId land in the rare-but-honest
+      // bucket: they pass adminOverride=true AND provide a
+      // justification note. Without adminOverride, the request
+      // fails with INVALID_EVENT.
+      eventId?: string;
+      adminOverride?: boolean;
+      overrideReason?: string;
     };
 
     if (!['custom-template', 'storage-500mb', 'permanent-archive', 'watermark-removed', 'bundle', 'premium'].includes(unlockType)) {
@@ -499,6 +543,39 @@ export const submitPaymentReceipt = onCall(
     if (typeof amount !== 'number' || amount <= 0) {
       throw new HttpsError('invalid-argument', 'amount must be > 0.');
     }
+
+    // 2026-08-19 — Manus P1.1: server-side price derivation.
+    // Use the shared helper so the unit tests cover the policy.
+    let expectedAmount: number;
+    try {
+      const out = deriveExpectedAmount(
+        unlockType as UnlockType,
+        amount,
+        !!adminOverride,
+        overrideReason,
+      );
+      expectedAmount = out.expectedAmount;
+    } catch (err: any) {
+      throw new HttpsError('invalid-argument', err.message);
+    }
+
+    // 2026-08-19 — Manus P1.3: eventId is required except under
+    // admin override. Validate that the event exists under the
+    // caller (don't leak ownership info via 404 vs 403).
+    if (!eventId || typeof eventId !== 'string') {
+      if (!adminOverride) {
+        throw new HttpsError(
+          'invalid-argument',
+          'eventId is required so the entitlement can be scoped to a wedding.',
+        );
+      }
+    } else {
+      const eventDoc = await userRef(uid).collection('events').doc(eventId).get();
+      if (!eventDoc.exists) {
+        throw new HttpsError('not-found', 'event not found');
+      }
+    }
+
     if (!screenshotUrl || !screenshotUrl.includes(`/payment-receipts/${uid}/`)) {
       throw new HttpsError('permission-denied', 'screenshotUrl must be under your own folder.');
     }
@@ -507,9 +584,13 @@ export const submitPaymentReceipt = onCall(
     await userRef(uid).collection('paymentReceipts').doc(receiptId).set({
       unlockType,
       amount,
+      expectedAmount,
       paymentMethod,
       screenshotUrl,
       reference: reference || '',
+      eventId: eventId || null,
+      adminOverride: !!adminOverride,
+      overrideReason: adminOverride ? (overrideReason || '').trim() : null,
       status: 'pending',
       createdAt: FieldValue.serverTimestamp(),
       verifiedAt: null,

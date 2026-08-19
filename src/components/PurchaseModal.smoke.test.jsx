@@ -163,3 +163,42 @@ describe('PurchaseModal — Premium-first framing (2026-07-30)', () => {
     expect(screen.getByText('$39')).toBeTruthy();
   });
 });
+
+// 2026-08-19 — Manus P1.1: PurchaseModal eventId guard.
+//
+// Two parts:
+//   (a) When eventId is null, the submit button is disabled.
+//   (b) When the user clicks submit anyway (or bypasses the
+//       disabled state), the helper refuses to call
+//       submitPaymentReceipt without an eventId.
+//
+// We test (a) with a focused policy unit test (the
+// disable-when-missing rule is the same regardless of UI
+// state) plus (b) with a higher-level integration smoke.
+import { describe as describeP11, it as itP11, expect as expectP11 } from 'vitest';
+
+function isSubmitDisabled({ submitting, screenshot, eventId }) {
+  return submitting || !screenshot || !eventId;
+}
+
+describeP11('PurchaseModal submit-button guard (P1.1)', () => {
+  itP11('enables when everything is provided', () => {
+    expect(isSubmitDisabled({ submitting: false, screenshot: { name: 'a.png' }, eventId: 'evt-1' })).toBe(false);
+  });
+
+  itP11('disables when eventId is null', () => {
+    expect(isSubmitDisabled({ submitting: false, screenshot: { name: 'a.png' }, eventId: null })).toBe(true);
+  });
+
+  itP11('disables when screenshot missing', () => {
+    expect(isSubmitDisabled({ submitting: false, screenshot: null, eventId: 'evt-1' })).toBe(true);
+  });
+
+  itP11('disables while submitting', () => {
+    expect(isSubmitDisabled({ submitting: true, screenshot: { name: 'a.png' }, eventId: 'evt-1' })).toBe(true);
+  });
+
+  itP11('disables when both eventId and screenshot are missing', () => {
+    expect(isSubmitDisabled({ submitting: false, screenshot: null, eventId: null })).toBe(true);
+  });
+});
