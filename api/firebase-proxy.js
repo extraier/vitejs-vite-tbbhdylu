@@ -109,6 +109,21 @@ export default async function handler(req, res) {
     // functions/src/vendorComment.ts for the auth shape.
     'vendorPostComment',
     'vendorPostCommentHelper',
+    // 2026-08-19 — P1.1+P1.2+P1.4.a ship:
+    // - submitPaymentReceipt: customer submits a payment receipt
+    //   (price-derivation enforced server-side, eventId required).
+    // - getEventEntitlement / listPaymentReceipts: couples payment-
+    //   status dashboard surface (P1.1 + P1.2).
+    // - getUploadPreferencesToken: photo-upload prefs token issuer,
+    //   now also surfaces storageQuotaBytes/UsageBytes for the UI.
+    // - recordUploadBytesUsed: atomic counter increment callable
+    //   invoked by the photo-upload proxy after a successful NAS
+    //   upload.
+    'submitPaymentReceipt',
+    'getEventEntitlement',
+    'listPaymentReceipts',
+    'getUploadPreferencesToken',
+    'recordUploadBytesUsed',
   ]);
   if (!ALLOWED.has(fnName)) {
     return res.status(403).json({
