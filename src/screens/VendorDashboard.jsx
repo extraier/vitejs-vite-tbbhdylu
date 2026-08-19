@@ -12,7 +12,7 @@
 // vendor name and used a hardcoded INITIAL_JOB_REQUESTS array as
 // the listing. Both now come from Firestore.
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   Briefcase,
   Calendar,
@@ -89,8 +89,49 @@ const TASK_STATUSES = [
 
 const STATUS_BY_ID = Object.fromEntries(TASK_STATUSES.map((s) => [s.id, s]));
 
-function VendorAssignedItem({ item, currentUser }) {
-  const [expanded, setExpanded] = useState(false);
+function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocusedRef }) {
+  const [expanded, setExpanded] = useState(forceExpanded);
+  const rowRef = useRef(null);
+  // 2026-08-17 — Manus A8: vendor-side deep-link focus. When the
+  // couple clicks a Big Day comment bell alert addressed to this
+  // vendor, App.jsx passes focusedParentId + focusedParentKind
+  // down. The dashboard finds the matching assigned item (rd /
+  // rs / tk), sets forceExpanded=true on this row so the
+  // <ItemComments> panel opens, and scrolls into view with a
+  // brief rose-400 ring highlight. The user can collapse it
+  // manually afterwards.
+  useEffect(() => {
+    if (forceExpanded && !expanded) {
+      setExpanded(true);
+    }
+    if (forceExpanded && rowRef.current) {
+      // Defer to next tick so the expanded panel is mounted
+      // before we measure its height.
+      requestAnimationFrame(() => {
+        const safeId =
+          typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+            ? CSS.escape(item.id)
+            : item.id.replace(/([^\w-])/g, '\\$1');
+        const el =
+          document.querySelector(`[data-row-id="${safeId}"]`) ||
+          rowRef.current;
+        if (el && typeof el.scrollIntoView === 'function') {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Brief ring flash so the user sees what changed.
+          el.classList.add('ring-2', 'ring-rose-400', 'rounded-xl');
+          setTimeout(() => {
+            el.classList.remove('ring-2', 'ring-rose-400', 'rounded-xl');
+          }, 2200);
+        }
+        // Hand the ref back to the dashboard so the parent can
+        // clear its focus state.
+        if (onFocusedRef) onFocusedRef();
+      });
+    }
+    // We intentionally only react to forceExpanded changes —
+    // expanded is local UI state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forceExpanded]);
   const title = item.title || item.name || item.label || item.description || '未命名項目';
   const detail = item.description || item.note || item.location || item.venue || '';
   const path = item.commentPath;
@@ -104,7 +145,27 @@ function VendorAssignedItem({ item, currentUser }) {
   const eventName = item.eventName || null;
   const eventDate = item.eventDate || null;
   return (
-    <li className="rounded-xl border border-emerald-200 bg-white overflow-hidden">
+    <li
+      ref={rowRef}
+      data-row-id={item.id}
+      // 2026-08-17 — data-row-kind is used by helpers / tests
+      // to filter which list section a deep-link focus should
+      // hit. We derive it from `item.commentPath` defensively:
+      //   * string  — split on '/' and take the second-to-last
+      //               (e.g. 'artifacts/.../rundown/rd-1/comments'
+      //               → 'rundown')
+      //   * object  — has __segments array (per ItemComments'
+      //               contract); pull the kind from segments[-3]
+      //   * other   — empty (no kind label)
+      data-row-kind={
+        typeof item.commentPath === 'string'
+          ? item.commentPath.split('/').slice(-3, -2)[0] || ''
+          : Array.isArray(item.commentPath?.__segments)
+          ? item.commentPath.__segments.slice(-3, -2)[0] || ''
+          : ''
+      }
+      className="rounded-xl border border-emerald-200 bg-white overflow-hidden"
+    >
       {eventName && (
         <div
           className="px-3 py-2 bg-gradient-to-r from-emerald-50 to-teal-50 border-b border-emerald-200 flex items-center gap-2"
@@ -192,6 +253,14 @@ export function VendorDashboard({
   assignedResources = [],
   onUpdateTaskStatus,
   onOpenInquiry,
+  // 2026-08-17 — Manus A8: vendor-side deep-link focus. The bell
+  // alert routed to vendor-dashboard now also seeds focusedParent*
+  // so the matching assigned item auto-expands + scrolls into
+  // view. The parent dashboard's job is just to find the item
+  // and forward forceExpanded=true to the right <VendorAssignedItem>.
+  focusedParentId = null,
+  focusedParentKind = null,
+  onFocusedParentHandled = null,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
@@ -570,6 +639,16 @@ export function VendorDashboard({
                             key={`${item.ownerUid}_${item.eventId}_${item.id}`}
                             item={item}
                             currentUser={user}
+                            forceExpanded={
+                              focusedParentId === item.id &&
+                              (focusedParentKind === 'rundown' ||
+                                focusedParentKind === null)
+                            }
+                            onFocusedRef={
+                              focusedParentId === item.id
+                                ? onFocusedParentHandled
+                                : undefined
+                            }
                           />
                         ))}
                       </ul>
@@ -586,6 +665,16 @@ export function VendorDashboard({
                             key={`${item.ownerUid}_${item.eventId}_${item.id}`}
                             item={item}
                             currentUser={user}
+                            forceExpanded={
+                              focusedParentId === item.id &&
+                              (focusedParentKind === 'resources' ||
+                                focusedParentKind === null)
+                            }
+                            onFocusedRef={
+                              focusedParentId === item.id
+                                ? onFocusedParentHandled
+                                : undefined
+                            }
                           />
                         ))}
                       </ul>

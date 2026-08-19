@@ -12,28 +12,34 @@ export default {
         // <span> via React `key={pulseKey}` — Tailwind replays the
         // animation on each remount).
         //
-        // Keyframe shape:
+        // Keyframe shape (smoother, longer, lower peak — the
+        // 2026-08-17 v1 had a 1.55 peak that was jarring for users
+        // with high-frequency arrivals; v2 settles on 1.35 over
+        // 750ms with a 4-stop bezier that has a gentle landing):
         //   0%   scale 1      start
-        //   35%  scale 1.55   brief pop (~210ms at 600ms total)
-        //   70%  scale 0.95   tiny undershoot — gives the badge
+        //   30%  scale 1.35   brief pop (~225ms at 750ms total)
+        //   55%  scale 0.96   tiny undershoot — gives the badge
         //                     a "spring" feel rather than a flat pop
+        //   80%  scale 1.02   one more small overshoot
         //   100% scale 1      settle
-        // Easing: cubic-bezier with overshoot so it doesn't look
-        // mechanical. The full animation runs in ~600ms which is
-        // short enough to not delay subsequent alerts but long
-        // enough to read at a glance.
+        // Easing: cubic-bezier(0.25, 0.1, 0.25, 1.3) — material
+        // design "decelerate" with a soft overshoot. The full
+        // animation runs in ~750ms which is short enough to not
+        // delay subsequent alerts but long enough to read at a
+        // glance.
         keyframes: {
           'bell-pulse': {
             '0%':   { transform: 'scale(1)' },
-            '35%':  { transform: 'scale(1.55)' },
-            '70%':  { transform: 'scale(0.95)' },
+            '30%':  { transform: 'scale(1.35)' },
+            '55%':  { transform: 'scale(0.96)' },
+            '80%':  { transform: 'scale(1.02)' },
             '100%': { transform: 'scale(1)' },
           },
         },
         animation: {
-          'bell-pulse': 'bell-pulse 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)',
+          'bell-pulse': 'bell-pulse 0.75s cubic-bezier(0.25, 0.1, 0.25, 1.3)',
         },
       },
     },
     plugins: [],
-  }
+  };

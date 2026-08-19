@@ -3723,10 +3723,10 @@ export default function App() {
                           }
                           // Step 16: role-aware routing. Owner -> Big Day;
                           // vendor / helper -> their own dashboards. The
-                          // dashboards don't yet honour focusedParent* —
-                          // that's a step 16+ future item — but at least
-                          // the click doesn't drop them onto a missing
-                          // view.
+                          // dashboards honour focusedParent* as of
+                          // 2026-08-17 (vendor auto-expands the
+                          // matching <ItemComments>; helper switches to
+                          // the Big Day tab + scrolls).
                           if (userRole === 'owner' || userRole === 'co-owner' || !userRole) {
                             setCurrentView('wedding-day');
                           } else if (userRole === 'vendor') {
@@ -4310,6 +4310,17 @@ export default function App() {
                   recentScans={recentScans || []}
                   onCheckIn={handleSimulateReceptionScan}
                   onManualCheckIn={handleSimulateReceptionScan}
+                  // 2026-08-17 — Manus A8: helper-side deep-link
+                  // focus. Bell alert click lands here with the
+                  // focusedParent* state set; the dashboard
+                  // switches to the Big Day tab and scrolls the
+                  // matching item into view.
+                  focusedParentId={focusedParentId}
+                  focusedParentKind={focusedParentKind}
+                  onFocusedParentHandled={() => {
+                    setFocusedParentId(null);
+                    setFocusedParentKind(null);
+                  }}
                 />
               </LazyScreen>
             )}
@@ -4377,6 +4388,17 @@ export default function App() {
                   onOpenInquiry={(inq) => {
                     setSelectedInquiry(inq);
                     setCurrentView('chat-room');
+                  }}
+                  // 2026-08-17 — Manus A8: vendor-side deep-link
+                  // focus. Bell alert click lands here with
+                  // focusedParent* set; the dashboard finds the
+                  // matching assigned item, auto-expands its
+                  // <ItemComments>, and scrolls the row into view.
+                  focusedParentId={focusedParentId}
+                  focusedParentKind={focusedParentKind}
+                  onFocusedParentHandled={() => {
+                    setFocusedParentId(null);
+                    setFocusedParentKind(null);
                   }}
                 />
               </LazyScreen>

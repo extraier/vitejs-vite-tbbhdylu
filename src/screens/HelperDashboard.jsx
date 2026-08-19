@@ -17,7 +17,7 @@
  * + status-update audit trail on every task).
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   QrCode,
   Users,
@@ -57,6 +57,14 @@ export function HelperDashboard({
   onManualCheckIn,
   eventGuests = [],
   recentScans = [],
+  // 2026-08-17 — Manus A8: helper-side deep-link focus. When the
+  // couple clicks a Big Day comment bell alert addressed to this
+  // helper, App.jsx passes focusedParentId + focusedParentKind.
+  // The dashboard switches to the Big Day tab and scrolls the
+  // matching rundown / resource item into view.
+  focusedParentId = null,
+  focusedParentKind = null,
+  onFocusedParentHandled = null,
 }) {
   const ownerUid = helperAssignment?.ownerUid;
   const perms = helperAssignment?.perms || {};
@@ -83,6 +91,20 @@ export function HelperDashboard({
     return tabs;
   }, [perms]);
   const [activeTab, setActiveTab] = useState(availableTabs[0]?.id || 'tasks');
+  // 2026-08-17 — Manus A8: helper-side deep-link focus. When a
+  // focusedParent* lands here, switch to the Big Day tab so the
+  // matching item is visible. The actual scroll-into-view is
+  // done inside HelperBigDayTab (it has access to the items).
+  useEffect(() => {
+    if (!focusedParentId) return;
+    if (!availableTabs.some((t) => t.id === 'bigday')) return;
+    if (activeTab !== 'bigday') {
+      setActiveTab('bigday');
+    }
+    // The scroll-into-view happens inside HelperBigDayTab via
+    // a useEffect on focusedParentId. We don't need to do
+    // anything here besides switching the tab.
+  }, [focusedParentId, availableTabs, activeTab]);
   // If perms shift, fall back to whichever tab is still available.
   if (!availableTabs.some((t) => t.id === activeTab) && availableTabs[0]) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -299,6 +321,9 @@ export function HelperDashboard({
               rundown={assignedRundown}
               resources={assignedResources}
               eventId={helperAssignment?.eventId}
+              focusedParentId={focusedParentId}
+              focusedParentKind={focusedParentKind}
+              onFocusedParentHandled={onFocusedParentHandled}
             />
           )}
           {activeTab === 'guests' && (
@@ -340,7 +365,41 @@ export function HelperDashboard({
 // Architecture Audit (P0-C). Big Day rundown + resources tab.
 // Renders items where this helper is in `assignedHelpers`.
 // Sorted by startTime for rundown, by category for resources.
-function HelperBigDayTab({ rundown = [], resources = [], eventId }) {
+function HelperBigDayTab({ rundown = [], resources = [], eventId, focusedParentId = null, focusedParentKind = null, onFocusedParentHandled = null }) {
+  // 2026-08-17 — Manus A8: helper-side deep-link focus. When the
+  // couple clicks a Big Day comment bell alert addressed to this
+  // helper, App.jsx passes focusedParentId + focusedParentKind
+  // down. We scroll the matching rundown / resource card into
+  // view with a brief rose-400 ring highlight. Defer to the
+  // next frame so the DOM has settled (especially if this tab
+  // was just activated by the parent dashboard).
+  useEffect(() => {
+    if (!focusedParentId) return;
+    const safeId =
+      typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(focusedParentId)
+        : focusedParentId.replace(/([^\w-])/g, '\\$1');
+    const tries = 5;
+    let attempt = 0;
+    const tick = () => {
+      const el = document.querySelector(
+        `[data-row-id="${safeId}"]`,
+      );
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('ring-2', 'ring-rose-400', 'rounded-xl');
+        setTimeout(() => {
+          el.classList.remove('ring-2', 'ring-rose-400', 'rounded-xl');
+        }, 2200);
+        if (onFocusedParentHandled) onFocusedParentHandled();
+        return;
+      }
+      if (++attempt < tries) {
+        setTimeout(tick, 80);
+      }
+    };
+    tick();
+  }, [focusedParentId, onFocusedParentHandled]);
   // Sort rundown by startTime (HH:MM string, lexicographic works
   // for zero-padded 24h times). Empty/missing → push to end.
   const sortedRundown = [...rundown].sort((a, b) => {
@@ -389,6 +448,8 @@ function HelperBigDayTab({ rundown = [], resources = [], eventId }) {
             {sortedRundown.map((e) => (
               <li
                 key={e.id}
+                data-row-id={e.id}
+                data-row-kind="rundown"
                 className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
               >
                 <div className="flex items-baseline justify-between gap-2 mb-1">
@@ -428,6 +489,8 @@ function HelperBigDayTab({ rundown = [], resources = [], eventId }) {
             {sortedResources.map((r) => (
               <li
                 key={r.id}
+                data-row-id={r.id}
+                data-row-kind="resources"
                 className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
               >
                 <div className="flex items-baseline justify-between gap-2 mb-1">

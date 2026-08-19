@@ -1,0 +1,347 @@
+// 2026-08-17 — Manus A8 regression guard: vendor-side bell-click
+// deep-link focus.
+//
+// When App.jsx sets `focusedParentKind` ∈ {rundown, resources} and
+// `focusedParentId`, <VendorDashboard> must:
+//   1. Auto-expand the matching <VendorAssignedItem> by passing
+//      forceExpanded=true on the row whose id matches
+//   2. Call scrollIntoView on that row
+//   3. Briefly apply a rose-400 ring highlight
+//   4. Invoke onFocusedParentHandled so App.jsx can clear state
+//
+// Mirrors the existing WeddingDay focus-effect test pattern.
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, cleanup, act, waitFor } from '@testing-library/react';
+import { VendorDashboard } from './VendorDashboard';
+
+// Stub the heavy comment thread + analytics panels so the focus
+// effect can mount without dragging in Firestore / Recharts.
+vi.mock('../components/ItemComments', () => ({
+  ItemComments: () => <div data-testid="item-comments-stub" />,
+}));
+vi.mock('../components/VendorPortfolioAnalytics', () => ({
+  VendorPortfolioAnalytics: () => null,
+}));
+vi.mock('../components/VendorInquiriesPanel', () => ({
+  VendorInquiriesPanel: () => null,
+}));
+vi.mock('../components/TaskActivityTimeline', () => ({
+  TaskActivityTimeline: () => null,
+}));
+
+// Stub querySelector so we can capture which row the focus effect
+// targeted, and stub scrollIntoView so we don't depend on jsdom's
+// layout engine (it doesn't actually scroll).
+let queriedIds = [];
+let capturedEl = null;
+const originalQuerySelector = document.querySelector.bind(document);
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+const fakeClassList = () => {
+  const set = new Set();
+  return {
+    add: vi.fn((...cls) => cls.forEach((c) => set.add(c))),
+    remove: vi.fn((...cls) => cls.forEach((c) => set.delete(c))),
+    contains: (c) => set.has(c),
+    _set: set,
+  };
+};
+
+beforeEach(() => {
+  queriedIds = [];
+  capturedEl = null;
+  document.querySelector = vi.fn((selector) => {
+    queriedIds.push(selector);
+    const match = selector.match(/^\[data-row-id="(.+)"\]$/);
+    if (!match) return originalQuerySelector(selector);
+    const fakeEl = {
+      id: match[1],
+      scrollIntoView: vi.fn(),
+      classList: fakeClassList(),
+    };
+    capturedEl = fakeEl;
+    return fakeEl;
+  });
+  Element.prototype.scrollIntoView = vi.fn();
+  // requestAnimationFrame resolves synchronously here so we don't
+  // need to flush timers manually — the effect's rAF callback
+  // runs in the same act() tick that scheduled it.
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation(
+    (cb) => {
+      cb(0);
+      return 0;
+    },
+  );
+});
+afterEach(() => {
+  document.querySelector = originalQuerySelector;
+  Element.prototype.scrollIntoView = originalScrollIntoView;
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+const baseProps = {
+  user: { uid: 'vendor-1', displayName: '靚相攝影' },
+  vendor: { uid: 'vendor-1', name: '靚相攝影' },
+  jobRequests: [],
+  loading: false,
+  onSubmitProposal: () => {},
+  onManageProfile: () => {},
+  onLogout: () => {},
+  assignedTasks: [],
+  onUpdateTaskStatus: () => {},
+  onOpenInquiry: () => {},
+};
+
+const rundownFixture = [
+  {
+    id: 'rd-99',
+    ownerUid: 'couple-1',
+    eventId: 'event-1',
+    title: '攝影師到場',
+    startTime: '15:30',
+    description: '請於典禮開始前 30 分鐘到場',
+    eventName: 'Roger & Joy',
+    eventDate: '2027-01-01',
+    // Object form — matches what App.jsx actually passes (the
+    // ItemComments contract uses __segments). The VendorAssignedItem
+    // focus-effect must NOT crash on this.
+    commentPath: { __segments: ['artifacts', 'rundown', 'rd-99', 'comments'] },
+  },
+  {
+    id: 'rd-other',
+    ownerUid: 'couple-1',
+    eventId: 'event-1',
+    title: '新娘行禮',
+    startTime: '16:00',
+    description: '',
+    eventName: 'Roger & Joy',
+    eventDate: '2027-01-01',
+    commentPath: { __segments: ['artifacts', 'rundown', 'rd-other', 'comments'] },
+  },
+];
+
+const resourceFixture = [
+  {
+    id: 'rs-42',
+    ownerUid: 'couple-1',
+    eventId: 'event-1',
+    title: '場地平面圖',
+    location: '尖沙咀美麗華',
+    eventName: 'Roger & Joy',
+    eventDate: '2027-01-01',
+    commentPath: { __segments: ['artifacts', 'resources', 'rs-42', 'comments'] },
+  },
+];
+
+describe('VendorDashboard — A8 bell-click deep-link focus', () => {
+  it('does nothing when focusedParentId is null', () => {
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+      />,
+    );
+    expect(queriedIds.filter((s) => s.startsWith('[data-row-id='))).toEqual(
+      [],
+    );
+  });
+
+  it('queries the DOM for the matching rundown row by data-row-id', async () => {
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+        focusedParentId="rd-99"
+        focusedParentKind="rundown"
+      />,
+    );
+    await waitFor(() => {
+      const ids = queriedIds.filter((s) => s.startsWith('[data-row-id='));
+      expect(ids).toContain('[data-row-id="rd-99"]');
+    });
+  });
+
+  it('queries the DOM for the matching resource row by data-row-id', async () => {
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+        focusedParentId="rs-42"
+        focusedParentKind="resources"
+      />,
+    );
+    await waitFor(() => {
+      const ids = queriedIds.filter((s) => s.startsWith('[data-row-id='));
+      expect(ids).toContain('[data-row-id="rs-42"]');
+    });
+  });
+
+  it('calls scrollIntoView on the matched element with smooth + center', async () => {
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+        focusedParentId="rd-99"
+        focusedParentKind="rundown"
+      />,
+    );
+    await waitFor(() => {
+      expect(capturedEl).not.toBeNull();
+      expect(capturedEl.scrollIntoView).toHaveBeenCalled();
+      expect(capturedEl.scrollIntoView.mock.calls[0][0]).toMatchObject({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    });
+  });
+
+  it('applies a temporary rose-400 ring highlight to the focused row', async () => {
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+        focusedParentId="rd-99"
+        focusedParentKind="rundown"
+      />,
+    );
+    await waitFor(() => {
+      expect(capturedEl).not.toBeNull();
+      // The effect calls el.classList.add('ring-2', 'ring-rose-400', 'rounded-xl')
+      // as three separate spread args (not an array). Inspect the
+      // first add() call's flat argument list.
+      expect(capturedEl.classList.add).toHaveBeenCalled();
+      const firstCallArgs = capturedEl.classList.add.mock.calls[0];
+      // The call is recorded as add(arg1, arg2, arg3, ...) — flatten.
+      const flat = firstCallArgs.flat();
+      expect(flat).toContain('ring-rose-400');
+      expect(flat).toContain('ring-2');
+    });
+  });
+
+  it('invokes onFocusedParentHandled once the focus effect lands', async () => {
+    const handled = vi.fn();
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+        focusedParentId="rs-42"
+        focusedParentKind="resources"
+        onFocusedParentHandled={handled}
+      />,
+    );
+    await waitFor(() => {
+      expect(handled).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('does NOT fire when focusedParentId matches a row in the OTHER section', async () => {
+    // The rundown list should only auto-expand for kind=rundown.
+    // A kind=resources focus on a rundown id should be a no-op.
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+        focusedParentId="rd-99"
+        focusedParentKind="resources"
+      />,
+    );
+    // Let any pending rAF + scroll run.
+    await new Promise((r) => setTimeout(r, 50));
+    // No DOM lookup should have happened for the focus target —
+    // capturedEl stays null because the VendorAssignedItem for
+    // rd-99 received forceExpanded=false (kind mismatch).
+    expect(capturedEl).toBeNull();
+    expect(
+      queriedIds.filter((s) => s === '[data-row-id="rd-99"]'),
+    ).toEqual([]);
+  });
+
+  it('renders the assigned item with the row-id data attribute', () => {
+    // Static shape guard: every assigned row must carry
+    // data-row-id so the focus effect can find it.
+    const { container } = render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+      />,
+    );
+    const rows = container.querySelectorAll('[data-row-id]');
+    const ids = Array.from(rows).map((el) => el.getAttribute('data-row-id'));
+    expect(ids).toContain('rd-99');
+    expect(ids).toContain('rd-other');
+    expect(ids).toContain('rs-42');
+  });
+
+  it('renders the assigned item with the row-kind data attribute', () => {
+    // Defensive guard: the VendorAssignedItem focus effect uses
+    // data-row-kind as a fallback filter. The fixture uses object
+    // commentPath with __segments; the row-kind derivation must
+    // still produce 'rundown' / 'resources' from the segments.
+    const { container } = render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        assignedResources={resourceFixture}
+      />,
+    );
+    const rows = container.querySelectorAll('[data-row-id]');
+    const rd99 = Array.from(rows).find(
+      (el) => el.getAttribute('data-row-id') === 'rd-99',
+    );
+    const rs42 = Array.from(rows).find(
+      (el) => el.getAttribute('data-row-id') === 'rs-42',
+    );
+    expect(rd99.getAttribute('data-row-kind')).toBe('rundown');
+    expect(rs42.getAttribute('data-row-kind')).toBe('resources');
+  });
+
+  it('renders the assigned item with the row-kind "rundown" when commentPath is a string path', () => {
+    // String commentPath branch — covers the path-string fallback
+    // in the data-row-kind derivation.
+    const stringPathFixture = [
+      {
+        ...rundownFixture[0],
+        id: 'rd-string',
+        commentPath:
+          'artifacts/app-1/users/couple-1/events/event-1/rundown/rd-string/comments',
+      },
+    ];
+    const { container } = render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={stringPathFixture}
+      />,
+    );
+    const rows = container.querySelectorAll('[data-row-id]');
+    const rdString = Array.from(rows).find(
+      (el) => el.getAttribute('data-row-id') === 'rd-string',
+    );
+    expect(rdString.getAttribute('data-row-kind')).toBe('rundown');
+  });
+
+  it('renders the assigned item with empty row-kind when commentPath is missing', () => {
+    // Legacy docs may not have commentPath yet — the dashboard
+    // must still render the row, just without a kind label.
+    const legacyFixture = [
+      { ...rundownFixture[0], id: 'rd-legacy', commentPath: null },
+    ];
+    const { container } = render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={legacyFixture}
+      />,
+    );
+    const rows = container.querySelectorAll('[data-row-id="rd-legacy"]');
+    expect(rows.length).toBe(1);
+    expect(rows[0].getAttribute('data-row-kind')).toBe('');
+  });
+});
