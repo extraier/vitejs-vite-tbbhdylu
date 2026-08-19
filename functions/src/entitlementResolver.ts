@@ -310,7 +310,16 @@ async function resolveEntitlement(
  * the navigation; re-call on payment approval / unlock grant.
  */
 export const getEventEntitlement = onCall<{ eventId: string }>(
-  { cors: true, region: 'hkg1' },
+  {
+    cors: true,
+    // 2026-08-19 — us-central1, not hkg1. hkg1 is not enabled
+    // on this project (verified via
+    //   gcloud functions regions list --project=savetheday-2377a
+    // and the deploy returns 403 Permission denied on
+    // locations/hkg1). us-central1 matches every other
+    // callable in this codebase.
+    region: 'us-central1',
+  },
   async (req) => {
     if (!req.auth) {
       throw new HttpsError('unauthenticated', 'sign in required');
@@ -340,7 +349,11 @@ export const getEventEntitlement = onCall<{ eventId: string }>(
  *   }
  */
 export const listPaymentReceipts = onCall<void>(
-  { cors: true, region: 'hkg1' },
+  {
+    cors: true,
+    // 2026-08-19 — us-central1, not hkg1 (see getEventEntitlement).
+    region: 'us-central1',
+  },
   async (req) => {
     if (!req.auth) {
       throw new HttpsError('unauthenticated', 'sign in required');
