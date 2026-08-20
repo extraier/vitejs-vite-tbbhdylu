@@ -37,9 +37,26 @@
 // Token payload shape:
 //   {
 //     ownerUid: string,        // Firebase UID of the wedding owner
-//     watermarkDisabled: bool, // true iff the owner has the
-//                              // 'watermark-removed' unlock AT
-//                              // the moment of minting
+//     eventId: string,         // 2026-08-20 — Manus P1.2 audit §4.2:
+//                              // the token is BOUND to one specific
+//                              // event. The proxy verifies the
+//                              // request's eventId matches this
+//                              // claim before applying the
+//                              // watermark preference. Without
+//                              // this, a token minted for event A
+//                              // (where the owner paid for
+//                              // watermark removal) would
+//                              // authorize clean uploads on event
+//                              // B (where the owner did NOT pay).
+//     watermarkDisabled: bool, // true iff the owner's EVENT-LEVEL
+//                              // entitlement grants the
+//                              // 'watermark-removed' feature AT
+//                              // the moment of minting. Reads
+//                              // from getEventEntitlement /
+//                              // computeEntitlement, NOT from a
+//                              // loose user-level unlocks query —
+//                              // see getUploadPreferencesToken
+//                              // below for the audit fix.
 //     issuedAt: number,        // epoch ms — for debugging / logs
 //     expiresAt: number,       // epoch ms — 1 hour from issuedAt
 //   }
@@ -152,25 +169,18 @@ export const getUploadPreferencesToken = onCall(
       );
     }
 
-    // Look up the owner's unlocks. We only care about the
-    // 'watermark-removed' type, but the same query also serves
-    // as proof that the owner exists.
-    const unlocksSnap = await unlocksCol(ownerUid)
-      .where('type', '==', 'watermark-removed')
-      .limit(1)
-      .get();
-
-    const watermarkDisabled = !unlocksSnap.empty;
-
-    // 2026-08-19 — Manus P1.4.a: also compute the entitlement
-    // and surface the storage quota + current usage so the
-    // photo drop can render a real "X MB / Y MB" indicator
-    // instead of the per-photo estimate. The entitlement
-    // resolver is the source of truth for the limit; the
-    // counter on the event doc is the source of truth for
-    // usage. We also seed the quota into the event doc on
-    // first read so the proxy can read it directly without
-    // a second resolver round-trip.
+    // 2026-08-20 — Manus P1.2 audit §4.2: source the
+    // watermark-removed decision from the EVENT entitlement
+    // resolver, NOT a loose user-level unlocks query. The
+    // previous implementation (`unlocksCol.where('type', ...
+    // ).limit(1)`) returned true whenever the user had the
+    // unlock anywhere in their account — which leaked the
+    // preference across events. The resolver already exists
+    // (`computeEntitlement`); we call it below and read
+    // `features.watermarkRemoved`. The eventId is also folded
+    // into the signed claim so the proxy can bind the token
+    // to the request's (ownerUid, eventId) pair before
+    // flipping the watermark off.
     const allUnlocksSnap = await unlocksCol(ownerUid).get();
     const entitlement: EventEntitlement = computeEntitlement(
       ownerUid,
@@ -192,6 +202,7 @@ export const getUploadPreferencesToken = onCall(
         };
       }),
     );
+    const watermarkDisabled = entitlement.features.watermarkRemoved === true;
     const eventData = eventSnap.data() || {};
     const storageUsageBytes = Number.isFinite(eventData.storageUsageBytes)
       ? eventData.storageUsageBytes
@@ -215,7 +226,18 @@ export const getUploadPreferencesToken = onCall(
     const issuedAt = Date.now();
     const expiresAt = issuedAt + TOKEN_TTL_MS;
     const token = signToken(
-      { ownerUid, watermarkDisabled, issuedAt, expiresAt },
+      {
+        ownerUid,
+        // 2026-08-20 — Manus P1.2 audit §4.2: eventId is now
+        // part of the signed claim. The proxy verifies the
+        // request's eventId matches this before honoring
+        // `watermarkDisabled`. Without this binding, the
+        // preference leaked across the owner's events.
+        eventId,
+        watermarkDisabled,
+        issuedAt,
+        expiresAt,
+      },
       getHmacKey(HMAC_KEY.value()),
     );
 

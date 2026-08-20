@@ -208,9 +208,14 @@ vi.hoisted(() => {
 
 const TEST_SECRET = process.env.UPLOAD_PREFERENCES_HMAC_SECRET;
 
-async function mintToken({ ownerUid, watermarkDisabled, expiresAt, secret = TEST_SECRET }) {
+async function mintToken({ ownerUid, eventId = 'ev1', watermarkDisabled, expiresAt, secret = TEST_SECRET }) {
   const issuedAt = Date.now() - 1000;
-  const payload = { ownerUid, watermarkDisabled, issuedAt, expiresAt };
+  // 2026-08-20 — Manus P1.2 audit §4.2: eventId is now part of
+  // the signed claim. The proxy verifies it against the
+  // request's eventId before applying the watermark preference.
+  // Tests that DON'T bind to ev1 (the default) pass an explicit
+  // eventId so we exercise the mismatch path cleanly.
+  const payload = { ownerUid, eventId, watermarkDisabled, issuedAt, expiresAt };
   const json = JSON.stringify(payload);
   const b64 = b64urlEncode(json);
   const sig = await hmacSha256(secret, b64);
@@ -469,10 +474,16 @@ describe('photo-upload proxy — verifyUploadPreferencesToken', () => {
   });
 
   // ---- Existing prefsToken tests (now with auth) ----
+  // 2026-08-20 — Manus P1.2 audit §4.2: the proxy now binds
+  // the token to (ownerUid, eventId). The harness's default
+  // eventId is 'ev1' and the default ownerUid is
+  // DEFAULT_OWNER_UID. Existing tests below use those values
+  // explicitly so the new binding check doesn't trip on a
+  // mismatched ownerUid from a stale test fixture.
 
   it('forwards X-Watermark-Disabled: true when token verifies + flag set', async () => {
     const expiresAt = Date.now() + 60 * 60 * 1000;
-    const token = await mintToken({ ownerUid: 'u1', watermarkDisabled: true, expiresAt });
+    const token = await mintToken({ ownerUid: DEFAULT_OWNER_UID, eventId: 'ev1', watermarkDisabled: true, expiresAt });
     const { res, headersToNas } = await invokeWithPrefsToken({ prefsToken: token });
     expect(res.statusCode).toBe(200);
     expect(headersToNas['X-Watermark-Disabled']).toBe('true');
@@ -494,6 +505,83 @@ describe('photo-upload proxy — verifyUploadPreferencesToken', () => {
     const replacement = lastChar === 'A' ? 'B' : 'A';
     const tampered = `${parts[0]}.${parts[1].slice(0, -1)}${replacement}`;
     const { res, headersToNas } = await invokeWithPrefsToken({ prefsToken: tampered });
+    expect(res.statusCode).toBe(200);
+    expect(headersToNas['X-Watermark-Disabled']).toBeUndefined();
+  });
+
+  // 2026-08-20 — Manus P1.2 audit §4.2: a token minted for
+  // event A must NOT authorize watermark removal on event B.
+  // The signature still verifies (the claim is well-formed and
+  // was signed with the correct secret) — the proxy must
+  // reject because the claim's `eventId` does not match the
+  // request's eventId. Without this, a customer who paid for
+  // watermark removal on event A gets clean uploads on event
+  // B too (which they did NOT pay for).
+  it('does NOT forward X-Watermark-Disabled when token eventId mismatches request eventId (audit §4.2)', async () => {
+    const expiresAt = Date.now() + 60 * 60 * 1000;
+    // Mint the token for event-A, but the upload is for event-B.
+    // ownerUid must match DEFAULT_OWNER_UID so the only
+    // mismatch is the eventId (otherwise the proxy trips on
+    // the ownerUid check first and we don't exercise this path).
+    const token = await mintToken({
+      ownerUid: DEFAULT_OWNER_UID,
+      eventId: 'event-A',
+      watermarkDisabled: true,
+      expiresAt,
+    });
+    // The proxy does its event-membership check BEFORE the
+    // prefs-token check, so we must register event-B as a real
+    // event for DEFAULT_OWNER_UID or we'd 403 on the membership
+    // test, not the binding test. The point of this test is to
+    // exercise the binding logic, not the membership logic.
+    mockState.events.set(
+      `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/events/event-B`,
+      { _ownerUid: DEFAULT_OWNER_UID, coOwners: [], assignedVendorUid: null },
+    );
+    const { res, headersToNas } = await invokeWithPrefsToken({
+      prefsToken: token,
+      eventId: 'event-B',
+    });
+    expect(res.statusCode).toBe(200); // upload still succeeds
+    expect(headersToNas['X-Watermark-Disabled']).toBeUndefined();
+  });
+
+  // 2026-08-20 — Manus P1.2 audit §4.2 parity: when the token
+  // DOES bind to the request's event, the watermark preference
+  // applies. Regression guard against an over-eager fix that
+  // would refuse ALL valid tokens.
+  it('forwards X-Watermark-Disabled when token eventId matches request eventId (audit §4.2 parity)', async () => {
+    const expiresAt = Date.now() + 60 * 60 * 1000;
+    // Mint for ev1 (the default eventId the harness uses).
+    const token = await mintToken({
+      ownerUid: DEFAULT_OWNER_UID,
+      eventId: 'ev1',
+      watermarkDisabled: true,
+      expiresAt,
+    });
+    const { res, headersToNas } = await invokeWithPrefsToken({ prefsToken: token });
+    expect(res.statusCode).toBe(200);
+    expect(headersToNas['X-Watermark-Disabled']).toBe('true');
+  });
+
+  // 2026-08-20 — Manus P1.2 audit §4.2: even if the token
+  // eventId matches, the ownerUid claim must also match the
+  // request's ownerUid. A token minted by some other owner for
+  // THEIR event-A cannot be presented to authorize uploads on
+  // THIS owner's event-A. (Already tested indirectly by the
+  // signature tamper test, but this pins the contract more
+  // explicitly.)
+  it('does NOT forward X-Watermark-Disabled when token ownerUid mismatches request ownerUid (audit §4.2)', async () => {
+    const expiresAt = Date.now() + 60 * 60 * 1000;
+    // Token says ownerUid is 'attacker-uid' but the request's
+    // multipart ownerUid is the default.
+    const token = await mintToken({
+      ownerUid: 'attacker-uid',
+      eventId: 'ev1',
+      watermarkDisabled: true,
+      expiresAt,
+    });
+    const { res, headersToNas } = await invokeWithPrefsToken({ prefsToken: token });
     expect(res.statusCode).toBe(200);
     expect(headersToNas['X-Watermark-Disabled']).toBeUndefined();
   });

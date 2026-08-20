@@ -175,4 +175,109 @@ describe('computeEntitlement (P1.2 policy)', () => {
     expect(e.eventId).toBe('different-event');
     expect(e.ownerUid).toBe('different-owner');
   });
+
+  // ---- 2026-08-20 — Manus P1.1 audit §4.1: eventId filtering.
+  // Each unlock may carry an eventId. Only unlocks whose
+  // eventId matches the requested eventId (or whose eventId
+  // is null — legacy owner-wide) contribute to the entitlement.
+  // A customer who paid for watermark removal on event A must
+  // NOT get it on event B.
+  describe('eventId filtering (audit §4.1)', () => {
+    it('event-scoped unlock applies ONLY to its own event', () => {
+      // Same customer has TWO events. They paid for
+      // watermark removal ONLY on event-A. Event-B has no
+      // unlock.
+      const unlocks = [
+        { type: 'watermark-removed', source: 'paid-payme', eventId: 'event-A', grantedAt: 1 },
+      ];
+      const eA = computeEntitlement('owner-1', 'event-A', unlocks);
+      const eB = computeEntitlement('owner-1', 'event-B', unlocks);
+      expect(eA.features.watermarkRemoved).toBe(true);
+      expect(eB.features.watermarkRemoved).toBe(false);
+    });
+
+    it('legacy owner-wide unlock (eventId null) satisfies ANY event', () => {
+      // Backwards compat: pre-audit unlocks had no eventId.
+      // Those still apply to every event so existing
+      // customers keep their paid features.
+      const unlocks = [
+        { type: 'watermark-removed', source: 'paid-payme', eventId: null, grantedAt: 1 },
+      ];
+      const eA = computeEntitlement('owner-1', 'event-A', unlocks);
+      const eB = computeEntitlement('owner-1', 'event-B', unlocks);
+      expect(eA.features.watermarkRemoved).toBe(true);
+      expect(eB.features.watermarkRemoved).toBe(true);
+    });
+
+    it('mix of legacy (eventId null) + per-event unlocks: legacy satisfies any, per-event only its own', () => {
+      const unlocks = [
+        // Legacy: applies to every event
+        { type: 'custom-template', source: 'social-proof', eventId: null, grantedAt: 1 },
+        // Event-scoped: only event-A
+        { type: 'watermark-removed', source: 'paid-payme', eventId: 'event-A', grantedAt: 2 },
+      ];
+      const eA = computeEntitlement('owner-1', 'event-A', unlocks);
+      const eB = computeEntitlement('owner-1', 'event-B', unlocks);
+      // Both events get custom-template (legacy).
+      expect(eA.features.customInvitation).toBe(true);
+      expect(eB.features.customInvitation).toBe(true);
+      // Only event-A gets watermark-removed.
+      expect(eA.features.watermarkRemoved).toBe(true);
+      expect(eB.features.watermarkRemoved).toBe(false);
+    });
+
+    it('two per-event unlocks of the same type on different events: each only satisfies its own event', () => {
+      // Customer buys watermark-removed TWICE — once for
+      // event-A, once for event-B. Each grant is scoped to
+      // its own event.
+      const unlocks = [
+        { type: 'watermark-removed', source: 'paid-payme', eventId: 'event-A', grantedAt: 1 },
+        { type: 'watermark-removed', source: 'paid-payme', eventId: 'event-B', grantedAt: 2 },
+      ];
+      const eA = computeEntitlement('owner-1', 'event-A', unlocks);
+      const eB = computeEntitlement('owner-1', 'event-B', unlocks);
+      expect(eA.features.watermarkRemoved).toBe(true);
+      expect(eB.features.watermarkRemoved).toBe(true);
+      // A third event with no unlock is unaffected.
+      const eC = computeEntitlement('owner-1', 'event-C', unlocks);
+      expect(eC.features.watermarkRemoved).toBe(false);
+    });
+
+    it('per-event unlock for a different event is NOT counted (storage quota leak guard)', () => {
+      // Customer paid for storage-500mb on event-A. Event-B
+      // should NOT inherit the bonus — its storage limit
+      // must stay at base. This is the audit §5.1 row 5
+      // acceptance scenario ("Free event reaches capacity:
+      // purchased storage raises only that event's server
+      // limit").
+      const unlocks = [
+        { type: 'storage-500mb', source: 'paid-payme', eventId: 'event-A', grantedAt: 1 },
+      ];
+      const eA = computeEntitlement('owner-1', 'event-A', unlocks);
+      const eB = computeEntitlement('owner-1', 'event-B', unlocks);
+      expect(eA.storageLimitBytes).toBe(700 * 1024 * 1024); // 200 base + 500 bonus
+      expect(eB.storageLimitBytes).toBe(200 * 1024 * 1024); // base only
+    });
+
+    it('retentionClass is per-event (lifetime on event-A does NOT make event-B lifetime)', () => {
+      const unlocks = [
+        { type: 'permanent-archive', source: 'paid-payme', eventId: 'event-A', grantedAt: 1 },
+      ];
+      const eA = computeEntitlement('owner-1', 'event-A', unlocks);
+      const eB = computeEntitlement('owner-1', 'event-B', unlocks);
+      expect(eA.retentionClass).toBe('lifetime');
+      expect(eB.retentionClass).toBe('standard');
+    });
+
+    it('source + receiptId are computed from per-event unlocks only (not other events)', () => {
+      const unlocks = [
+        { type: 'watermark-removed', source: 'paid-payme', eventId: 'event-A', paymentId: 'rcpt-A', grantedAt: 1 },
+        { type: 'watermark-removed', source: 'paid-payme', eventId: 'event-B', paymentId: 'rcpt-B', grantedAt: 2 },
+      ];
+      const eA = computeEntitlement('owner-1', 'event-A', unlocks);
+      const eB = computeEntitlement('owner-1', 'event-B', unlocks);
+      expect(eA.receiptId).toBe('rcpt-A');
+      expect(eB.receiptId).toBe('rcpt-B');
+    });
+  });
 });

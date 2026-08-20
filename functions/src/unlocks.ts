@@ -83,6 +83,17 @@ function unlockRef(uid: string, unlockId: string) {
  * /artifacts/{appId}/users/{uid}/unlocks/.
  * Both social-proof path and payment path route through here.
  * Source field tracks which path granted the unlock.
+ *
+ * 2026-08-20 — Manus P1.1 audit §4.1 + §6: grants are now
+ * event-scoped. Each unlock doc carries `eventId`; idempotency
+ * is (uid, type, eventId) so the same customer can purchase
+ * the same feature for multiple events. For backwards compat,
+ * unlocks WITHOUT an eventId (legacy docs written before this
+ * commit) are treated as owner-wide and still satisfy any
+ * event. New unlocks MUST carry eventId — the resolver and
+ * the receipt/proof schemas propagate it. Admin grants
+ * (admin-grant) are intentionally owner-wide and still pass
+ * eventId=null.
  */
 export async function grantUnlock(
   uid: string,
@@ -94,23 +105,41 @@ export async function grantUnlock(
     sourceUrl?: string;   // for social proof: the IG/FB post URL
     referredUid?: string; // for referral: the friend who signed up
     expiresAt?: number | null;
+    // 2026-08-20 — audit §4.1: which event this unlock applies
+    // to. Required for paid + referral unlocks; null for
+    // owner-wide admin-grant. The resolver filters by eventId.
+    eventId?: string | null;
   } = {},
 ): Promise<{ unlockId: string; alreadyGranted: boolean }> {
-  // Idempotency: if an unlock of this type already exists, return early.
-  const existing = await userRef(uid)
+  // Idempotency: scoped to (uid, type, eventId). Owner-wide
+  // legacy unlocks (eventId === null) share the (uid, type)
+  // bucket — first one wins for the whole account. New
+  // event-scoped unlocks have a per-event bucket so the same
+  // type can be granted N times for N events.
+  const existingQuery = userRef(uid)
     .collection('unlocks')
-    .where('type', '==', unlockType)
-    .limit(1)
-    .get();
-  if (!existing.empty) {
-    return { unlockId: existing.docs[0].id, alreadyGranted: true };
+    .where('type', '==', unlockType);
+  // Firestore composite queries need the field present. For
+  // legacy grants (eventId unset) we use a single-field query;
+  // for new grants we add the eventId filter.
+  const existingSnap = extras.eventId
+    ? await existingQuery.where('eventId', '==', extras.eventId).limit(1).get()
+    : await existingQuery.limit(1).get();
+  if (!existingSnap.empty) {
+    return { unlockId: existingSnap.docs[0].id, alreadyGranted: true };
   }
 
-  const unlockId = `${unlockType}-${Date.now()}`;
+  const unlockId = extras.eventId
+    ? `${unlockType}-${extras.eventId}-${Date.now()}`
+    : `${unlockType}-${Date.now()}`;
   const now = FieldValue.serverTimestamp();
   await unlockRef(uid, unlockId).set({
     type: unlockType,
     source,
+    // 2026-08-20 — audit §4.1: persist the eventId so the
+    // resolver can filter by event. Null for legacy/owner-wide
+    // admin-grant unlocks.
+    eventId: extras.eventId ?? null,
     price: extras.price ?? null,
     paymentId: extras.paymentId ?? null,
     sourceUrl: extras.sourceUrl ?? null,
@@ -123,6 +152,12 @@ export async function grantUnlock(
   // user-scoped (across all their events), while events/{eventId}.tier
   // remains a per-event override that admins can still set
   // independently. Idempotent: setting the same field is a no-op.
+  //
+  // 2026-08-20 — audit §4.1: this auto-promotion still fires for
+  // any unlock (event-scoped or owner-wide). That's the
+  // pre-existing behaviour; the tier badge is owner-level by
+  // product intent. Individual features stay event-bound via
+  // the resolver's eventId filter — see entitlementResolver.ts.
   await userRef(uid).set(
     { tier: 'premium', promotedAt: now },
     { merge: true },
@@ -145,13 +180,20 @@ export async function grantUnlock(
  *
  * Note: storage-500mb uses the referral path, not social proof.
  * For backwards compat we accept all three but reject storage-500mb here.
+ *
+ * 2026-08-20 — Manus P1.1 audit §4.1: social proofs now
+ * persist `eventId` so the unlock grant can be bound to one
+ * event. Optional for backwards compat (older submissions
+ * before this commit have no eventId on the proof doc);
+ * adminVerifySocialProof falls back to owner-wide when the
+ * field is missing.
  */
 export const submitSocialProof = onCall(
   { cors: true, region: 'us-central1' },
   async (req) => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const uid = req.auth.uid;
-    const { unlockType, postUrl, caption, screenshotUrl } = req.data as {
+    const { unlockType, postUrl, caption, screenshotUrl, eventId } = req.data as {
       unlockType: UnlockType;
       postUrl: string;
       caption?: string;
@@ -163,6 +205,10 @@ export const submitSocialProof = onCall(
       // Owner+admin can read it (storage.rules gates it). Server-
       // side validation: must be under the user's own folder.
       screenshotUrl?: string;
+      // 2026-08-20 — audit §4.1: which event the proof is for.
+      // Optional; adminVerifySocialProof falls back to
+      // owner-wide when missing.
+      eventId?: string;
     };
 
     // ---- Validation ----
@@ -206,6 +252,11 @@ export const submitSocialProof = onCall(
       postUrl,
       caption: caption || '',
       screenshotUrl: screenshotUrl || null,
+      // 2026-08-20 — audit §4.1: persist eventId so the
+      // grant on approval is bound to this event. Optional
+      // for backwards compat with older submissions; missing
+      // means owner-wide (legacy behaviour).
+      eventId: eventId || null,
       status: 'pending',
       createdAt: FieldValue.serverTimestamp(),
       verifiedAt: null,
@@ -252,8 +303,16 @@ export const adminVerifySocialProof = onCall(
     }
 
     if (decision === 'approve') {
+      // 2026-08-20 — Manus P1.1 audit §4.1: bind the grant
+      // to the proof doc's eventId (if present). Older
+      // proofs without eventId fall through to owner-wide
+      // (legacy behaviour). The resolver and the entitlement
+      // token both honor eventId binding, so a customer who
+      // posts IG for event A cannot get the unlock applied
+      // to event B.
       await grantUnlock(uid, proof.unlockType as UnlockType, 'social-proof', {
         sourceUrl: proof.postUrl,
+        eventId: proof.eventId || null,
       });
 
       await proofRef.update({
@@ -341,7 +400,13 @@ export const claimReferral = onCall(
   async (req) => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
     const uid = req.auth.uid;
-    const { friendUid } = req.data as { friendUid: string };
+    // 2026-08-20 — Manus P1.1 audit §4.1: which event the
+    // referrer wants the bonus applied to. The client passes
+    // its currently-selected eventId; adminVerifyReferral
+    // carries it into grantUnlock. Optional for backwards
+    // compat (legacy claims without eventId fall through to
+    // owner-wide).
+    const { friendUid, eventId } = req.data as { friendUid: string; eventId?: string };
 
     if (!friendUid || typeof friendUid !== 'string') {
       throw new HttpsError('invalid-argument', 'friendUid required.');
@@ -386,6 +451,12 @@ export const claimReferral = onCall(
       friendUid,
       friendName: friendData.displayName || friendData.name || '',
       friendEventCount: eventsSnap.size,
+      // 2026-08-20 — Manus P1.1 audit §4.1: which event the
+      // referrer wants the bonus applied to. The client
+      // passes the currently-selected event; adminVerifyReferral
+      // carries it into grantUnlock. Older claims without
+      // eventId fall through to owner-wide (legacy).
+      eventId: eventId || null,
       status: 'pending',
       createdAt: FieldValue.serverTimestamp(),
       verifiedAt: null,
@@ -438,11 +509,18 @@ export const adminVerifyReferral = onCall(
       // Both grants are idempotent (grantUnlock short-circuits on
       // existing docs of the same type), so this is safe to
       // re-fire on every approval.
+      //
+      // 2026-08-20 — Manus P1.1 audit §4.1: bind both grants
+      // to the claim's eventId (set by submitReferralClaim from
+      // the client's currently-selected event). Legacy claims
+      // without eventId fall through to owner-wide.
       await grantUnlock(uid, 'storage-500mb', 'referral', {
         referredUid: claim.friendUid,
+        eventId: claim.eventId || null,
       });
       await grantUnlock(uid, 'watermark-removed', 'referral', {
         referredUid: claim.friendUid,
+        eventId: claim.eventId || null,
       });
       await claimRef.update({
         status: 'approved',
@@ -650,9 +728,16 @@ export const adminVerifyPayment = onCall(
           : [receipt.unlockType as UnlockType];
 
       for (const t of unlockTypes) {
+        // 2026-08-20 — Manus P1.1 audit §4.1: bind the grant
+        // to the receipt's eventId so the unlock applies
+        // only to that event. Without this, a customer who
+        // paid for watermark removal on event A would get
+        // clean uploads on event B too. The receipt already
+        // carries eventId (line 591 above).
         await grantUnlock(uid, t, `paid-${receipt.paymentMethod}` as any, {
           price: UNLOCK_PRICING[t],
           paymentId: receiptId,
+          eventId: receipt.eventId || null,
         });
       }
 

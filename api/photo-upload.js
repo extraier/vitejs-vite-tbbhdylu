@@ -499,7 +499,24 @@ async function _handler(req, res) {
       UPLOAD_PREFERENCES_HMAC_SECRET,
     );
     if (verified) {
-      if (verified.expiresAt < Date.now()) {
+      // 2026-08-20 — Manus P1.2 audit §4.2: bind the token
+      // to the request's (ownerUid, eventId) pair. The token
+      // is signed with ownerUid + eventId; if either claim
+      // doesn't match what the multipart says it's for, the
+      // watermark preference must NOT apply. Without this,
+      // a token minted for event A (paid) authorized clean
+      // uploads on event B (unpaid).
+      const claimOwnerUid = typeof verified.ownerUid === 'string' ? verified.ownerUid : null;
+      const claimEventId = typeof verified.eventId === 'string' ? verified.eventId : null;
+      if (claimOwnerUid !== ownerUid || claimEventId !== eventId) {
+        log('prefs-mismatched-claim', {
+          ownerUidPrefix: ownerUid.slice(0, 8),
+          eventIdPrefix: eventId.slice(0, 8),
+          claimOwnerUidPrefix: claimOwnerUid ? claimOwnerUid.slice(0, 8) : null,
+          claimEventIdPrefix: claimEventId ? claimEventId.slice(0, 8) : null,
+        });
+        watermarkDisabled = false;
+      } else if (verified.expiresAt < Date.now()) {
         log('prefs-expired', { ownerUidPrefix: ownerUid.slice(0, 8) });
         watermarkDisabled = false;
       } else if (verified.watermarkDisabled === true) {

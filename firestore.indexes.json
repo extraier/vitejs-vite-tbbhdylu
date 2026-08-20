@@ -94,6 +94,15 @@
         { "queryScope": "COLLECTION_GROUP", "order": "ASCENDING" },
         { "queryScope": "COLLECTION", "order": "ASCENDING" }
       ]
+    },
+    {
+      "_comment_unlocks_composite": "2026-08-20 — Manus P1.1 audit §4.1: grantUnlock's idempotency check queries `unlocks` with two equality filters (`type` + `eventId`). Firestore auto-creates single-field indexes but composite equality on two different fields requires an explicit declaration. Without this the first per-event grant attempt will fail with `FAILED_PRECONDITION: The query requires an index` and break the payment approval flow. The real index lives one entry below — this comment is here because Firestore rejects unknown top-level keys.",
+      "collectionGroup": "unlocks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "eventId", "order": "ASCENDING" }
+      ]
     }
   ]
 }

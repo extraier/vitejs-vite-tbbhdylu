@@ -114,6 +114,14 @@ interface UnlockDoc {
   paymentId?: string;
   expiresAt?: number | null;
   grantedAt?: { toMillis?: () => number } | number | null;
+  // 2026-08-20 — Manus P1.1 audit §4.1: per-event unlock
+  // binding. Unlocks written before this commit leave
+  // `eventId` undefined or null — those are legacy
+  // owner-wide grants and the resolver treats them as
+  // satisfying ANY event (backwards compat). New unlocks
+  // carry the eventId they were granted for, and the
+  // resolver excludes them from other events.
+  eventId?: string | null;
 }
 
 // ---- Internal helpers --------------------------------------------------
@@ -161,12 +169,32 @@ function receiptsCol(uid: string) {
  * feature is still true (OR semantics). The source prefers
  * paid > admin-grant > referral > social-proof > none, so a
  * refund is reflected.
+ *
+ * 2026-08-20 — Manus P1.1 audit §4.1: eventId filtering. Each
+ * unlock doc may now carry an `eventId` field. Only unlocks
+ * whose `eventId` matches the requested `eventId`, OR whose
+ * `eventId` is null (legacy owner-wide), contribute to the
+ * entitlement. New event-scoped unlocks (eventId === "X") do
+ * NOT bleed into events "Y" or "Z". This is the per-event
+ * binding the audit requires — a customer who paid for
+ * watermark removal on event A does NOT get it on event B.
  */
 export function computeEntitlement(
   ownerUid: string,
   eventId: string,
   unlocks: Array<UnlockDoc>,
 ): EventEntitlement {
+  // 2026-08-20 — audit §4.1: filter by eventId first. An
+  // unlock with `eventId === null` is legacy/owner-wide and
+  // satisfies ANY event (backwards compat for unlocks
+  // written before this commit). An unlock with
+  // `eventId === eventId` is the event-scoped path. Anything
+  // else is a different event's unlock and is excluded.
+  const relevant = unlocks.filter((u) => {
+    if (u.eventId === undefined || u.eventId === null) return true;
+    return u.eventId === eventId;
+  });
+
   const features = {
     customInvitation: false,
     watermarkRemoved: false,
@@ -178,7 +206,7 @@ export function computeEntitlement(
   let mostRecentPaidAt = 0;
   let source: EventEntitlement['source'] = 'none';
 
-  for (const u of unlocks) {
+  for (const u of relevant) {
     const grantedAt = typeof u.grantedAt === 'number'
       ? u.grantedAt
       : u.grantedAt?.toMillis?.() ?? 0;
@@ -292,6 +320,9 @@ async function resolveEntitlement(
     paymentId: d.data().paymentId,
     expiresAt: d.data().expiresAt,
     grantedAt: d.data().grantedAt,
+    // 2026-08-20 — audit §4.1: read eventId from the doc so
+    // computeEntitlement can filter by event.
+    eventId: d.data().eventId ?? null,
   }));
 
   return computeEntitlement(ownerUid, eventId, unlocks);
