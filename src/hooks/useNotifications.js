@@ -51,7 +51,16 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   collection,
   doc,
-  FieldValue,
+  // 2026-08-20 — Bug fix: FieldValue.serverTimestamp() is undefined.
+  // The modular firebase/firestore SDK exports `serverTimestamp` as its
+  // own named symbol, not as a method on FieldValue (FieldValue is a
+  // class for sentinel values). Importing `FieldValue` and calling
+  // `.serverTimestamp()` on it throws `Si.serverTimestamp is not a
+  // function`, which silently broke per-item mark-read on the bell
+  // (see /Users/roger/Downloads/savetheday.io-1787158581672.log for the
+  // user-reported symptom: clicking a notification item did nothing and
+  // 全部已讀 did nothing). Use the named export.
+  serverTimestamp,
   onSnapshot,
   query,
   where,
@@ -254,7 +263,9 @@ export async function markCommentAlertsRead(selfUid, alerts, eventId) {
       'notifications',
       a.id,
     );
-    batch.update(ref, { readAt: FieldValue.serverTimestamp() });
+    // 2026-08-20 — was FieldValue.serverTimestamp(), which is undefined
+    // in the modular firebase/firestore SDK. See comment on the import.
+    batch.update(ref, { readAt: serverTimestamp() });
   }
   // Also bump the localStorage hydration gate so subsequent
   // cold starts don't suddenly show historical alerts as unread

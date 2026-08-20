@@ -26,6 +26,7 @@ vi.mock('firebase/firestore', () => ({
   collection: vi.fn((...args) => ({ __isCollection: true, args })),
   doc: vi.fn((...args) => ({ __isDoc: true, args })),
   FieldValue: { serverTimestamp: () => ({ __isServerTimestamp: true }) },
+  serverTimestamp: () => ({ __isServerTimestamp: true }), // 2026-08-20 — see useNotifications.js import comment
   limit: vi.fn((n) => ({ __isLimit: true, n })),
   where: vi.fn((...args) => ({ __isWhere: true, args })),
   query: vi.fn((...args) => ({ __isQuery: true, args })),

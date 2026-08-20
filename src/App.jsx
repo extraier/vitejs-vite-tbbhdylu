@@ -908,6 +908,14 @@ export default function App() {
   // row into view (with a brief ring highlight).
   const [focusedParentId, setFocusedParentId] = useState(null);
   const [focusedParentKind, setFocusedParentKind] = useState(null);
+  // 2026-08-20 — Manus: deep-link to the exact comment that triggered
+  // the bell alert. Previously the bell click only scrolled to the
+  // parent row (e.g. 大日流程 entry), but the user still had to
+  // hunt within the comments thread to find which comment was new.
+  // Now we capture the alert doc's `commentId` and pass it down so
+  // <ItemComments> scrolls + highlights the specific comment.
+  // Cleared on the same navigate-away guard as the row-level focus.
+  const [focusedCommentId, setFocusedCommentId] = useState(null);
   // 2026-08-17 — Manus A8: clear the focused-parent pointer when
   // the user navigates AWAY from `wedding-day`. This prevents a
   // stale focus from re-firing if they return later, AND lets a
@@ -919,6 +927,12 @@ export default function App() {
     if (currentView !== 'wedding-day') {
       setFocusedParentId(null);
       setFocusedParentKind(null);
+      // 2026-08-20 — see focusedCommentId declaration. Clear the
+      // comment-level focus on navigate-away so a returning user
+      // doesn't see a stale highlight or have a second click on the
+      // same alert fail to re-focus (same null-out trick as the
+      // parent-level focus).
+      setFocusedCommentId(null);
     }
   }, [currentView]);
 
@@ -3758,6 +3772,11 @@ export default function App() {
                             setFocusedParentKind(null);
                             setFocusedParentId(null);
                           }
+                          // 2026-08-20 — Manus: also seed the
+                          // comment-level focus so <ItemComments> can
+                          // scroll to the exact comment that triggered
+                          // the alert (not just the parent row).
+                          setFocusedCommentId(meta?.commentId || null);
                           // Step 16: role-aware routing. Owner -> Big Day;
                           // vendor / helper -> their own dashboards. The
                           // dashboards honour focusedParent* as of
@@ -3890,6 +3909,9 @@ export default function App() {
                       setFocusedParentKind(null);
                       setFocusedParentId(null);
                     }
+                    // 2026-08-20 — comment-level focus (see owner
+                    // header handler above for full context).
+                    setFocusedCommentId(meta?.commentId || null);
                     setCurrentView(
                       userRole === 'vendor' ? 'vendor-dashboard' : 'helper-dashboard',
                     );
@@ -4313,6 +4335,14 @@ export default function App() {
                 // rundown / resources row into view with a brief ring.
                 focusedParentId={focusedParentId}
                 focusedParentKind={focusedParentKind}
+                // 2026-08-20 — comment-level deep-link (see
+                // focusedCommentId state declaration). Wired only
+                // to <WeddingDay> for now because the bell's
+                // recipient-side flow runs through the owner's
+                // Big Day view; the vendor/helper paths can be
+                // added when their dashboards grow a scroll-to-
+                // comment effect (out of scope for this bugfix).
+                focusedCommentId={focusedCommentId}
               />
             )}
 

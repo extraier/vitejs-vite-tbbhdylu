@@ -962,6 +962,13 @@ function RundownCard({
             label="大日流程留言"
             parentAssignedVendorUid={entry?.assignedVendorUid || null}
             parentAssignedHelperUid={entry?.assignedHelperUid || null}
+            // 2026-08-20 — Manus: comment-level deep-link (see
+            // App.jsx focusedCommentId). Only forward when the
+            // current focused parent kind is 'rundown' so a
+            // resources-panel ItemComments doesn't try to scroll
+            // the same comment into view (would race with the
+            // rundown panel's effect).
+            focusedCommentId={focusedParentKind === 'rundown' ? focusedCommentId : null}
           />
         </div>
       )}
@@ -1495,6 +1502,8 @@ function ResourcesTab({
                             label="物資留言"
                             parentAssignedVendorUid={item.assignedVendorUid || null}
                             parentAssignedHelperUid={item.assignedHelperUid || null}
+                            // 2026-08-20 — see rundown block above.
+                            focusedCommentId={focusedParentKind === 'resources' ? focusedCommentId : null}
                           />
                         </div>
                       )}
@@ -1585,6 +1594,8 @@ function ResourcesTab({
                       label="物資留言"
                       parentAssignedVendorUid={item.assignedVendorUid || null}
                       parentAssignedHelperUid={item.assignedHelperUid || null}
+                      // 2026-08-20 — see rundown block above.
+                      focusedCommentId={focusedParentKind === 'resources' ? focusedCommentId : null}
                     />
                   </div>
                 )}
@@ -3359,6 +3370,12 @@ export function WeddingDay({
   // Optional; default no-op keeps existing callers untouched.
   focusedParentId = null,
   focusedParentKind = null,
+  // 2026-08-20 — Manus: deep-link to the exact comment that
+  // triggered the bell alert. Forwarded to each rendered
+  // <ItemComments> for this kind so the matching comment scrolls
+  // + highlights. Optional; default no-op keeps existing callers
+  // untouched.
+  focusedCommentId = null,
 }) {
   const [active, setActive] = useState('rundown');
 

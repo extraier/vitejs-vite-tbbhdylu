@@ -84,6 +84,21 @@ export function ItemComments({
   // long note above the addDoc() call for why this is needed.
   parentAssignedVendorUid = null,
   parentAssignedHelperUid = null,
+  // 2026-08-20 — Manus: deep-link to the exact comment that
+  // triggered a bell alert. When the user clicks an alert in the
+  // header, App.jsx captures the alert's `commentId` and passes
+  // it down via focusedCommentId. This component scrolls the
+  // matching comment into view (inside its scrollable list) and
+  // briefly applies a ring highlight so the user lands on the
+  // right message without hunting through the thread.
+  //
+  // Why not done via parent scrollIntoView: <WeddingDay>'s row-
+  // level focus scrolls the parent row into the viewport, but
+  // the comments list inside it has its own overflow-y scroll
+  // (max-h-48). The matching comment might be far below the
+  // list's viewport even after the parent is in view. So this
+  // component handles its own internal scroll.
+  focusedCommentId = null,
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -128,6 +143,54 @@ export function ItemComments({
     }
     prevCountRef.current = sorted.length;
   }, [sorted]);
+
+  // 2026-08-20 — Manus: bell-alert deep-link. When `focusedCommentId`
+  // is set, scroll the matching comment inside this list into view
+  // and briefly highlight it. Retries for a few ticks because the
+  // comments snapshot may not have arrived yet (Firestore listener
+  // first-fire latency on cold open). Mirrors the CSS.escape guard
+  // pattern from <WeddingDay>'s row-focus effect: jsdom (vitest)
+  // doesn't polyfill CSS.escape, so we fall back to a regex that
+  // handles the common Firestore doc-id charset (alphanumeric + -_).
+  useEffect(() => {
+    if (!focusedCommentId || !listRef.current) return;
+    const id = focusedCommentId;
+    const attempt = (tries = 8) => {
+      const safeId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(id)
+        : String(id).replace(/([^\w-])/g, '\\$1');
+      const el = listRef.current?.querySelector(`[data-comment-id="${safeId}"]`);
+      if (el && listRef.current) {
+        // Use scrollIntoView on the list-scoped element. The list has
+        // its own overflow-y; scrollIntoView walks up to find the
+        // nearest scrollable ancestor (the list itself) and aligns
+        // the element within it. block:'center' keeps the comment
+        // comfortably visible even if the thread is short.
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Ring + tinted bg so the user lands on the right comment
+        // without hunting. Compose with the existing comment bubble
+        // styles via Tailwind utility classes; remove after a
+        // generous timeout so the highlight doesn't linger forever.
+        el.classList.add(
+          'ring-2', 'ring-rose-400', 'ring-offset-1',
+          'bg-rose-50', 'rounded-lg',
+        );
+        setTimeout(() => {
+          el.classList.remove(
+            'ring-2', 'ring-rose-400', 'ring-offset-1',
+            'bg-rose-50', 'rounded-lg',
+          );
+        }, 3000);
+        return;
+      }
+      // Snapshot hasn't delivered yet (first-fire latency, or the
+      // panel just opened). Retry; bail after ~8 tries (~640ms).
+      if (tries > 0) setTimeout(() => attempt(tries - 1), 80);
+    };
+    // Initial delay to let the snapshot first-fire commit + paint.
+    const t = setTimeout(() => attempt(8), 80);
+    return () => clearTimeout(t);
+  }, [focusedCommentId, sorted.length]);
 
   const handleSend = async (e) => {
     if (e) e.preventDefault();
@@ -292,7 +355,11 @@ export function ItemComments({
           <div className="text-xs text-slate-400 text-center py-3">{emptyHint}</div>
         )}
         {sorted.map((c) => (
-          <div key={c.id} className="flex items-start gap-2">
+          // 2026-08-20 — Manus: data-comment-id lets the bell-
+          // alert deep-link scroll the exact comment into view
+          // (see focusedCommentId effect above). Was previously
+          // a bare div with no stable hook.
+          <div key={c.id} data-comment-id={c.id} className="flex items-start gap-2">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 mb-0.5">
                 <span

@@ -107,6 +107,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
     collection: vi.fn((...args) => ({ __isCollection: true, args })),
     doc: docMock,
     FieldValue: { serverTimestamp: () => ({ __isServerTimestamp: true }) },
+    serverTimestamp: () => ({ __isServerTimestamp: true }), // 2026-08-20 — see useNotifications.js import comment
     limit: vi.fn((n) => ({ __isLimit: true, n })),
     // 2026-08-17 — re-add `where` (accidentally dropped in the A10
     // mock rewrite). The existing proposal + comment tests assert
