@@ -50,7 +50,7 @@
 // Empty state:
 //   - "✨ 暫時無新通知"
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bell, Check, ExternalLink, Loader2, X } from 'lucide-react';
 // 2026-08-17 — Manus step 17: animated bell badge. Count tweens
 // up/down between renders instead of snapping. Lives in /hooks
@@ -109,6 +109,13 @@ export function BellNotifications({
   // user to open the dropdown). App.jsx passes false for
   // reception / guest_portal roles that have no inbox.
   enabled: enabledProp = true,
+  // 2026-08-20 — Manus bell observability (audit §vendor-bell):
+  // diagnostic transport. The bell emits structured triage
+  // signals at four points (private-inbox-state, private-inbox-error,
+  // item-click, item-click-failed, per-item-mark-read-failed).
+  // Caller decides where to ship — App.jsx console.error's only.
+  diagnosticRole = null,
+  onDiagnostic,
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
@@ -120,6 +127,10 @@ export function BellNotifications({
   // stays subscribed while the badge itself is non-zero — without the
   // circular destructure.
   const [liveTotalNew, setLiveTotalNew] = useState(0);
+  // 2026-08-20 — Manus: visible feedback when an item-click
+  // throws. Rendered at the top of the dropdown body, alongside
+  // the existing source-error banner.
+  const [interactionError, setInteractionError] = useState(null);
   // 2026-08-09 — localSeenTick forces an immediate re-render when the
   // user clicks 全部已讀. The hook also dispatches a window event for
   // the same purpose (so other open panels stay in sync), but the
@@ -128,6 +139,31 @@ export function BellNotifications({
   // The local state update is synchronous, so the badge clears on
   // the very next render no matter what.
   const [localSeenTick, setLocalSeenTick] = useState(0);
+  // 2026-08-20 — Manus bell observability (audit §vendor-bell).
+  // emitDiagnostic: structured triage signal for the bell's four
+  // failure modes (private-inbox error, item-click exception,
+  // per-item mark-read failure). Always fires the optional
+  // onDiagnostic callback if the parent provided one; we never
+  // throw inside the bell on missing callbacks.
+  const emitDiagnostic = useCallback(
+    (stage, extra = {}, error = null) => {
+      const diagnostic = {
+        area: 'vendor-notification-bell',
+        stage,
+        at: new Date().toISOString(),
+        uid: selfUid || null,
+        role: diagnosticRole || null,
+        ...extra,
+        // Error is its own field; keep it last so it doesn't
+        // collide with `extra` keys.
+        ...(error
+          ? { errorMessage: String(error?.message || error).slice(0, 240) }
+          : null),
+      };
+      if (typeof onDiagnostic === 'function') onDiagnostic(diagnostic);
+    },
+    [selfUid, diagnosticRole, onDiagnostic],
+  );
   const { items, badges, totalNew, loading, errors, commentAlerts } = useNotifications({
     ownerUid,
     coupleUid,
@@ -238,57 +274,95 @@ export function BellNotifications({
   };
 
   const handleItemClick = (item) => {
-    setOpen(false);
+    // 2026-08-20 — Manus bell observability (audit §vendor-bell):
+    // React error boundaries DO NOT catch event-handler exceptions,
+    // so handleItemClick must wrap its own try/catch. Failure
+    // mode: a thrown navigation handler (e.g. a downstream
+    // callback that reads a now-stale currentEvent) would otherwise
+    // surface as a raw exception to the browser console + leave
+    // the bell open without feedback.
     if (!item) return;
-    // 2026-08-17 — Manus step 16: per-item mark-as-read. When the
-    // user clicks a `comment`-category bell item that is still
-    // unread, optimistically update Firestore so the badge drops
-    // on this device + every other device the user has open.
-    //
-    // For non-comment categories (proposal / task / invite) the
-    // mark-all-seen model still applies — there's no per-doc
-    // readAt to set. Clicking those just navigates.
-    if (
-      item.category === 'comment' &&
-      !item.readAt &&
-      item.alertDocId &&
-      selfUid
-    ) {
-      // Fire-and-forget: the Firestore snapshot will catch up on
-      // its own and the localStorage hydration gate is bumped
-      // inside markCommentAlertsRead for cold-start safety. We
-      // don't await here so the navigation feels instant.
-      markCommentAlertsRead(selfUid, [{ id: item.alertDocId }], eventId).catch(
-        (err) => {
-          // eslint-disable-next-line no-console
-          console.warn('[BellNotifications] per-item mark-read failed', err?.message);
-        },
+    setOpen(false);
+    setInteractionError(null);
+    try {
+      // 2026-08-20 — Manus bell observability: item-click success
+      // signal. We emit BEFORE the side effects so a downstream
+      // throw still produces a paired `item-click` + `item-click-failed`
+      // pair for triage (otherwise we'd only see the failure).
+      emitDiagnostic('item-click', {
+        category: item.category || null,
+        alertDocId: item.alertDocId || null,
+        parentId: item.meta?.parentId || null,
+        commentId: item.meta?.commentId || null,
+      });
+      // 2026-08-17 — Manus step 16: per-item mark-as-read. When the
+      // user clicks a `comment`-category bell item that is still
+      // unread, optimistically update Firestore so the badge drops
+      // on this device + every other device the user has open.
+      //
+      // For non-comment categories (proposal / task / invite) the
+      // mark-all-seen model still applies — there's no per-doc
+      // readAt to set. Clicking those just navigates.
+      if (
+        item.category === 'comment' &&
+        !item.readAt &&
+        item.alertDocId &&
+        selfUid
+      ) {
+        // Fire-and-forget: the Firestore snapshot will catch up on
+        // its own and the localStorage hydration gate is bumped
+        // inside markCommentAlertsRead for cold-start safety. We
+        // don't await here so the navigation feels instant.
+        markCommentAlertsRead(selfUid, [{ id: item.alertDocId }], eventId).catch(
+          (err) => {
+            // 2026-08-20 — Manus: route through emitDiagnostic so
+            // triage sees both the success item-click and this
+            // follow-up failure in one stream.
+            emitDiagnostic(
+              'per-item-mark-read-failed',
+              { alertDocId: item.alertDocId || null },
+              err,
+            );
+          },
+        );
+      }
+      switch (item.category) {
+        case 'proposal':
+          if (item.href?.jobId && onOpenProposal) onOpenProposal(item.href.jobId);
+          break;
+        case 'task':
+          if (onOpenComment) onOpenComment(item.meta);
+          break;
+        // 2026-08-17 — Vendor / helper comment on 大日流程 / 物資.
+        // Routes to the Big Day view (wedding-day) instead of the
+        // checklist because rundown / resource comments live there.
+        // Also seeds focusedParent* for A8 deep-link.
+        case 'comment':
+          // 2026-08-17 — Manus step 16: prefer onOpenCommentAlert if
+          // provided (deep-links to wedding-day + scrolls). Fall
+          // back to onOpenComment for callers that haven't migrated
+          // to the alert handler yet.
+          if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
+          else if (onOpenComment) onOpenComment(item.meta);
+          break;
+        case 'invite':
+          if (onOpenInvite) onOpenInvite(item.meta);
+          break;
+        default:
+          break;
+      }
+    } catch (error) {
+      // 2026-08-20 — Manus: catch + show user-visible fallback.
+      // Re-open the dropdown so the user can try again; emit a
+      // paired item-click-failed diagnostic with the original
+      // error message (truncated to 240 chars for triage safety).
+      setInteractionError('未能打開通知，請再試一次。');
+      setOpen(true);
+      emitDiagnostic(
+        'item-click-failed',
+        { category: item?.category || null, alertDocId: item?.alertDocId || null },
+        error,
       );
-    }
-    switch (item.category) {
-      case 'proposal':
-        if (item.href?.jobId && onOpenProposal) onOpenProposal(item.href.jobId);
-        break;
-      case 'task':
-        if (onOpenComment) onOpenComment(item.meta);
-        break;
-      // 2026-08-17 — Vendor / helper comment on 大日流程 / 物資.
-      // Routes to the Big Day view (wedding-day) instead of the
-      // checklist because rundown / resource comments live there.
-      // Also seeds focusedParent* for A8 deep-link.
-      case 'comment':
-        // 2026-08-17 — Manus step 16: prefer onOpenCommentAlert if
-        // provided (deep-links to wedding-day + scrolls). Fall
-        // back to onOpenComment for callers that haven't migrated
-        // to the alert handler yet.
-        if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
-        else if (onOpenComment) onOpenComment(item.meta);
-        break;
-      case 'invite':
-        if (onOpenInvite) onOpenInvite(item.meta);
-        break;
-      default:
-        break;
     }
   };
 
@@ -311,6 +385,25 @@ export function BellNotifications({
     );
   };
 
+  // 2026-08-20 — Manus bell observability: emit a private-inbox
+  // signal on every render where errors.comment is set, so triage
+  // can correlate a permission-denied inbox with the surrounding
+  // bell state.
+  if (diagnosticRole === 'vendor') {
+    if (errors?.comment) {
+      emitDiagnostic(
+        'private-inbox-error',
+        {},
+        new Error(errors.comment),
+      );
+    } else {
+      emitDiagnostic('private-inbox-state', {
+        alertCount: commentAlerts.length,
+        unreadCount: totalNew,
+        loading: Boolean(loading),
+      });
+    }
+  }
   const proposalCount = items.filter((i) => i.category === 'proposal').length;
   // 2026-08-09 — bell dropdown truncates to MAX_BELL_DROPDOWN_ITEMS (20)
   // for visual density. The full notifications-center view shows every
@@ -367,6 +460,16 @@ export function BellNotifications({
           aria-label="通知"
           className="absolute right-0 mt-2 w-[22rem] sm:w-[26rem] bg-white rounded-2xl shadow-2xl border border-slate-200 z-[150] overflow-hidden"
         >
+          {/* 2026-08-20 — Manus: event-handler failure banner.
+              Visible only when handleItemClick catches an exception. */}
+          {interactionError && (
+            <div
+              role="alert"
+              className="px-4 py-3 text-center text-xs text-rose-700 border-b border-rose-100 bg-rose-50"
+            >
+              {interactionError}
+            </div>
+          )}
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-gradient-to-br from-rose-50/60 to-white">
             <div className="flex items-center gap-2">

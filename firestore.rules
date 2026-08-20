@@ -129,10 +129,21 @@ match /{path=**}/events/{eventId} {
         // so the only safe read pattern is to gate on
         // assignedVendorUid / assignedHelperUid matching the caller.
         // The owner's own per-event subscription covers their reads.
+        // 2026-08-20 — Manus bell observability (audit §vendor-bell):
+        // keys().hasAll([...]) + `is string` guards make the rule
+        // deny-on-malformed. A task without assignedVendorUid or
+        // assignedHelperUid (deleted fields, schema migration,
+        // historical doc) no longer crashes the vendor's
+        // collectionGroup subscription — it just denies, so the
+        // vendor dashboard stays responsive.
         match /{path=**}/tasks/{taskId} {
           allow read: if isSignedIn() && (
-            request.auth.uid == resource.data.assignedVendorUid
-            || request.auth.uid == resource.data.assignedHelperUid
+            (resource.data.keys().hasAll(['assignedVendorUid'])
+              && resource.data.assignedVendorUid is string
+              && resource.data.assignedVendorUid == request.auth.uid)
+            || (resource.data.keys().hasAll(['assignedHelperUid'])
+              && resource.data.assignedHelperUid is string
+              && resource.data.assignedHelperUid == request.auth.uid)
           );
         }
 
@@ -145,15 +156,18 @@ match /{path=**}/events/{eventId} {
         // apply to per-doc get(), not collectionGroup. Same shape as
         // the /tasks collectionGroup rule above: per-doc writes
         // remain owner-scoped at the nested rule.
+        // 2026-08-20 — same deny-on-malformed guard as /tasks above.
         match /{path=**}/rundown/{entryId} {
-          allow read: if isSignedIn() && (
-            request.auth.uid == resource.data.assignedVendorUid
-          );
+          allow read: if isSignedIn()
+            && resource.data.keys().hasAll(['assignedVendorUid'])
+            && resource.data.assignedVendorUid is string
+            && resource.data.assignedVendorUid == request.auth.uid;
         }
         match /{path=**}/resources/{itemId} {
-          allow read: if isSignedIn() && (
-            request.auth.uid == resource.data.assignedVendorUid
-          );
+          allow read: if isSignedIn()
+            && resource.data.keys().hasAll(['assignedVendorUid'])
+            && resource.data.assignedVendorUid is string
+            && resource.data.assignedVendorUid == request.auth.uid;
         }
 
         // 2026-08-09 — collectionGroup FIX for task comments. The
@@ -786,9 +800,22 @@ match /{path=**}/events/{eventId} {
           // token can never reach the assignedVendorUid branch when
           // isOwnerOrAnyCoOwner is first because
           // isCoOwnerOfEventDoc(ownerUid) throws on get(eventDoc).
+          // 2026-08-20 — Manus bell observability (audit §vendor-bell):
+          // vendor + helper branches gated with keys().hasAll([...])
+          // + `is string` so a malformed task (missing or
+          // non-string assignedVendorUid/assignedHelperUid) denies
+          // cleanly instead of evaluating `auth.uid == null` and
+          // poisoning the collectionGroup subscription. Owner /
+          // co-owner / helper-perm branches kept as-is.
           match /tasks/{taskId} {
-            allow read: if (isSignedIn() && request.auth.uid == resource.data.assignedVendorUid)
-              || (isSignedIn() && request.auth.uid == resource.data.assignedHelperUid)
+            allow read: if (isSignedIn()
+                && resource.data.keys().hasAll(['assignedVendorUid'])
+                && resource.data.assignedVendorUid is string
+                && request.auth.uid == resource.data.assignedVendorUid)
+              || (isSignedIn()
+                && resource.data.keys().hasAll(['assignedHelperUid'])
+                && resource.data.assignedHelperUid is string
+                && request.auth.uid == resource.data.assignedHelperUid)
               || isOwnerOrAnyCoOwner(ownerUid)
               || hasHelperPerm(ownerUid, 'canViewChecklist');
             allow create, delete: if isOwnerOrAnyCoOwner(ownerUid);

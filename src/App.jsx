@@ -148,6 +148,11 @@ import { MyVendorsPanel } from './components/MyVendorsPanel';
 import { ProposalsModal } from './components/modals/ProposalsModal';
 import { SubmitProposalModal } from './components/modals/SubmitProposalModal';
 import { BellNotifications } from './components/BellNotifications';
+// 2026-08-20 — Manus bell observability (audit §vendor-bell):
+// wraps the header bell in a render-error boundary so a single
+// crash falls back to a retryable warning button instead of
+// removing the bell entirely.
+import { VendorBellErrorBoundary } from './components/VendorBellErrorBoundary';
 import { NotificationsCenter } from './components/NotificationsCenter';
 import { markProposalsSeenExact } from './hooks/useProposalBell';
 import { InviteModal } from './components/modals/InviteModal';
@@ -1101,6 +1106,16 @@ export default function App() {
     [bellPropsSkeleton, dataOwnerUid],
   );
 
+  // 2026-08-20 — Manus bell observability (audit §vendor-bell):
+  // diagnostic callback for the bell error boundary. The bell
+  // emit is fire-and-forget — console.error only. We DO NOT
+  // attach notification text, invite tokens, or raw Firestore
+  // docs to the diagnostic payload; triage signal only.
+  const handleBellDiagnostic = useCallback((diagnostic) => {
+    // eslint-disable-next-line no-console
+    console.error('[vendor-bell] diagnostic', diagnostic);
+  }, []);
+
   // 2026-08-09 — Comment-path resolvers for <ItemComments/>. The
   // component takes a Firestore CollectionReference and subscribes
   // via onSnapshot, so we MUST return the actual `collection(db, ...)`
@@ -1535,11 +1550,30 @@ export default function App() {
              setAssignedTasks(list);
            },
            (err) => {
+             // 2026-08-20 — Manus bell observability (audit §vendor-bell):
+             // classify the error code so the log label matches the
+             // actual failure. The previous "(likely missing index)"
+             // message was misleading when the real cause was a
+             // permission-denied from a malformed task doc — which
+             // is the production incident this whole handoff fixes.
              // eslint-disable-next-line no-console
-             console.warn(
-               'assignedTasks subscribe failed (likely missing index):',
-               err?.message,
-             );
+             const code = err?.code || '';
+             if (code === 'permission-denied') {
+               console.warn(
+                 '[vendor-bell] assignedTasks subscribe denied — malformed or unassigned task doc; firestore rules now deny-on-malformed. Detail:',
+                 err?.message,
+               );
+             } else if (code === 'failed-precondition') {
+               console.warn(
+                 '[vendor-bell] assignedTasks subscribe missing composite index (firestore.indexes.json):',
+                 err?.message,
+               );
+             } else {
+               console.warn(
+                 '[vendor-bell] assignedTasks subscribe failed:',
+                 err?.message,
+               );
+             }
            },
          );
          if (cancelled) unsub();
@@ -3762,12 +3796,29 @@ export default function App() {
                         Reception + guest_portal are excluded — those roles
                         are short-lived or single-purpose (no inbox needed). */}
                     {bellEligibleRole && (
-                      <BellNotifications
-                        ownerUid={bellProps.ownerUid}
-                        coupleUid={bellProps.coupleUid}
-                        selfUid={bellProps.selfUid}
-                        eventId={bellProps.eventId}
-                        enabled={bellProps.enabled}
+                      // 2026-08-20 — Manus bell observability
+                      // (audit §vendor-bell): wraps the header bell
+                      // so a render exception produces a retryable
+                      // warning button instead of removing the bell
+                      // entirely. resetKey forces a fresh mount
+                      // whenever the user/role/enabled triplet
+                      // changes — typical of navigating between
+                      // owner/vendor dashboards.
+                      <VendorBellErrorBoundary
+                        resetKey={`${user?.uid || 'signed-out'}:${userRole}:${bellProps.enabled}`}
+                        context={{
+                          selfUid: user?.uid || null,
+                          role: userRole,
+                          enabled: bellProps.enabled,
+                        }}
+                        onDiagnostic={handleBellDiagnostic}
+                      >
+                        <BellNotifications
+                          ownerUid={bellProps.ownerUid}
+                          coupleUid={bellProps.coupleUid}
+                          selfUid={bellProps.selfUid}
+                          eventId={bellProps.eventId}
+                          enabled={bellProps.enabled}
                         onOpenProposal={(jobId) => setViewingProposals(jobId)}
                         onOpenComment={(meta) => {
                           // 2026-08-09 — bell notification click: scroll
@@ -3842,9 +3893,12 @@ export default function App() {
                           setFocusedTaskId(meta?.taskId || null);
                           setCurrentView('couple-checklist');
                         }}
-                        onOpenInvite={() => setCurrentView('helpers')}
-                        onOpenDashboard={() => setCurrentView('notifications-center')}
-                      />
+                          onOpenInvite={() => setCurrentView('helpers')}
+                          onOpenDashboard={() => setCurrentView('notifications-center')}
+                          diagnosticRole={userRole}
+                          onDiagnostic={handleBellDiagnostic}
+                        />
+                      </VendorBellErrorBoundary>
                     )}
                     {(userRole === 'owner' || userRole === 'vendor') && (
                       <button
