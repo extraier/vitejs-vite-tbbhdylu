@@ -17,8 +17,14 @@ import { VendorDashboard } from './VendorDashboard';
 
 // Stub the heavy comment thread + analytics panels so the focus
 // effect can mount without dragging in Firestore / Recharts.
+// Capture the ItemComments props so the comment-level deep-link
+// tests (2026-08-20) can assert what was forwarded.
+const itemCommentsProps = { current: [] };
 vi.mock('../components/ItemComments', () => ({
-  ItemComments: () => <div data-testid="item-comments-stub" />,
+  ItemComments: (props) => {
+    itemCommentsProps.current.push(props);
+    return <div data-testid="item-comments-stub" />;
+  },
 }));
 vi.mock('../components/VendorPortfolioAnalytics', () => ({
   VendorPortfolioAnalytics: () => null,
@@ -344,4 +350,106 @@ describe('VendorDashboard — A8 bell-click deep-link focus', () => {
     expect(rows.length).toBe(1);
     expect(rows[0].getAttribute('data-row-kind')).toBe('');
   });
+
+  // 2026-08-20 — Manus: comment-level deep-link tests. The bell-
+    // alert handler in App.jsx captures meta.commentId and passes it
+    // down as focusedCommentId. The vendor's <ItemComments> panel
+    // (mounted inside the expanded row) must receive this prop so
+    // it can scrollIntoView the matching comment.
+    //
+    // Test fixtures use object-form commentPath ({ __segments: [...] })
+    // rather than Firestore CollectionReferences, so we match by the
+    // __segments content rather than by .path.
+    const findICForItemId = (id) =>
+      itemCommentsProps.current.find((p) => {
+        const segs = p.path?.__segments || [];
+        return segs.includes(id);
+      });
+
+    it('forwards focusedCommentId to <ItemComments> on the matching row', async () => {
+      itemCommentsProps.current.length = 0;
+      render(
+        <VendorDashboard
+          {...baseProps}
+          assignedRundown={rundownFixture}
+          focusedParentId="rd-99"
+          focusedParentKind="rundown"
+          focusedCommentId="cmt-alert-1"
+        />,
+      );
+      await waitFor(() => {
+        expect(itemCommentsProps.current.length).toBeGreaterThan(0);
+      });
+      const icForRd99 = findICForItemId('rd-99');
+      expect(icForRd99).toBeDefined();
+      expect(icForRd99.focusedCommentId).toBe('cmt-alert-1');
+    });
+
+    it('does NOT pass focusedCommentId to non-matching rows', async () => {
+      itemCommentsProps.current.length = 0;
+      // Render with focusedParentId=rd-99 — only that row mounts
+      // <ItemComments> (because forceExpanded is true only for the
+      // match), so the assertion is straightforward: confirm the
+      // matching row got the prop, then re-render with a different
+      // match and confirm the previous match's panel gets null on
+      // re-render.
+      const { rerender } = render(
+        <VendorDashboard
+          {...baseProps}
+          assignedRundown={rundownFixture}
+          focusedParentId="rd-99"
+          focusedParentKind="rundown"
+          focusedCommentId="cmt-alert-1"
+        />,
+      );
+      await waitFor(() => {
+        expect(itemCommentsProps.current.length).toBeGreaterThan(0);
+      });
+      const icForRd99 = findICForItemId('rd-99');
+      expect(icForRd99?.focusedCommentId).toBe('cmt-alert-1');
+      // Other mounted panels (from non-matching rows) get null.
+      for (const p of itemCommentsProps.current) {
+        if (p === icForRd99) continue;
+        expect(p.focusedCommentId).toBeNull();
+      }
+      // Re-render with a resources match — rd-99 panel should
+      // remount with focusedCommentId=null on its next render.
+      itemCommentsProps.current.length = 0;
+      rerender(
+        <VendorDashboard
+          {...baseProps}
+          assignedRundown={rundownFixture}
+          focusedParentId="rd-other"
+          focusedParentKind="rundown"
+          focusedCommentId="cmt-alert-2"
+        />,
+      );
+      await waitFor(() => {
+        expect(itemCommentsProps.current.length).toBeGreaterThan(0);
+      });
+      const icForRdOther = findICForItemId('rd-other');
+      expect(icForRdOther?.focusedCommentId).toBe('cmt-alert-2');
+      // The previously-mounted rd-99 panel also re-rendered; it
+      // should now have focusedCommentId=null because rd-99 is no
+      // longer the matching id.
+      const icForRd99Again = findICForItemId('rd-99');
+      expect(icForRd99Again?.focusedCommentId).toBeNull();
+    });
+
+    it('passes null focusedCommentId by default (backwards-compat)', async () => {
+      itemCommentsProps.current.length = 0;
+      render(
+        <VendorDashboard
+          {...baseProps}
+          assignedRundown={rundownFixture}
+          focusedParentId="rd-99"
+          focusedParentKind="rundown"
+        />,
+      );
+      await waitFor(() => {
+        expect(itemCommentsProps.current.length).toBeGreaterThan(0);
+      });
+      const ic = findICForItemId('rd-99');
+      expect(ic?.focusedCommentId).toBeNull();
+    });
 });

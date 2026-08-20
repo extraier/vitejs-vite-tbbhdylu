@@ -4508,9 +4508,27 @@ export default function App() {
                   // <ItemComments>, and scrolls the row into view.
                   focusedParentId={focusedParentId}
                   focusedParentKind={focusedParentKind}
+                  // 2026-08-20 — Manus: comment-level deep-link for
+                  // vendor-side bell alerts. <VendorDashboard>
+                  // forwards this to each <VendorAssignedItem>,
+                  // which forwards to its <ItemComments> panel for
+                  // scrollIntoView. Not added to <HelperDashboard>
+                  // because the helper's deep-link target
+                  // (HelperBigDayTab) does not render an
+                  // <ItemComments> panel — there's no comment
+                  // thread in scope to scroll within.
+                  focusedCommentId={focusedCommentId}
                   onFocusedParentHandled={() => {
                     setFocusedParentId(null);
                     setFocusedParentKind(null);
+                    // 2026-08-20 — also clear the comment-level
+                    // focus (parity with the navigate-away effect
+                    // for the owner path). The vendor's
+                    // <VendorAssignedItem> clears the parent focus
+                    // via onFocusedParentHandled; the comment
+                    // focus is consumed by <ItemComments>' effect
+                    // and doesn't need to be re-fired.
+                    setFocusedCommentId(null);
                   }}
                 />
               </LazyScreen>

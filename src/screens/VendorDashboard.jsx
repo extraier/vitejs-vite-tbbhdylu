@@ -89,7 +89,7 @@ const TASK_STATUSES = [
 
 const STATUS_BY_ID = Object.fromEntries(TASK_STATUSES.map((s) => [s.id, s]));
 
-function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocusedRef }) {
+function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocusedRef, focusedCommentId = null }) {
   const [expanded, setExpanded] = useState(forceExpanded);
   const rowRef = useRef(null);
   // 2026-08-17 — Manus A8: vendor-side deep-link focus. When the
@@ -227,6 +227,13 @@ function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocuse
             emptyHint="未有留言，可以留低第一句。"
             parentAssignedVendorUid={item.assignedVendorUid || null}
             parentAssignedHelperUid={item.assignedHelperUid || null}
+            // 2026-08-20 — Manus: comment-level deep-link (see
+            // <ItemComments> focusedCommentId effect). Only
+            // forward on this row when it's the one matching
+            // focusedParentId; the parent <VendorDashboard> already
+            // gates that, but a defensive null check here keeps
+            // the contract clean.
+            focusedCommentId={focusedCommentId}
           />
         </div>
       )}
@@ -260,6 +267,12 @@ export function VendorDashboard({
   // and forward forceExpanded=true to the right <VendorAssignedItem>.
   focusedParentId = null,
   focusedParentKind = null,
+  // 2026-08-20 — Manus: comment-level deep-link for vendor-side
+  // bell alerts. Forwarded to each <VendorAssignedItem>; the one
+  // whose item.id matches focusedParentId passes it to its
+  // <ItemComments> panel for scrollIntoView on the matching
+  // comment. Optional; defaults to null (no-op).
+  focusedCommentId = null,
   onFocusedParentHandled = null,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
@@ -644,6 +657,16 @@ export function VendorDashboard({
                               (focusedParentKind === 'rundown' ||
                                 focusedParentKind === null)
                             }
+                            // 2026-08-20 — Manus: pass the comment-
+                            // level focus only to the matching row so
+                            // the other (non-matching) ItemComments
+                            // panels don't try to scroll the same
+                            // comment. Same gating as forceExpanded.
+                            focusedCommentId={
+                              focusedParentId === item.id
+                                ? focusedCommentId
+                                : null
+                            }
                             onFocusedRef={
                               focusedParentId === item.id
                                 ? onFocusedParentHandled
@@ -669,6 +692,12 @@ export function VendorDashboard({
                               focusedParentId === item.id &&
                               (focusedParentKind === 'resources' ||
                                 focusedParentKind === null)
+                            }
+                            // 2026-08-20 — see rundown block above.
+                            focusedCommentId={
+                              focusedParentId === item.id
+                                ? focusedCommentId
+                                : null
                             }
                             onFocusedRef={
                               focusedParentId === item.id
