@@ -99,6 +99,17 @@ export function ItemComments({
   // list's viewport even after the parent is in view. So this
   // component handles its own internal scroll.
   focusedCommentId = null,
+  // 2026-08-20 — Manus P0 correction: ItemComments is the
+  // consumption authority for the comment-level focus. After a
+  // successful scroll+highlight, fire this callback with the
+  // payload { commentId, parentId, kind }. App.jsx uses it to
+  // clear focusedCommentId (only if the callback's commentId
+  // still matches the currently focused one — guards against
+  // an old late callback clobbering a newer alert click).
+  // Do NOT acknowledge on a failed retry — leaving focus alive
+  // lets the existing sorted.length dependency retry when the
+  // next Firestore snapshot arrives.
+  onFocusedCommentHandled = null,
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -152,15 +163,55 @@ export function ItemComments({
   // pattern from <WeddingDay>'s row-focus effect: jsdom (vitest)
   // doesn't polyfill CSS.escape, so we fall back to a regex that
   // handles the common Firestore doc-id charset (alphanumeric + -_).
+  //
+  // 2026-08-20 — Manus P0 correction: ItemComments is the
+  // CONSUMPTION AUTHORITY for the comment-level focus. After a
+  // successful scroll+highlight, call onFocusedCommentHandled with
+  // { commentId, parentId, kind }. App.jsx uses this to clear
+  // focusedCommentId (only when the callback id still matches the
+  // currently-focused one). Do NOT acknowledge on a failed retry —
+  // leaving focus alive lets the sorted.length dependency re-fire
+  // when the next Firestore snapshot arrives.
+  //
+  // We pull parentId and kind from the path ref's segments, mirroring
+  // the helpers/<comment-path> convention used elsewhere (the path
+  // is `/.../rundown/{entryId}/comments` or `/.../resources/{itemId}/comments`,
+  // so segments[-3] is the kind and segments[-2] is the parentId).
+  // Falls back to null when path is missing or malformed — App.jsx's
+  // guard tolerates null parentId/kind in the callback.
+  const extractFocusContext = () => {
+    try {
+      const segs = path && typeof path === 'object' && Array.isArray(path.__segments)
+        ? path.__segments
+        : (typeof path === 'string' ? path.split('/').filter(Boolean) : []);
+      if (segs.length < 3) return { parentId: null, kind: null };
+      const kind = segs[segs.length - 3] || null;
+      const parentId = segs[segs.length - 2] || null;
+      return { parentId, kind };
+    } catch {
+      return { parentId: null, kind: null };
+    }
+  };
+
   useEffect(() => {
     if (!focusedCommentId || !listRef.current) return;
     const id = focusedCommentId;
+    let acknowledged = false;
+    // 2026-08-20 — Manus P0: track EVERY scheduled timer (initial
+    // delay + retries) so the effect cleanup can cancel all of
+    // them. The previous implementation only cleared the initial
+    // delay, leaving retry setTimeouts in flight. On a prop
+    // change (or unmount) those in-flight retries could still
+    // find the element after the new effect had already
+    // acknowledged, causing a duplicate callback fire.
+    const timers = new Set();
     const attempt = (tries = 8) => {
       const safeId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
         ? CSS.escape(id)
         : String(id).replace(/([^\w-])/g, '\\$1');
       const el = listRef.current?.querySelector(`[data-comment-id="${safeId}"]`);
-      if (el && listRef.current) {
+      if (el && listRef.current && !acknowledged) {
+        acknowledged = true;
         // Use scrollIntoView on the list-scoped element. The list has
         // its own overflow-y; scrollIntoView walks up to find the
         // nearest scrollable ancestor (the list itself) and aligns
@@ -175,22 +226,41 @@ export function ItemComments({
           'ring-2', 'ring-rose-400', 'ring-offset-1',
           'bg-rose-50', 'rounded-lg',
         );
+        // The highlight-removal timer is NOT added to `timers`
+        // because it is not part of the retry loop — leaving it
+        // running is correct so the highlight clears even if the
+        // component unmounts first.
         setTimeout(() => {
           el.classList.remove(
             'ring-2', 'ring-rose-400', 'ring-offset-1',
             'bg-rose-50', 'rounded-lg',
           );
         }, 3000);
+        // CONSUMPTION ACKNOWLEDGEMENT — only on success. App.jsx
+        // clears focusedCommentId in response (guarded by id match).
+        if (typeof onFocusedCommentHandled === 'function') {
+          const { parentId, kind } = extractFocusContext();
+          onFocusedCommentHandled({ commentId: id, parentId, kind });
+        }
         return;
       }
       // Snapshot hasn't delivered yet (first-fire latency, or the
       // panel just opened). Retry; bail after ~8 tries (~640ms).
-      if (tries > 0) setTimeout(() => attempt(tries - 1), 80);
+      // Do NOT acknowledge on a failed retry — keep focus alive
+      // so the [focusedCommentId, sorted.length] dep can re-fire.
+      if (tries > 0) {
+        const t = setTimeout(() => attempt(tries - 1), 80);
+        timers.add(t);
+      }
     };
     // Initial delay to let the snapshot first-fire commit + paint.
-    const t = setTimeout(() => attempt(8), 80);
-    return () => clearTimeout(t);
-  }, [focusedCommentId, sorted.length]);
+    const initial = setTimeout(() => attempt(8), 80);
+    timers.add(initial);
+    return () => {
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+    };
+  }, [focusedCommentId, sorted.length, onFocusedCommentHandled, path]);
 
   const handleSend = async (e) => {
     if (e) e.preventDefault();

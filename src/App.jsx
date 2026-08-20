@@ -916,23 +916,65 @@ export default function App() {
   // <ItemComments> scrolls + highlights the specific comment.
   // Cleared on the same navigate-away guard as the row-level focus.
   const [focusedCommentId, setFocusedCommentId] = useState(null);
-  // 2026-08-17 — Manus A8: clear the focused-parent pointer when
-  // the user navigates AWAY from `wedding-day`. This prevents a
-  // stale focus from re-firing if they return later, AND lets a
-  // second click on the same alert (same id) re-trigger the
-  // focus effect after a navigate-back: the parent state will be
-  // null when they leave, then re-set to non-null when they
-  // click the alert again.
+  // 2026-08-20 — Manus P0 correction: ONE focus lifecycle.
+  //   The previous cleanup effect cleared all focus state whenever
+  //   the view was not 'wedding-day'. That broke two real flows:
+  //     1. Vendor bell click: handler sets focus + switches view to
+  //        'vendor-dashboard' in the same update. Cleanup effect
+  //        subsequently fires (currentView !== 'wedding-day') and
+  //        wipes the focus before <ItemComments> has a chance to
+  //        read it.
+  //     2. Helper bell click: same race — handler routes to
+  //        'helper-dashboard' and focus is wiped before render.
+  //   Fix: allowlist the views capable of consuming Big Day focus
+  //   (wedding-day for owner, vendor-dashboard for vendor,
+  //   helper-dashboard for helper). Outside that set, clear; inside,
+  //   keep focus alive so <ItemComments>'s consumer effect can find
+  //   and scroll the comment.
+  //   The actual clear-on-success now lives in <ItemComments>'s
+  //   onFocusedCommentHandled callback (Fix #2). This effect only
+  //   handles the navigate-away case.
+  const BIG_DAY_FOCUS_VIEWS = new Set([
+    'wedding-day',
+    'vendor-dashboard',
+    'helper-dashboard',
+  ]);
+
+  const clearBigDayFocus = () => {
+    setFocusedParentId(null);
+    setFocusedParentKind(null);
+    // The comment-level focus is cleared by ItemComments's
+    // onFocusedCommentHandled when it successfully scrolls the
+    // matching element. We do NOT clear it here on navigate-away —
+    // a navigate-away may be a transient state (e.g. user opens a
+    // modal overlay) and clearing the focus would break the consume
+    // path on the destination view. The navigate-away case is
+    // handled by the destination view's clearLocalFocus prop (e.g.
+    // a tab switch or a manual close) plus the focusedParentKind
+    // gate. See onFocusedParentHandled for the unified clear.
+    setFocusedCommentId(null);
+  };
+
+  // 2026-08-20 — Manus P0 correction: ItemComments callback
+  // consumed by both owner and vendor paths. App.jsx clears the
+  // focused comment id ONLY when the callback's commentId still
+  // matches the currently focused one — this guards against a
+  // stale late callback (e.g. an older click whose snapshot
+  // arrived after a newer click) from clobbering a newer focus.
+  // We do NOT clear focusedParentId/focusedParentKind here —
+  // those are cleared by the destination view's
+  // onFocusedParentHandled once the row scroll + ring have
+  // completed. (For comment alerts, the row-level ack happens
+  // FIRST so the user sees the parent card; the comment-level
+  // ack happens SECOND once <ItemComments> lands on the exact
+  // comment.)
+  const handleFocusedCommentHandled = useCallback(({ commentId } = {}) => {
+    setFocusedCommentId((cur) => (cur === commentId ? null : cur));
+  }, []);
+
   useEffect(() => {
-    if (currentView !== 'wedding-day') {
-      setFocusedParentId(null);
-      setFocusedParentKind(null);
-      // 2026-08-20 — see focusedCommentId declaration. Clear the
-      // comment-level focus on navigate-away so a returning user
-      // doesn't see a stale highlight or have a second click on the
-      // same alert fail to re-focus (same null-out trick as the
-      // parent-level focus).
-      setFocusedCommentId(null);
+    if (!BIG_DAY_FOCUS_VIEWS.has(currentView)) {
+      clearBigDayFocus();
     }
   }, [currentView]);
 
@@ -3911,7 +3953,22 @@ export default function App() {
                     }
                     // 2026-08-20 — comment-level focus (see owner
                     // header handler above for full context).
-                    setFocusedCommentId(meta?.commentId || null);
+                    //
+                    // 2026-08-20 — Manus P0 §2.3 / §3 (Helper):
+                    // HelperBigDayTab does NOT render an
+                    // <ItemComments> panel, so setting
+                    // focusedCommentId here would have no consumer.
+                    // The focusedCommentId state would leak into
+                    // the next vendor/owner bell click and race
+                    // with that path. The Manus-recommended fix
+                    // is "either a read-only thread or item-only
+                    // behaviour"; this session chose item-only —
+                    // the helper lands on the assigned Big Day
+                    // card (handled by HelperDashboard.focus-effect)
+                    // and the comment-level focus is left null.
+                    // If HelperBigDayTab later grows a read-only
+                    // <ItemComments>, restore the line below.
+                    setFocusedCommentId(null);
                     setCurrentView(
                       userRole === 'vendor' ? 'vendor-dashboard' : 'helper-dashboard',
                     );
@@ -4343,6 +4400,13 @@ export default function App() {
                 // added when their dashboards grow a scroll-to-
                 // comment effect (out of scope for this bugfix).
                 focusedCommentId={focusedCommentId}
+                // 2026-08-20 — Manus P0: ItemComments consumption
+                // authority. WeddingDay forwards this to each
+                // <ItemComments> panel; the matching panel's
+                // success-effect fires this callback, which clears
+                // focusedCommentId (guarded by id match). See
+                // handleFocusedCommentHandled above.
+                onFocusedCommentHandled={handleFocusedCommentHandled}
               />
             )}
 
@@ -4518,6 +4582,12 @@ export default function App() {
                   // <ItemComments> panel — there's no comment
                   // thread in scope to scroll within.
                   focusedCommentId={focusedCommentId}
+                  // 2026-08-20 — Manus P0: ItemComments consumption
+                  // authority (vendor path). Same callback the
+                  // WeddingDay owner path uses; the matching
+                  // <ItemComments> panel's success-effect fires it
+                  // to clear focusedCommentId (guarded by id match).
+                  onFocusedCommentHandled={handleFocusedCommentHandled}
                   onFocusedParentHandled={() => {
                     setFocusedParentId(null);
                     setFocusedParentKind(null);

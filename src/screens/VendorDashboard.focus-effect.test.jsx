@@ -247,6 +247,54 @@ describe('VendorDashboard — A8 bell-click deep-link focus', () => {
     });
   });
 
+  // 2026-08-20 — Manus P0 #4: vendor row callback race. When
+  // focusedCommentId is set, this is a COMMENT-level deep-link,
+  // not a row-only legacy link. In that case the row-scroll's
+  // onFocusedRef ack would clobber focusedCommentId before
+  // <ItemComments> had a chance to read it. VendorAssignedItem
+  // must skip the parent ack for comment-level focus; only the
+  // <ItemComments> consumption callback should clear state.
+  it('does NOT invoke onFocusedParentHandled when focusedCommentId is set (Manus P0 race fix)', async () => {
+    const handled = vi.fn();
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        focusedParentId="rd-99"
+        focusedParentKind="rundown"
+        focusedCommentId="cmt-alert-1"
+        onFocusedParentHandled={handled}
+      />,
+    );
+    // Run for a generous window — the row-scroll effect uses
+    // requestAnimationFrame. Without the guard, handled would
+    // fire within ~50ms.
+    await new Promise((r) => setTimeout(r, 100));
+    expect(handled).not.toHaveBeenCalled();
+  });
+
+  // 2026-08-20 — Manus P0 parity check: the legacy parent-only
+  // path still works (focusedCommentId null → handled fires).
+  // This is the regression guard for the parent-only deep-link
+  // case so we don't break the row scroll when only the parent
+  // is targeted (no specific comment).
+  it('STILL invokes onFocusedParentHandled when focusedCommentId is null (legacy parent-only path)', async () => {
+    const handled = vi.fn();
+    render(
+      <VendorDashboard
+        {...baseProps}
+        assignedRundown={rundownFixture}
+        focusedParentId="rd-99"
+        focusedParentKind="rundown"
+        focusedCommentId={null}
+        onFocusedParentHandled={handled}
+      />,
+    );
+    await waitFor(() => {
+      expect(handled).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('does NOT fire when focusedParentId matches a row in the OTHER section', async () => {
     // The rundown list should only auto-expand for kind=rundown.
     // A kind=resources focus on a rundown id should be a no-op.

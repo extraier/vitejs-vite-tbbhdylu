@@ -376,6 +376,15 @@ function RundownTab({
   eventId,
   currentUser,
   commentPathFor, // (entryId) => CollectionReference | null
+  // 2026-08-20 — Manus P0: comment-level deep-link forwarding.
+  // The tab uses these to (a) auto-open the matching entry's
+  // comments panel and (b) forward the focus to its
+  // <ItemComments>. Optional; defaults to null so existing
+  // callers (tests, storybook) keep working.
+  focusedParentId = null,
+  focusedParentKind = null,
+  focusedCommentId = null,
+  onFocusedCommentHandled = null,
 }) {
   const [editing, setEditing] = useState(null);
   const [filterGroup, setFilterGroup] = useState('all');
@@ -385,6 +394,24 @@ function RundownTab({
   const [openCommentsFor, setOpenCommentsFor] = useState(null);
   const toggleComments = (id) =>
     setOpenCommentsFor((cur) => (cur === id ? null : id));
+  // 2026-08-20 — Manus P0: auto-open the matching entry's
+  // comments panel when a bell alert routes here. The deep-link
+  // is two-stage: WeddingDay scrolls the row into view, then
+  // this effect opens its comments panel so <ItemComments> can
+  // mount + find the matching comment. We depend on
+  // focusedParentKind so a resources-tab focus (kind='resources')
+  // doesn't open a rundown panel — those targets belong to
+  // ResourcesTab.
+  useEffect(() => {
+    if (
+      focusedParentKind === 'rundown' &&
+      focusedParentId &&
+      openCommentsFor !== focusedParentId
+    ) {
+      setOpenCommentsFor(focusedParentId);
+    }
+  }, [focusedParentKind, focusedParentId]);
+
   // 2026-07-22 — Sort mode for 大日流程. Two modes:
   //   'time'   (default) — sort by startTime asc. The natural
   //                        schedule-driven order; couples plan
@@ -583,6 +610,14 @@ function RundownTab({
                     onMoveUp={() => onReorder(entry.id, 'up')}
                     onMoveDown={() => onReorder(entry.id, 'down')}
                     dragHandleProps={dragHandleProps}
+                    // 2026-08-20 — Manus P0: comment-level focus
+                    // forwarding (see <ItemComments>' success
+                    // effect). Gated by focusedParentKind so
+                    // non-matching cards don't race.
+                    focusedCommentId={
+                      focusedParentKind === 'rundown' ? focusedCommentId : null
+                    }
+                    onFocusedCommentHandled={onFocusedCommentHandled}
                   />
                 )}
               </SortableRow>
@@ -616,6 +651,12 @@ function RundownTab({
               onDelete={() => onDelete(entry.id)}
               onMoveUp={() => onReorder(entry.id, 'up')}
               onMoveDown={() => onReorder(entry.id, 'down')}
+              // 2026-08-20 — Manus P0: see the manual-mode
+              // RundownCard above; same forwarding.
+              focusedCommentId={
+                focusedParentKind === 'rundown' ? focusedCommentId : null
+              }
+              onFocusedCommentHandled={onFocusedCommentHandled}
             />
           ))}
         </div>
@@ -666,6 +707,11 @@ function RundownCard({
   // undefined (time mode), the legacy ▲▼ buttons are rendered
   // as a fallback.
   dragHandleProps,
+  // 2026-08-20 — Manus P0: comment-level focus forwarding.
+  // <ItemComments> uses these to scrollIntoView the matching
+  // comment and fire the consumption acknowledgement.
+  focusedCommentId = null,
+  onFocusedCommentHandled = null,
 }) {
   const [draft, setDraft] = useState({
     startTime: entry.startTime || '12:00',
@@ -962,13 +1008,15 @@ function RundownCard({
             label="大日流程留言"
             parentAssignedVendorUid={entry?.assignedVendorUid || null}
             parentAssignedHelperUid={entry?.assignedHelperUid || null}
-            // 2026-08-20 — Manus: comment-level deep-link (see
-            // App.jsx focusedCommentId). Only forward when the
-            // current focused parent kind is 'rundown' so a
-            // resources-panel ItemComments doesn't try to scroll
-            // the same comment into view (would race with the
-            // rundown panel's effect).
-            focusedCommentId={focusedParentKind === 'rundown' ? focusedCommentId : null}
+            // 2026-08-20 — Manus P0: forward the focus props so
+            // <ItemComments> can scroll the matching comment and
+            // fire the consumption ack. The tab-level gate
+            // (focusedParentKind === 'rundown') is already
+            // applied upstream, so by the time we reach this
+            // <ItemComments>, focusedCommentId is only set when
+            // THIS card is the matching one.
+            focusedCommentId={focusedCommentId}
+            onFocusedCommentHandled={onFocusedCommentHandled}
           />
         </div>
       )}
@@ -1157,6 +1205,14 @@ function ResourcesTab({
   ownerUid,
   eventId,
   commentPathFor, // (itemId) => CollectionReference | null
+  // 2026-08-20 — Manus P0: comment-level focus forwarding. The
+  // tab uses these to auto-open the matching item's comments
+  // panel + forward to <ItemComments>. See RundownTab for the
+  // same pattern.
+  focusedParentId = null,
+  focusedParentKind = null,
+  focusedCommentId = null,
+  onFocusedCommentHandled = null,
 }) {
   const [editing, setEditing] = useState(null);
   const [filter, setFilter] = useState('all');
@@ -1165,6 +1221,20 @@ function ResourcesTab({
   const [openCommentsFor, setOpenCommentsFor] = useState(null);
   const toggleComments = (id) =>
     setOpenCommentsFor((cur) => (cur === id ? null : id));
+  // 2026-08-20 — Manus P0: auto-open the matching item's
+  // comments panel when a bell alert routes here. Mirrors the
+  // rundown-tab effect. Depend on focusedParentKind so a
+  // rundown-tab focus (kind='rundown') doesn't open a resource
+  // panel here.
+  useEffect(() => {
+    if (
+      focusedParentKind === 'resources' &&
+      focusedParentId &&
+      openCommentsFor !== focusedParentId
+    ) {
+      setOpenCommentsFor(focusedParentId);
+    }
+  }, [focusedParentKind, focusedParentId]);
   // 2026-07-22 — Sort mode toggle. Same pattern as PlaylistTab.
   //   'created' (default) — sort by createdAt asc; new items
   //                          appear at the bottom of their
@@ -1504,6 +1574,11 @@ function ResourcesTab({
                             parentAssignedHelperUid={item.assignedHelperUid || null}
                             // 2026-08-20 — see rundown block above.
                             focusedCommentId={focusedParentKind === 'resources' ? focusedCommentId : null}
+                            // 2026-08-20 — Manus P0: forward the
+                            // consumption authority callback so the
+                            // matching <ItemComments> can ack on
+                            // scrollIntoView success.
+                            onFocusedCommentHandled={onFocusedCommentHandled}
                           />
                         </div>
                       )}
@@ -1596,6 +1671,11 @@ function ResourcesTab({
                       parentAssignedHelperUid={item.assignedHelperUid || null}
                       // 2026-08-20 — see rundown block above.
                       focusedCommentId={focusedParentKind === 'resources' ? focusedCommentId : null}
+                      // 2026-08-20 — Manus P0: forward the
+                      // consumption authority callback so the
+                      // matching <ItemComments> can ack on
+                      // scrollIntoView success.
+                      onFocusedCommentHandled={onFocusedCommentHandled}
                     />
                   </div>
                 )}
@@ -3376,6 +3456,11 @@ export function WeddingDay({
   // + highlights. Optional; default no-op keeps existing callers
   // untouched.
   focusedCommentId = null,
+  // 2026-08-20 — Manus P0: forwarded to the matching
+  // <ItemComments> panel; the matching panel fires this on
+  // scrollIntoView success (consumption authority). App.jsx
+  // guards the clear by id match. Optional; defaults to no-op.
+  onFocusedCommentHandled = null,
 }) {
   const [active, setActive] = useState('rundown');
 

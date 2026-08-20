@@ -89,7 +89,7 @@ const TASK_STATUSES = [
 
 const STATUS_BY_ID = Object.fromEntries(TASK_STATUSES.map((s) => [s.id, s]));
 
-function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocusedRef, focusedCommentId = null }) {
+function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocusedRef, focusedCommentId = null, onFocusedCommentHandled = null }) {
   const [expanded, setExpanded] = useState(forceExpanded);
   const rowRef = useRef(null);
   // 2026-08-17 — Manus A8: vendor-side deep-link focus. When the
@@ -100,6 +100,17 @@ function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocuse
   // <ItemComments> panel opens, and scrolls into view with a
   // brief rose-400 ring highlight. The user can collapse it
   // manually afterwards.
+  //
+  // 2026-08-20 — Manus P0: when focusedCommentId is set, this
+  // is a COMMENT-level deep-link (not a row-only legacy link).
+  // In that case, the onFocusedRef ack would clobber
+  // focusedCommentId before <ItemComments> has a chance to read
+  // it — the consumption authority for the comment focus is
+  // ItemComments's own onFocusedCommentHandled callback. The
+  // row-scroll still happens (so the user sees the parent card
+  // expand) but we skip the parent ack. A legacy parent-only
+  // link (focusedCommentId == null) still calls onFocusedRef as
+  // before — that case has no comment-level state to preserve.
   useEffect(() => {
     if (forceExpanded && !expanded) {
       setExpanded(true);
@@ -123,9 +134,12 @@ function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocuse
             el.classList.remove('ring-2', 'ring-rose-400', 'rounded-xl');
           }, 2200);
         }
-        // Hand the ref back to the dashboard so the parent can
-        // clear its focus state.
-        if (onFocusedRef) onFocusedRef();
+        // Skip the parent ack for comment-level deep-links. The
+        // <ItemComments> consumption callback is the authority.
+        // Without this guard, focusedCommentId would be cleared
+        // here and <ItemComments>' scrollIntoView effect would
+        // find focusedCommentId=null on its first run.
+        if (!focusedCommentId && onFocusedRef) onFocusedRef();
       });
     }
     // We intentionally only react to forceExpanded changes —
@@ -234,6 +248,11 @@ function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocuse
             // gates that, but a defensive null check here keeps
             // the contract clean.
             focusedCommentId={focusedCommentId}
+            // 2026-08-20 — Manus P0: forward the consumption
+            // authority callback. <ItemComments> fires this on
+            // scrollIntoView success; App.jsx clears
+            // focusedCommentId in response (id-match guard).
+            onFocusedCommentHandled={onFocusedCommentHandled}
           />
         </div>
       )}
@@ -273,6 +292,11 @@ export function VendorDashboard({
   // <ItemComments> panel for scrollIntoView on the matching
   // comment. Optional; defaults to null (no-op).
   focusedCommentId = null,
+  // 2026-08-20 — Manus P0: forwarded to the matching
+  // <ItemComments> panel; the matching panel fires this on
+  // scrollIntoView success (consumption authority). App.jsx
+  // guards the clear by id match. Optional; defaults to no-op.
+  onFocusedCommentHandled = null,
   onFocusedParentHandled = null,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
@@ -667,6 +691,15 @@ export function VendorDashboard({
                                 ? focusedCommentId
                                 : null
                             }
+                            // 2026-08-20 — Manus P0: forward the
+                            // consumption authority callback (only
+                            // to the matching row; non-matching
+                            // rows don't need it).
+                            onFocusedCommentHandled={
+                              focusedParentId === item.id
+                                ? onFocusedCommentHandled
+                                : null
+                            }
                             onFocusedRef={
                               focusedParentId === item.id
                                 ? onFocusedParentHandled
@@ -697,6 +730,13 @@ export function VendorDashboard({
                             focusedCommentId={
                               focusedParentId === item.id
                                 ? focusedCommentId
+                                : null
+                            }
+                            // 2026-08-20 — Manus P0: see rundown
+                            // block above; same gating.
+                            onFocusedCommentHandled={
+                              focusedParentId === item.id
+                                ? onFocusedCommentHandled
                                 : null
                             }
                             onFocusedRef={
