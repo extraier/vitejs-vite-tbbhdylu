@@ -27,6 +27,8 @@ import sys
 import time
 import hmac
 import hashlib
+import base64
+import shutil
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -48,6 +50,32 @@ BIND = os.environ.get("PHOTO_BIND", "127.0.0.1")
 PORT = int(os.environ.get("PHOTO_PORT", "9879"))
 # Where uploaded photos are stored on disk.
 STORAGE_ROOT = Path(os.environ.get("PHOTO_ROOT", "/volume1/flight-scanner/wedding-photos"))
+# 2026-08-20 — Manus P1.5 lifetime archive (audit §4.5).
+# Same-NAS duplicate folder. The archive cron (CF
+# dailyArchiveLifetimeEvents) calls POST /archive with an
+# HMAC-signed claim; we copy each event's directory
+# STORAGE_ROOT/<eventId>/ → ARCHIVE_ROOT/<eventId>/ and
+# write a manifest under ARCHIVE_LOG_ROOT/<eventId>.json.
+# Photo retrieval falls back to ARCHIVE_ROOT on 404 so
+# the customer sees the same URL regardless of which copy
+# the server read.
+ARCHIVE_ROOT = Path(
+    os.environ.get(
+        "PHOTO_ARCHIVE_ROOT", "/volume1/flight-scanner/wedding-photos-archive"
+    )
+)
+ARCHIVE_LOG_ROOT = Path(
+    os.environ.get(
+        "PHOTO_ARCHIVE_LOG_ROOT", "/volume1/flight-scanner/wedding-photos-archive-log"
+    )
+)
+# Reserve 5 GB free on the primary volume before copying.
+# If the archive copy would leave the NAS below this
+# threshold, we abort with reason='quota' so the cron
+# skips the event and retries next tick.
+ARCHIVE_MIN_FREE_BYTES = int(
+    os.environ.get("PHOTO_ARCHIVE_MIN_FREE_BYTES", str(5 * 1024 * 1024 * 1024))
+)
 # Public origin (Tailscale Funnel hostname) — used to build returned URLs.
 PUBLIC_ORIGIN = os.environ.get(
     "PHOTO_PUBLIC_ORIGIN", "https://ugreen-nas.tail20bf1.ts.net"
@@ -359,6 +387,150 @@ def verify_hmac(secret, event_id, guest_id, expires_ms_str, provided_sig_hex,
     return hmac.compare_digest(expected, provided_sig_hex)
 
 
+# 2026-08-20 — P1.5 lifetime archive helpers.
+# Module-level (not class methods) so they can be unit-tested
+# without spinning up the HTTP handler, and can be reused from
+# a future CLI admin tool for one-off backfills.
+
+class ArchiveError(Exception):
+    """Raised by _archive_event. Maps to a JSON error response."""
+
+    def __init__(self, reason: str, message: str, status_code: int = 500):
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+        self.status_code = status_code
+
+
+def _verify_archive_hmac(secret, event_id, owner_uid, token):
+    """Verify the X-Archive-Token against the CF-minted claim."""
+    if not secret or not token:
+        return False
+    parts = token.split(".", 1)
+    if len(parts) != 2:
+        return False
+    b64_payload, provided_sig = parts
+    b64_std = b64_payload.replace("-", "+").replace("_", "/")
+    padding = "=" * ((4 - len(b64_std) % 4) % 4)
+    try:
+        payload_bytes = base64.b64decode(b64_std + padding)
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if payload.get("eventId") != event_id or payload.get("ownerUid") != owner_uid:
+        return False
+    expires_at = int(payload.get("expiresAt") or 0)
+    if expires_at < int(time.time() * 1000):
+        return False
+    expected = base64.urlsafe_b64encode(
+        hmac.new(secret.encode("utf-8"), b64_payload.encode("ascii"), hashlib.sha256).digest()
+    ).rstrip(b"=").decode("ascii")
+    return hmac.compare_digest(expected, provided_sig)
+
+
+def _free_bytes(path):
+    """Return free bytes on the filesystem that holds `path`."""
+    try:
+        return shutil.disk_usage(path).free
+    except (OSError, AttributeError):
+        return 2**62
+
+
+def _sha256_file(path):
+    """Hex SHA-256 of a file. Memory-efficient (chunked)."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _archive_event(event_id, owner_uid):
+    """Copy STORAGE_ROOT/<eventId>/ → ARCHIVE_ROOT/<eventId>/ and
+    write a manifest under ARCHIVE_LOG_ROOT/<eventId>.json.
+
+    Idempotent: per-file sha256 comparison lets re-runs skip
+    files that already match. Quota gate refuses to start if
+    free disk is below ARCHIVE_MIN_FREE_BYTES.
+    """
+    if "/" in event_id or ".." in event_id or not event_id:
+        raise ArchiveError("error", "bad event_id", status_code=400)
+    if "/" in owner_uid or ".." in owner_uid or not owner_uid:
+        raise ArchiveError("error", "bad owner_uid", status_code=400)
+    src = (STORAGE_ROOT / event_id).resolve()
+    dst = (ARCHIVE_ROOT / event_id).resolve()
+    try:
+        src.relative_to(STORAGE_ROOT.resolve())
+    except ValueError:
+        raise ArchiveError("error", "src escapes storage root", status_code=400)
+    try:
+        dst.relative_to(ARCHIVE_ROOT.resolve())
+    except ValueError:
+        raise ArchiveError("error", "dst escapes archive root", status_code=400)
+    if not src.is_dir():
+        raise ArchiveError(
+            "event-missing",
+            f"no source directory at {src}",
+            status_code=404,
+        )
+    free_bytes = _free_bytes(STORAGE_ROOT)
+    if free_bytes < ARCHIVE_MIN_FREE_BYTES:
+        raise ArchiveError(
+            "quota",
+            f"free disk {free_bytes} < ARCHIVE_MIN_FREE_BYTES={ARCHIVE_MIN_FREE_BYTES}",
+            status_code=503,
+        )
+    dst.mkdir(parents=True, exist_ok=True)
+    files_copied = 0
+    bytes_copied = 0
+    manifest_entries = []
+    file_count = 0
+    for src_file in src.rglob("*"):
+        if not src_file.is_file():
+            continue
+        file_count += 1
+        rel = src_file.relative_to(src)
+        dst_file = dst / rel
+        src_sha = _sha256_file(src_file)
+        already_ok = False
+        if dst_file.is_file():
+            dst_sha = _sha256_file(dst_file)
+            if src_sha == dst_sha:
+                already_ok = True
+        if not already_ok:
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dst_file)
+            files_copied += 1
+            bytes_copied += src_file.stat().st_size
+        manifest_entries.append({
+            "rel": str(rel),
+            "sha256": src_sha,
+            "size": src_file.stat().st_size,
+            "copied": not already_ok,
+        })
+    ARCHIVE_LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    manifest_path = ARCHIVE_LOG_ROOT / f"{event_id}.json"
+    manifest = {
+        "eventId": event_id,
+        "ownerUid": owner_uid,
+        "archivedAt": int(time.time() * 1000),
+        "filesTotal": file_count,
+        "filesCopiedNow": files_copied,
+        "bytesCopiedNow": bytes_copied,
+        "files": manifest_entries,
+    }
+    tmp_path = manifest_path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(manifest, indent=2))
+    tmp_path.rename(manifest_path)
+    return {
+        "ok": True,
+        "filesCopied": files_copied,
+        "bytesCopied": bytes_copied,
+        "filesTotal": file_count,
+        "manifestPath": str(manifest_path),
+    }
+
+
 class PhotoHandler(BaseHTTPRequestHandler):
     # Silence the default per-request stderr access log; we log manually.
     def log_message(self, format, *args):  # noqa: A002 — match base class signature
@@ -454,9 +626,13 @@ class PhotoHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         # Funnel strips the --set-path prefix for POSTs too, so accept both.
-        if self.path not in ("/upload", "/"):
-            return self._send_error(404, f"unknown POST route {self.path}")
-        return self._handle_upload()
+        if self.path in ("/upload", "/"):
+            return self._handle_upload()
+        # 2026-08-20 — P1.5 lifetime archive endpoint.
+        # Same path-stripping tolerance as /upload.
+        if self.path in ("/archive",):
+            return self._handle_archive()
+        return self._send_error(404, f"unknown POST route {self.path}")
 
     # -------- implementations --------
     def _serve_photo(self, rel):
@@ -472,7 +648,22 @@ class PhotoHandler(BaseHTTPRequestHandler):
         except ValueError:
             return self._send_error(400, "escapes storage root")
         if not target.is_file():
-            return self._send_error(404, "not found")
+            # 2026-08-20 — P1.5 lifetime archive (Q3: direct serve).
+            # If the photo is missing from primary but present in
+            # the archive folder (event was archived), serve from
+            # there. The browser sees the same URL regardless of
+            # which copy was read, so no UX change.
+            archive_target = (ARCHIVE_ROOT / rel).resolve()
+            try:
+                archive_target.relative_to(ARCHIVE_ROOT.resolve())
+            except ValueError:
+                # Path would escape the archive root — same as
+                # the primary check above, refuse silently.
+                return self._send_error(404, "not found")
+            if archive_target.is_file():
+                target = archive_target
+            else:
+                return self._send_error(404, "not found")
         # Pick a content type from the extension
         ext = target.suffix.lower()
         ctype = {
@@ -488,7 +679,55 @@ class PhotoHandler(BaseHTTPRequestHandler):
         except OSError as e:
             return self._send_error(500, f"read error: {e}")
         # 1-year cache: phone uploads are immutable; key includes timestamp + nonce.
+        # Same cache header for archived photos — also immutable.
         self._send_bytes(200, body, ctype, max_age=31536000)
+
+    # ---- 2026-08-20 — P1.5 lifetime archive (audit §4.5) ----
+    def _handle_archive(self):
+        # 2026-08-20 — P1.5 lifetime archive endpoint.
+        # HMAC verification comes FIRST, before any disk IO or
+        # manifest writes. The CF cron (server-to-server) is the
+        # only legitimate caller; refuse anything else.
+        token = self.headers.get("X-Archive-Token", "")
+        if not token:
+            return self._send_error(401, "missing X-Archive-Token")
+        try:
+            body = self._read_body()
+        except Exception as e:
+            return self._send_error(400, f"malformed body: {e}")
+        try:
+            payload = json.loads(body or b"{}")
+        except json.JSONDecodeError:
+            return self._send_error(400, "invalid JSON body")
+        event_id = payload.get("eventId", "")
+        owner_uid = payload.get("ownerUid", "")
+        if not event_id or not owner_uid:
+            return self._send_error(400, "missing eventId/ownerUid")
+        if not _verify_archive_hmac(PHOTO_HMAC_SECRET, event_id, owner_uid, token):
+            log(f"archive HMAC verify failed for event_id={event_id[:8]}...")
+            return self._send_error(401, "unauthorized (token mismatch)")
+        try:
+            result = _archive_event(event_id, owner_uid)
+        except ArchiveError as e:
+            log(f"archive failed for {event_id[:8]}...: {e.reason} {e.message}")
+            return self._send_json(e.status_code, {
+                "ok": False,
+                "reason": e.reason,
+                "message": e.message,
+            })
+        log(
+            f"archived {event_id[:8]}... filesCopied={result['filesCopied']} "
+            f"bytesCopied={result['bytesCopied']}"
+        )
+        return self._send_json(200, result)
+
+    def _read_body(self) -> bytes:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length == 0:
+            return b""
+        if length > 64 * 1024:  # 64 KB — the body is just {eventId, ownerUid}
+            raise ValueError("body too large")
+        return self.rfile.read(length)
 
     def _handle_upload(self):
         # 2026-07-27 — HMAC verification, BEFORE any multipart parsing

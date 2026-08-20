@@ -742,6 +742,7 @@ export * from './ratings';
 // total} counters so couples can browse the 商戶指南 without
 // loading every /vendorImageViews row.
 export * from './vendorAnalytics';
+export * from './cron/archiveJob';
 
 export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (req) => {
   if (!req.auth) {
