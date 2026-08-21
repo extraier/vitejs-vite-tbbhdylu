@@ -1551,27 +1551,35 @@ export default function App() {
            },
            (err) => {
              // 2026-08-20 — Manus bell observability (audit §vendor-bell):
-             // classify the error code so the log label matches the
-             // actual failure. The previous "(likely missing index)"
-             // message was misleading when the real cause was a
-             // permission-denied from a malformed task doc — which
-             // is the production incident this whole handoff fixes.
+             // structured triage + non-blocking banner. The previous
+             // console.warn label was misleading when the real cause
+             // was permission-denied from a malformed task doc. This
+             // callback now:
+             //   1. Detects permission-denied via code OR message regex
+             //      (Firestore sometimes returns one without the other).
+             //   2. Emits a structured console.error with the audit-
+             //      grade fields (code, message, vendorUid, query,
+             //      isPermissionDenied) for triage.
+             //   3. Sets vendorAssignedTasksError to a banner string
+             //      the dashboard renders. Bell is untouched — task
+             //      list and notification inbox are independent.
+             const isPermissionDenied =
+               err?.code === 'permission-denied' ||
+               /Missing or insufficient permissions/i.test(err?.message || '');
              // eslint-disable-next-line no-console
-             const code = err?.code || '';
-             if (code === 'permission-denied') {
-               console.warn(
-                 '[vendor-bell] assignedTasks subscribe denied — malformed or unassigned task doc; firestore rules now deny-on-malformed. Detail:',
-                 err?.message,
-               );
-             } else if (code === 'failed-precondition') {
-               console.warn(
-                 '[vendor-bell] assignedTasks subscribe missing composite index (firestore.indexes.json):',
-                 err?.message,
-               );
-             } else {
-               console.warn(
-                 '[vendor-bell] assignedTasks subscribe failed:',
-                 err?.message,
+             console.error('[vendor-assigned-tasks] subscription failed', {
+               code: err?.code || null,
+               message: err?.message || String(err),
+               vendorUid: user.uid,
+               query: 'collectionGroup(tasks): assignedVendorUid == vendorUid',
+               isPermissionDenied,
+             });
+             if (!cancelled) {
+               setAssignedTasks([]);
+               setVendorAssignedTasksError(
+                 isPermissionDenied
+                   ? '暫時未能讀取已指派工作，請重新登入後再試。'
+                   : '載入已指派工作時發生問題，請稍後再試。',
                );
              }
            },
@@ -4609,6 +4617,10 @@ export default function App() {
                   assignedTasks={assignedTasks}
                   assignedRundown={assignedRundown}
                   assignedResources={assignedResources}
+                  // 2026-08-20 — Manus bell observability (audit
+                  // §vendor-bell): non-blocking banner. Shown when
+                  // the assignedTasks listener fails; bell stays.
+                  vendorAssignedTasksError={vendorAssignedTasksError}
                   isAdminPreview={isAdmin && !isVendor}
                   onUpdateTaskStatus={handleUpdateAssignedTaskStatus}
                   // 2026-07-20 — inquiry inbox routing. The

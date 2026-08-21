@@ -404,6 +404,17 @@ export function BellNotifications({
       });
     }
   }
+  // 2026-08-20 — Manus bell observability (audit §vendor-bell):
+  // mount/unmount lifecycle diagnostics. Fires for vendor bell
+  // mounts + cleanups so triage can distinguish "bell never
+  // mounted" (component-level bug) from "bell mounted but
+  // errored" (boundary / hook failure). The cleanup runs on
+  // every unmount, including HMR / role-switch transitions.
+  useEffect(() => {
+    if (diagnosticRole !== 'vendor') return undefined;
+    emitDiagnostic('mount');
+    return () => emitDiagnostic('unmount');
+  }, [diagnosticRole, emitDiagnostic]);
   const proposalCount = items.filter((i) => i.category === 'proposal').length;
   // 2026-08-09 — bell dropdown truncates to MAX_BELL_DROPDOWN_ITEMS (20)
   // for visual density. The full notifications-center view shows every

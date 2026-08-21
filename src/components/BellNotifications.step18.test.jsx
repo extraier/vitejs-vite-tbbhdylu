@@ -328,3 +328,101 @@ describe('BellNotifications emitDiagnostic shape (audit §vendor-bell step 4)', 
     }
   });
 });
+
+
+// 2026-08-20 — Step 4 mount/unmount lifecycle diagnostics.
+
+describe('BellNotifications mount/unmount diagnostics (audit §vendor-bell step 4)', () => {
+  it('emits mount on render and unmount on cleanup for vendor role', () => {
+    setupHook();
+    const onDiagnostic = vi.fn();
+    const { unmount } = render(
+      <BellNotifications
+        ownerUid="owner-1"
+        selfUid="vendor-1"
+        diagnosticRole="vendor"
+        onDiagnostic={onDiagnostic}
+      />,
+    );
+    const mountCall = onDiagnostic.mock.calls.find(([d]) => d.stage === 'mount');
+    expect(mountCall).toBeTruthy();
+    expect(mountCall[0]).toMatchObject({
+      area: 'vendor-notification-bell',
+      stage: 'mount',
+      uid: 'vendor-1',
+      role: 'vendor',
+    });
+    unmount();
+    const unmountCall = onDiagnostic.mock.calls.find(([d]) => d.stage === 'unmount');
+    expect(unmountCall).toBeTruthy();
+    expect(unmountCall[0]).toMatchObject({
+      area: 'vendor-notification-bell',
+      stage: 'unmount',
+      uid: 'vendor-1',
+      role: 'vendor',
+    });
+  });
+
+  it('does NOT emit mount/unmount for non-vendor roles', () => {
+    setupHook();
+    const onDiagnostic = vi.fn();
+    const { unmount } = render(
+      <BellNotifications
+        ownerUid="owner-1"
+        selfUid="couple-1"
+        diagnosticRole="couple"
+        onDiagnostic={onDiagnostic}
+      />,
+    );
+    unmount();
+    const lifecycleCalls = onDiagnostic.mock.calls.filter(
+      ([d]) => d.stage === 'mount' || d.stage === 'unmount',
+    );
+    expect(lifecycleCalls).toHaveLength(0);
+  });
+});
+
+// 2026-08-20 — Step 8 vendorAssignedTasksError banner UI.
+import { VendorDashboard } from '../screens/VendorDashboard';
+
+describe('VendorDashboard banner (audit §vendor-bell step 8)', () => {
+  it('shows the permission-denied banner string when prop set', () => {
+    render(
+      <VendorDashboard
+        user={{ uid: 'vendor-1' }}
+        vendor={{ name: 'Test Vendor' }}
+        vendorAssignedTasksError="暫時未能讀取已指派工作，請重新登入後再試。"
+      />,
+    );
+    expect(
+      screen.getByTestId('vendor-assigned-tasks-error'),
+    ).toBeTruthy();
+    expect(
+      screen.getByText('暫時未能讀取已指派工作，請重新登入後再試。'),
+    ).toBeTruthy();
+  });
+
+  it('shows the generic error banner string when prop set with another message', () => {
+    render(
+      <VendorDashboard
+        user={{ uid: 'vendor-1' }}
+        vendor={{ name: 'Test Vendor' }}
+        vendorAssignedTasksError="載入已指派工作時發生問題，請稍後再試。"
+      />,
+    );
+    expect(
+      screen.getByText('載入已指派工作時發生問題，請稍後再試。'),
+    ).toBeTruthy();
+  });
+
+  it('does NOT show the banner when prop is null', () => {
+    render(
+      <VendorDashboard
+        user={{ uid: 'vendor-1' }}
+        vendor={{ name: 'Test Vendor' }}
+        vendorAssignedTasksError={null}
+      />,
+    );
+    expect(screen.queryByTestId('vendor-assigned-tasks-error')).toBeNull();
+  });
+});

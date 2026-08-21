@@ -298,6 +298,12 @@ export function VendorDashboard({
   // guards the clear by id match. Optional; defaults to no-op.
   onFocusedCommentHandled = null,
   onFocusedParentHandled = null,
+  // 2026-08-20 — Manus bell observability (audit §vendor-bell).
+  // Non-blocking banner shown above the assigned-tasks panel
+  // when the listener fails. The bell keeps rendering — the
+  // task list and notification inbox are independent concerns.
+  // Default null = no banner.
+  vendorAssignedTasksError = null,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
@@ -373,6 +379,28 @@ export function VendorDashboard({
             </h3>
             <p className="text-sm text-indigo-800">
               你正以管理員身份預覽商戶控制台。你本身並非商戶，所以呢度唔會顯示真實商戶資料。要睇真實商戶 UI，請用商戶帳號登入。
+            </p>
+          </div>
+        </div>
+      )}
+      {/* 2026-08-20 — Manus bell observability (audit §vendor-bell).
+          Non-blocking banner surfaced when the assigned-tasks
+          collectionGroup listener fails. Permission-denied (the
+          original production incident this handoff fixes) shows
+          a re-login nudge; other failures show a generic retry.
+          The bell itself stays mounted — the inbox and the task
+          list are independent concerns per the audit's evidence
+          boundary. Renders amber to match the bell fallback. */}
+      {vendorAssignedTasksError && (
+        <div
+          role="alert"
+          data-testid="vendor-assigned-tasks-error"
+          className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 flex items-start gap-3"
+        >
+          <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm text-amber-900">
+              {vendorAssignedTasksError}
             </p>
           </div>
         </div>
