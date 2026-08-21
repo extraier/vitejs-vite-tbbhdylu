@@ -61,12 +61,12 @@ STORAGE_ROOT = Path(os.environ.get("PHOTO_ROOT", "/volume1/flight-scanner/weddin
 # the server read.
 ARCHIVE_ROOT = Path(
     os.environ.get(
-        "PHOTO_ARCHIVE_ROOT", "/volume1/flight-scanner/wedding-photos-archive"
+        "PHOTO_ARCHIVE_ROOT", "/volume1/savetheday/wedding-photos-archive"
     )
 )
 ARCHIVE_LOG_ROOT = Path(
     os.environ.get(
-        "PHOTO_ARCHIVE_LOG_ROOT", "/volume1/flight-scanner/wedding-photos-archive-log"
+        "PHOTO_ARCHIVE_LOG_ROOT", "/volume1/savetheday/wedding-photos-archive-log"
     )
 )
 # Reserve 5 GB free on the primary volume before copying.
