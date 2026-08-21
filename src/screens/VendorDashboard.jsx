@@ -43,7 +43,6 @@ import { formatAbsoluteDue, formatLongAbsoluteDue } from '../lib/dueDate';
 import { formatBudgetString } from '../lib/format';
 import { ItemComments } from '../components/ItemComments';
 import { VendorPortfolioAnalytics } from '../components/VendorPortfolioAnalytics';
-import { VendorInquiriesPanel } from '../components/VendorInquiriesPanel';
 import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
 
 // 2026-07-17 — task-status config. Five states. Stored on
@@ -280,7 +279,11 @@ export function VendorDashboard({
   assignedRundown = [],
   assignedResources = [],
   onUpdateTaskStatus,
-  onOpenInquiry,
+  // 2026-08-21 — onOpenInquiry removed. The 客戶查詢收件箱
+  // panel that used to call this on click has been collapsed
+  // into the sticky <VendorTopBar>; the top bar's onOpenInbox
+  // prop handles the same routing directly in App.jsx. The
+  // old prop is no longer wired to anything in the dashboard.
   // 2026-08-17 — Manus A8: vendor-side deep-link focus. The bell
   // alert routed to vendor-dashboard now also seeds focusedParent*
   // so the matching assigned item auto-expands + scrolls into
@@ -498,20 +501,16 @@ export function VendorDashboard({
           </div>
         </div>
       )}
-      {/* 2026-07-20 — vendor inquiry inbox panel. Always visible
-          at the top of the dashboard (not collapsible like the
-          analytics one) — incoming customer messages are the most
-          time-sensitive thing a vendor sees. Subscribes to
-          /artifacts/{appId}/vendorInquiries for the current vendor,
-          shows unread badge + recent 4 inquiries + link to full
-          inbox. Click an inquiry → onOpenInquiry → App.jsx routes
-          to the shared ChatRoom. */}
-      <div className="mb-6">
-        <VendorInquiriesPanel
-          user={user}
-          onOpenInquiry={onOpenInquiry}
-        />
-      </div>
+      {/* 2026-08-21 — removed the 客戶查詢收件箱 panel. Its
+          two visible affordances (the unread badge + the
+          "開啟收件箱" link) now live in the sticky <VendorTopBar>
+          at the top of the dashboard as a mail icon + unread
+          badge. The full inbox list is still rendered by
+          <Inbox> when the user clicks the icon (the user
+          already had that view as the destination of the
+          panel's link). The click handler in the top bar
+          routes to the 'inbox' view, which renders the same
+          <Inbox> screen the owner uses. */}
 
       {/* 2026-07-20 — Portfolio analytics collapsible. Vendor clicks
           the button to expand; renders VendorPortfolioAnalytics

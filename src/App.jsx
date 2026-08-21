@@ -4660,6 +4660,21 @@ export default function App() {
                           // the same right-side cluster. App.jsx
                           // already routes it to 'vendor-profile'.
                           onManageProfile={() => setCurrentView('vendor-profile')}
+                          // 2026-08-21 — inbox icon + unread badge.
+                          // The 客戶查詢收件箱 panel that used to
+                          // live at the top of the dashboard is
+                          // now a single mail icon in the top bar;
+                          // the badge shows totalUnread (same
+                          // aggregator as the owner header's inbox
+                          // badge — vendorUnread when role==vendor,
+                          // coupleUnread otherwise). Click routes
+                          // to the shared Inbox view, which
+                          // VendorInquiriesPanel already populated.
+                          inboxCount={totalUnread}
+                          onOpenInbox={() => {
+                            setSelectedInquiry(null);
+                            setCurrentView('inbox');
+                          }}
                           // Wrap the bell in the same error boundary
                           // + resetKey triplet the main header uses
                           // so a render exception produces the same
@@ -4736,14 +4751,6 @@ export default function App() {
                   vendorAssignedTasksError={vendorAssignedTasksError}
                   isAdminPreview={isAdmin && !isVendor}
                   onUpdateTaskStatus={handleUpdateAssignedTaskStatus}
-                  // 2026-07-20 — inquiry inbox routing. The
-                  // VendorInquiriesPanel hands back a selected inquiry
-                  // and we wire it to the same ChatRoom the couple
-                  // uses (shared component).
-                  onOpenInquiry={(inq) => {
-                    setSelectedInquiry(inq);
-                    setCurrentView('chat-room');
-                  }}
                   // 2026-08-17 — Manus A8: vendor-side deep-link
                   // focus. Bell alert click lands here with
                   // focusedParent* set; the dashboard finds the
