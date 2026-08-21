@@ -1491,12 +1491,25 @@ export default function App() {
    // first error). Owner-scoped rule lets vendors read only tasks
    // assigned to them.
    const [assignedTasks, setAssignedTasks] = useState([]);
+   // 2026-08-20 — Manus bell observability (audit §vendor-bell).
+   // Non-blocking banner state for the assigned-tasks listener.
+   // The bell and the task dashboard are independent concerns:
+   // the bell keeps rendering even when the listener fails, and
+   // the dashboard shows the banner so the vendor knows their
+   // task list couldn't be hydrated. Stays null when the
+   // listener succeeds. Default null = no banner.
+   const [vendorAssignedTasksError, setVendorAssignedTasksError] = useState(null);
    useEffect(() => {
      if (!user || userRole !== 'vendor' || user.isAnonymous) {
        setAssignedTasks([]);
+       setVendorAssignedTasksError(null);
        return undefined;
      }
      let cancelled = false;
+     // 2026-08-20 — Manus: clear the banner before (re)subscribing.
+     // A stale banner from a previous subscription could
+     // survive a role-switch / re-mount and mislead the vendor.
+     setVendorAssignedTasksError(null);
      (async () => {
        try {
          const tasksQuery = query(
