@@ -4653,6 +4653,13 @@ export default function App() {
                           vendorName={vendorProfile?.name}
                           categoryLabel={getVendorCategoryLabel(vendorProfile?.category, vendorProfile?.subcategory)}
                           onLogout={handleVendorLogout}
+                          // 2026-08-21 — consolidate the dark
+                          // 商戶接單大堂 panel into the top bar.
+                          // 管理專題 is the primary action,
+                          // so it sits with the bell + logout in
+                          // the same right-side cluster. App.jsx
+                          // already routes it to 'vendor-profile'.
+                          onManageProfile={() => setCurrentView('vendor-profile')}
                           // Wrap the bell in the same error boundary
                           // + resetKey triplet the main header uses
                           // so a render exception produces the same
