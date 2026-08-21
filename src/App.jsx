@@ -47,6 +47,7 @@ import {
   FREE_TIER_LIMIT_MB,
   INITIAL_JOB_REQUESTS,
   getTaskCategoryLabel,
+  getVendorCategoryLabel,
 } from './lib/config';
 import { parseGuestParams } from './lib/guestMode';
 import { uploadPhotoToNas } from './lib/uploadToNas';
@@ -153,6 +154,11 @@ import { BellNotifications } from './components/BellNotifications';
 // crash falls back to a retryable warning button instead of
 // removing the bell entirely.
 import { VendorBellErrorBoundary } from './components/VendorBellErrorBoundary';
+// 2026-08-21 — vendor top bar. The bell + logout surface for the
+// vendor dashboard (the main App header only renders when
+// currentEvent is set, so vendors never saw it). Imported here so
+// App.jsx can pass it to <VendorDashboard> as a topBar prop.
+import { VendorTopBar } from './components/VendorTopBar';
 import { NotificationsCenter } from './components/NotificationsCenter';
 import { markProposalsSeenExact } from './hooks/useProposalBell';
 import { InviteModal } from './components/modals/InviteModal';
@@ -4627,6 +4633,93 @@ export default function App() {
                   onSubmitProposal={submitProposal}
                   onManageProfile={() => setCurrentView('vendor-profile')}
                   onLogout={handleVendorLogout}
+                  // 2026-08-21 — Vendor top bar with bell + logout.
+                  // The main App header only renders when
+                  // currentEvent is set, so vendors never got the
+                  // bell. Construct the bell the same way the main
+                  // header does (VendorBellErrorBoundary +
+                  // BellNotifications with the same resetKey
+                  // triplet) so a render exception produces the
+                  // same retryable warning button rather than a
+                  // silent removal. The bar also surfaces the
+                  // vendor name + category so the vendor always
+                  // knows which account is active. Hidden for
+                  // admin preview (the admin is not a vendor).
+                  topBar={
+                    isAdmin && !isVendor
+                      ? null
+                      : (
+                        <VendorTopBar
+                          vendorName={vendorProfile?.name}
+                          categoryLabel={getVendorCategoryLabel(vendorProfile?.category, vendorProfile?.subcategory)}
+                          onLogout={handleVendorLogout}
+                          // Wrap the bell in the same error boundary
+                          // + resetKey triplet the main header uses
+                          // so a render exception produces the same
+                          // retryable warning button. The bell
+                          // itself receives the same diagnostic
+                          // callback so structured triage events
+                          // keep flowing.
+                          bell={
+                            <VendorBellErrorBoundary
+                              resetKey={`vendor-dashboard:${user?.uid || 'signed-out'}:${userRole}:${bellProps.enabled}`}
+                              context={{
+                                selfUid: user?.uid || null,
+                                role: userRole,
+                                enabled: bellProps.enabled,
+                                source: 'vendor-top-bar',
+                              }}
+                              onDiagnostic={handleBellDiagnostic}
+                            >
+                              <BellNotifications
+                                ownerUid={bellProps.ownerUid}
+                                coupleUid={bellProps.coupleUid}
+                                selfUid={bellProps.selfUid}
+                                eventId={bellProps.eventId}
+                                enabled={bellProps.enabled}
+                                onOpenProposal={(jobId) => setViewingProposals(jobId)}
+                                onOpenComment={(meta) => {
+                                  if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                                    setCurrentEvent({ id: meta.eventId });
+                                  }
+                                  setFocusedParentId(null);
+                                  setFocusedParentKind(null);
+                                  setFocusedTaskId(meta?.taskId || null);
+                                  setCurrentView('couple-checklist');
+                                }}
+                                onOpenCommentAlert={(meta) => {
+                                  if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                                    setCurrentEvent({ id: meta.eventId });
+                                  }
+                                  if (meta?.kind === 'rundown' || meta?.kind === 'resources') {
+                                    setFocusedParentKind(meta.kind);
+                                    setFocusedParentId(meta.parentId || null);
+                                  } else {
+                                    setFocusedParentKind(null);
+                                    setFocusedParentId(null);
+                                  }
+                                  setFocusedCommentId(meta?.commentId || null);
+                                  if (userRole === 'vendor') {
+                                    setCurrentView('vendor-dashboard');
+                                  }
+                                }}
+                                onOpenStatus={(meta) => {
+                                  if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+                                    setCurrentEvent({ id: meta.eventId });
+                                  }
+                                  setFocusedTaskId(meta?.taskId || null);
+                                  setCurrentView('couple-checklist');
+                                }}
+                                onOpenInvite={() => setCurrentView('helpers')}
+                                onOpenDashboard={() => setCurrentView('notifications-center')}
+                                diagnosticRole={userRole}
+                                onDiagnostic={handleBellDiagnostic}
+                              />
+                            </VendorBellErrorBoundary>
+                          }
+                        />
+                      )
+                  }
                   assignedTasks={assignedTasks}
                   assignedRundown={assignedRundown}
                   assignedResources={assignedResources}

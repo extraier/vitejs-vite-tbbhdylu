@@ -298,6 +298,18 @@ export function VendorDashboard({
   // guards the clear by id match. Optional; defaults to no-op.
   onFocusedCommentHandled = null,
   onFocusedParentHandled = null,
+  // 2026-08-21 — Vendor top bar. The bell + logout used to
+  // live inside the main App header (which only renders when
+  // currentEvent is set — owners and co-owners). Vendors have
+  // no currentEvent, so the header never appeared and the bell
+  // disappeared. These props let App.jsx pass a fully-mounted
+  // bell element + a logout handler + display info down to a
+  // sticky top bar rendered at the top of the dashboard. The
+  // App.jsx mount point wraps the bell in the same error
+  // boundary + resetKey triplet as the main header, so a render
+  // exception produces the same retryable warning button.
+  // Default null = no top bar (preserves admin-preview + tests).
+  topBar = null,
   // 2026-08-20 — Manus bell observability (audit §vendor-bell).
   // Non-blocking banner shown above the assigned-tasks panel
   // when the listener fails. The bell keeps rendering — the
@@ -365,6 +377,17 @@ export function VendorDashboard({
 
   return (
     <div className="max-w-6xl mx-auto mt-8 animate-in slide-in-from-bottom-4 duration-500">
+      {/* 2026-08-21 — Vendor top bar (bell + logout). The global
+          App header only renders when currentEvent is set
+          (owners / co-owners), so vendors never saw the bell.
+          This top bar brings the bell + a dedicated logout
+          button to the vendor dashboard. Sticky so it stays
+          visible while scrolling. The bell element comes
+          from App.jsx already wrapped in VendorBellErrorBoundary
+          + the same resetKey triplet as the main header, so a
+          render exception produces the same retryable warning
+          button. Default null = no bar (admin preview + tests). */}
+      {topBar}
       {/* 2026-07-15 — when an admin clicks the 商戶 pill to preview the
           vendor UI but they themselves don't have a vendor profile, the
           dashboard would otherwise look broken (warning banner + empty
