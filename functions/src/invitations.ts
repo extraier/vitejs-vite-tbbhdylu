@@ -642,12 +642,32 @@ export const verifyShareToken = onCall(
     secrets: [LINK_SECRET],
   },
   async (req): Promise<{ ok: true; ownerUid: string; eventId: string; guestId: string }> => {
-    // Anonymous redeems are the norm — guests hit this before any signin.
-    // We do NOT require auth here; instead we require HMAC verification of
-    // (ownerUid|eventId|guestId|expires) and that the caller *will* sign in
-    // anonymously right after, picking up guestLinks/{auth.uid} = {ownerUid,
-    // eventId, guestId, ...}.
-    const { token, expectedAuthUid } = req.data as { token?: string; expectedAuthUid?: string };
+    // 2026-08-23 — Manus P1 hardening (manus recommedation 2.pdf §2.3).
+    //
+    // Three invariants from the audit that this rewrite enforces:
+    //
+    //   1. The link is bound to the CALLER's auth.uid — never a caller-supplied
+    //      uid. The previous `req.auth?.uid ?? expectedAuthUid` fallback let any
+    //      client pick which uid to bind by passing expectedAuthUid in the body,
+    //      even if the actual auth.uid was something else. Drop the fallback.
+    //
+    //   2. guestId must resolve to exactly one guest document on the event. The
+    //      HMAC payload already names a guestId, but we re-check it server-side
+    //      because a forged HMAC with an arbitrary guestId would still pass the
+    //      signature check if the attacker had the secret (we hope not, but
+    //      defense in depth).
+    //
+    //   3. We persist guestDocId on the link doc so P2's callables
+    //      (respondToRsvp / saveGuestMessage / getGuestPortalBootstrap) can read
+    //      the bound guest in one get() instead of re-querying guests by guestId.
+    //      guestDocId !== guestId in general (guestDocId is the Firestore doc
+    //      id, which may be the same string but isn't guaranteed by schema).
+    //
+    // Behavior change for callers: any client code passing expectedAuthUid is
+    // now ignored. The client signs in anonymously FIRST (via
+    // signInAnonymously(auth) at App.jsx:1047), then calls this callable. If
+    // auth is null at call time, we throw 'unauthenticated'.
+    const { token } = req.data as { token?: string };
     if (typeof token !== 'string') {
       throw new HttpsError('invalid-argument', 'token required');
     }
@@ -675,30 +695,55 @@ export const verifyShareToken = onCall(
       throw new HttpsError('permission-denied', 'invalid signature');
     }
 
-    // Write guestLinks/{authUid} doc — the caller's auth.uid must equal the
-    // linkDocId per firestore.rules match /guestLinks/{linkDocId} allows create.
-    // For anonymous flow: the client signs in anonymously FIRST, gets auth.uid,
-    // then calls this with that uid. If uid mismatch, we error.
-    const authUid = req.auth?.uid ?? expectedAuthUid;
-    if (!authUid) throw new HttpsError('unauthenticated', 'sign in first');
+    // (1) NO caller-supplied uid fallback. auth.uid is the only binding key.
+    const authUid = req.auth?.uid;
+    if (!authUid) {
+      throw new HttpsError('unauthenticated', 'sign in anonymously before redeeming');
+    }
 
+    // (2) Resolve guestId → guestDocId. The HMAC payload names a guestId
+    // (the user-visible identifier on the invitation), but Firestore docs
+    // have their own doc id (which may be guestId, may be a uuid). Look it up.
+    const guests = await db
+      .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
+      .collection('events').doc(eventId)
+      .collection('guests')
+      .where('guestId', '==', guestId)
+      .limit(2)
+      .get();
+    if (guests.size !== 1) {
+      // 0 matches: HMAC valid but guest not on this event (expired invite
+      // / event cancelled). 2+: schema violation — every guestId must be
+      // unique on the event.
+      throw new HttpsError('not-found', 'invited guest not found on this event');
+    }
+    const guestDocId = guests.docs[0].id;
+
+    // Bind link → authUid. The doc id is the caller's auth.uid by design
+    // (firestore.rules match /guestLinks/{linkDocId} keys reads by uid).
     const linkRef = db
       .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
       .collection('guestLinks').doc(authUid);
     const existing = await linkRef.get();
     if (existing.exists) {
       const data = existing.data()!;
-      // Idempotent — already redeemed with matching eventId/guestId is fine.
+      // Idempotent — same (eventId, guestId) pair means same invite.
       if (data.eventId === eventId && data.guestId === guestId) {
+        // If guestDocId wasn't set on the previous redeem (older callers),
+        // patch it now so P2's callables can rely on it.
+        if (!data.guestDocId) {
+          await linkRef.set({ guestDocId }, { merge: true });
+        }
         return { ok: true, ownerUid, eventId, guestId };
       }
-      throw new HttpsError('already-exists', 'a different link is bound to this uid');
+      throw new HttpsError('already-exists', 'a different link is bound to this session');
     }
 
     await linkRef.set({
       ownerUid,
       eventId,
       guestId,
+      guestDocId,
       expiresAt: new Date(expiresAt),
       redeemedByUid: authUid,
       redeemedAt: FieldValue.serverTimestamp(),

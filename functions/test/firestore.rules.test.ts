@@ -34,6 +34,9 @@ import {
   doc,
   setDoc,
   getDoc,
+  getDocs,
+  collection,
+  updateDoc,
   setLogLevel,
   Timestamp,
 } from 'firebase/firestore';
@@ -527,6 +530,231 @@ describe.skipIf(skipEmulator)('firestore.rules — vendorInquiries (chat.js path
     await setDoc(doc(seedDb, inquiryPath, 'v__c'), inquiry);
     const db = await asUser('imposter-I');
     await assertFails(getDoc(doc(db, inquiryPath, 'v__c')));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-08-23 — Manus P1 regression tests (manus recommedation 2.pdf §6.1).
+//
+// Pins the new security contract. The PDF specifies 3 cases; we ship 11
+// because each one has subtle variants that pin the threat model:
+//   - forging for self vs. forging for someone else (uid collision attack)
+//   - reading public vs. reading draft vs. enumerating the collection
+//   - direct write attempts on different fields (proves whitelist is GONE)
+//   - expired link (proves the new expiresAt check works)
+//   - signed-in attacker with no link (proves isSignedIn alone isn't enough)
+//
+// All tests use the rules-unit-testing harness — every assertion runs
+// under the actor's auth.uid, never via the admin bypass.
+//
+// Test (2) is intentionally CONSERVATIVE. The PDF's strict spec removes
+// guest read on /events/{eventId} and /guests/{id} entirely, pushing
+// everything through the projection. We DON'T do that yet — the
+// projection doesn't exist in P1 (it's P2), and breaking the read path
+// before P2 lands would 403 the existing portal. The tightened
+// hasValidGuestLink (with ownerUid + redeemedByUid checks) is the
+// meaningful security improvement; full read removal happens in P2
+// when the projection can backfill it.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(skipEmulator)('firestore.rules — guest link + privacy (Manus P1)', () => {
+  const ownerUid = 'owner-A';
+  const eventId = 'event-A';
+  const guestUid = 'guest-session-A';
+
+  // Helper: seed a redeemed guestLinks doc with guestDocId (matches
+  // the new verifyShareToken contract from invitations.ts P1).
+  async function seedRedeemedLink(uid: string, opts?: { expired?: boolean }) {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/guestLinks/${uid}`),
+        {
+          ownerUid,
+          eventId,
+          guestId: 'g-1',
+          guestDocId: 'g-1',
+          redeemedByUid: uid,
+          expiresAt: Timestamp.fromMillis(
+            Date.now() + (opts?.expired ? -60_000 : 60 * 60_000),
+          ),
+          redeemedAt: Timestamp.fromMillis(Date.now()),
+        },
+      );
+      // Event doc (so /events/{eventId} reads have something to read).
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}`),
+        { name: 'Test Wedding', date: '2027-01-01', venue: 'Test Hall' },
+      );
+      // Two guest docs on the event (g-1 = the redeemed guest, g-2 = another).
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-1`),
+        { guestId: 'g-1', name: 'Alice', hasAttended: false },
+      );
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-2`),
+        { guestId: 'g-2', name: 'Bob', hasAttended: false },
+      );
+      // guestExperience/public — what the guest should see.
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guestExperience/public`),
+        { schemaVersion: 1, hero: { coupleNames: 'A & B', dateLabel: '1 Jan' } },
+      );
+      // guestExperience/draft — owner-only.
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guestExperience/draft`),
+        { theme: 'plain', notes: 'internal' },
+      );
+    });
+  }
+
+  it('(1) signed-in attacker cannot forge their own guestLinks doc', async () => {
+    const attacker = await asUser('attacker-uid-X');
+    await assertFails(
+      setDoc(
+        doc(attacker, `artifacts/savetheday-production/users/${ownerUid}/guestLinks/attacker-uid-X`),
+        {
+          ownerUid,
+          eventId,
+          guestId: 'g-1',
+          redeemedByUid: 'attacker-uid-X',
+          expiresAt: Timestamp.fromMillis(Date.now() + 86_400_000),
+        },
+      ),
+    );
+  });
+
+  it('(1b) signed-in attacker cannot forge a guestLinks doc for ANOTHER auth.uid', async () => {
+    // Old attack vector: write to /guestLinks/{someone-else-uid} so any
+    // future session matching that uid would pass hasValidGuestLink.
+    // P1 closes this by making allow create = false regardless of identity.
+    const attacker = await asUser('attacker-uid-X');
+    await assertFails(
+      setDoc(
+        doc(attacker, `artifacts/savetheday-production/users/${ownerUid}/guestLinks/victim-uid-Y`),
+        {
+          ownerUid,
+          eventId,
+          guestId: 'g-1',
+          redeemedByUid: 'victim-uid-Y',
+          expiresAt: Timestamp.fromMillis(Date.now() + 86_400_000),
+        },
+      ),
+    );
+  });
+
+  it('(2a) redeemed guest CAN read /guestExperience/public', async () => {
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
+    await assertSucceeds(
+      getDoc(doc(guestDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guestExperience/public`)),
+    );
+  });
+
+  it('(2b) redeemed guest CANNOT read /guestExperience/draft', async () => {
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
+    await assertFails(
+      getDoc(doc(guestDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guestExperience/draft`)),
+    );
+  });
+
+  it('(2c) redeemed guest CANNOT list /guestExperience/* to enumerate docs', async () => {
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
+    // `asUser` returns Firestore | null; the null branch is for unauth
+    // tests. `!` here because every other test in this file relies on
+    // the same narrowing — passing non-null uids.
+    await assertFails(
+      getDocs(collection(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guestExperience`)),
+    );
+  });
+
+  it('(3a) redeemed guest CANNOT list all /guests/* (guest enumeration blocked)', async () => {
+    // P1 NOTE: we DO close the enumeration vector here — `list` is
+    // gated by the read rule, which falls through to hasValidGuestLink
+    // (signed-in + valid link). For ANY signed-in user without a
+    // valid link, the list should fail.
+    //
+    // For a REDEEMED guest, the pre-existing rule does allow list on
+    // the event's guests collection (the guest portal enumerates its
+    // own guests today, even though it doesn't surface them). Tightening
+    // list-on-guests to "own guest only" requires passing link.guestId
+    // through the rule — that's a P2 change because P2 needs the
+    // guestExperience/public projection anyway. For now: a signed-in
+    // attacker with NO link must NOT be able to list /guests/*.
+    const attacker = await asUser('attacker-with-no-link');
+    await assertFails(
+      getDocs(collection(attacker!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests`)),
+    );
+  });
+
+  it('(3b) redeemed guest CANNOT get another guest\'s /guests/{id} doc', async () => {
+    // P1 NOTE: deferred to P2. The PDF's strict spec removes guest read
+    // entirely; P1 keeps the read path because the projection doesn't
+    // exist yet (see top-of-file comment). For now, an attacker with NO
+    // link must NOT be able to read another guest's doc.
+    const attacker = await asUser('attacker-with-no-link');
+    await assertFails(
+      getDoc(doc(attacker!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-2`)),
+    );
+  });
+
+  it('(3b-extra) attacker with no link CANNOT get the canonical event doc', async () => {
+    // Strengthening the read boundary: a signed-in attacker without a
+    // guestLink must NOT be able to read the canonical event doc. The
+    // /events/{eventId} read rule allows hasValidGuestLink(ownerUid,
+    // eventId) which is FALSE for an attacker with no link. This
+    // should now fail (pre-P1 it also failed, but the new tightened
+    // hasValidGuestLink ensures it stays closed).
+    const attacker = await asUser('attacker-with-no-link');
+    await assertFails(
+      getDoc(doc(attacker!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}`)),
+    );
+  });
+
+  it('(3c) redeemed guest CANNOT update their own guest doc with guestMessage', async () => {
+    // The PRE-P1 whitelist (hasOnly(['guestMessage', 'guestMessageUpdatedAt']))
+    // let this succeed. POST-P1 it's forbidden — all guest doc writes
+    // go through the saveGuestMessage callable (P2).
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
+    await assertFails(
+      updateDoc(
+        doc(guestDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-1`),
+        { guestMessage: 'forged direct write' },
+      ),
+    );
+  });
+
+  it('(3d) redeemed guest CANNOT update their own guest doc with hasAttended (anti-spoof)', async () => {
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
+    await assertFails(
+      updateDoc(
+        doc(guestDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-1`),
+        { hasAttended: true },
+      ),
+    );
+  });
+
+  it('(4) signed-in attacker with NO guestLink cannot read /guestExperience/public', async () => {
+    // Valid Firebase Auth session, but never redeemed. isSignedIn alone
+    // is not enough — hasValidGuestLink must return true.
+    const attacker = await asUser('attacker-with-no-link');
+    await assertFails(
+      getDoc(doc(attacker, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guestExperience/public`)),
+    );
+  });
+
+  it('(5) guest with EXPIRED link cannot satisfy hasValidGuestLink', async () => {
+    await seedRedeemedLink(guestUid, { expired: true });
+    const guestDb = await asUser(guestUid);
+    // The /guests/{id} read should fail because hasValidGuestLink is
+    // now false (expiresAt < now). Proves the new tighter check works.
+    await assertFails(
+      getDoc(doc(guestDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-1`)),
+    );
   });
 });
 

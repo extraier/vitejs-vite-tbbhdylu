@@ -1,21 +1,50 @@
 // Guest link utilities — client side
 // ==================================
-// Implements the HMAC signing + redemption flow that pairs with the
-// Firestore rules and Cloud Functions. Without these, the rules can't
-// tell who's a legitimate guest and who's an attacker guessing UIDs.
+//
+// 2026-08-23 — Manus P1 hardening (manus recommedation 2.pdf §2.3):
+//
+// THIS FILE IS PARTIALLY DEPRECATED.
+//
+// The 4 functions below (`buildGuestQrUrl`, `redeemGuestLink`,
+// `saveRedeemedLink`, `loadRedeemedLink`) are dead code and would be
+// actively dangerous if called after P1 ships. Specifically:
+//
+//   - `saveRedeemedLink` calls `setDoc` directly on
+//     `guestLinks/{auth.uid}`. P1 forbids `allow create` on
+//     `guestLinks/{linkDocId}` for ALL clients — only the
+//     `verifyShareToken` callable (which runs with Admin SDK via
+//     App Engine integration) can create them. After P1, calling
+//     `saveRedeemedLink` will return `permission-denied` from
+//     Firestore.
+//
+//   - The other 3 functions depend on `saveRedeemedLink` (or were
+//     never wired in) and would break the redeem flow if used.
+//
+// The CORRECT post-P1 path for guest redemption is:
+//
+//   1. Client calls `signInAnonymously(auth)` to get an auth.uid.
+//   2. Client calls `httpsCallable(functions, 'verifyShareToken')({ token })`
+//      — the callable validates the HMAC, resolves guestId → guestDocId,
+//      and writes the link doc server-side.
+//   3. Subsequent reads from the same auth.uid pass `hasValidGuestLink`
+//      and the guest can read `/events/{eventId}/guestExperience/public`.
+//
+// The `hmacHex` helper below is NOT deprecated — it's used by unit
+// tests in src/lib/guestLinks.test.ts to verify round-trip signing
+// against a known secret. We keep it exported because removing it
+// would break the test file for no security benefit (the helper is
+// pure crypto; it doesn't touch Firestore).
+//
+// If you're tempted to call any of the @deprecated functions below
+// after P1 ships, don't. Open src/App.jsx line ~1047 and follow the
+// `verifyShareToken` flow instead.
 
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import { db, appId } from './firebase';
 
-// ---- HMAC signing (used by unit tests, not by the running app) ---------
+// ---- HMAC signing (still used by unit tests) ------------------------
 //
-// The server-side Cloud Function (functions/src/index.ts) is the canonical
-// signer. This client-side helper exists so unit tests can verify
-// round-trip signing against a known secret, and so we can later add
-// offline QR verification (e.g. printing badges at the venue).
-//
-// Exported for testability.
+// Pure crypto helper — no Firestore access, no auth dependency. Safe to
+// keep even though the rest of this file is quarantined.
 export async function hmacHex(secret: string, payload: string): Promise<string> {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
@@ -31,13 +60,14 @@ export async function hmacHex(secret: string, payload: string): Promise<string> 
     .join('');
 }
 
+// ---- Deprecated functions (do not call after P1) -------------------
+
 /**
- * Build a signed QR-code URL for a single guest.
- * Owner-only. Returns a URL like:
- *   https://app.example/?t=<hex>&lid=<linkDocId>
- *
- * The Cloud Function does the canonical signing (this is just a client-side
- * preview helper for the future when we want offline verification).
+ * @deprecated Since 2026-08-23 (Manus P1). The `issueGuestLink` callable
+ * this wraps may still exist server-side, but the QR URL flow it
+ * produced was superseded by the HMAC-token flow that `verifyShareToken`
+ * uses. No production code imports this. Keep the export so the test
+ * surface doesn't churn, but new code should NOT call it.
  */
 export async function buildGuestQrUrl(
   _ownerUid: string,
@@ -51,9 +81,6 @@ export async function buildGuestQrUrl(
     { linkId: string; token: string; expiresAt: number }
   >(fns, 'issueGuestLink');
   const res = await issue({ eventId, guestId, ttlHours });
-
-  // The QR URL embeds linkId + token (NOT ownerUid/eventId/guestId — those
-  // are encoded into the signed token, verified server-side).
   const base = `${window.location.origin}/`;
   const params = new URLSearchParams({
     t: res.data.token,
@@ -68,9 +95,10 @@ export async function buildGuestQrUrl(
 }
 
 /**
- * Redeem a guest link — called by the guest app immediately after the QR
- * is scanned. Returns the (ownerUid, eventId, guestId) tuple the guest
- * can now act on.
+ * @deprecated Since 2026-08-23 (Manus P1). The `redeemGuestLink` callable
+ * was a placeholder that this wrapped; the production redemption flow
+ * uses `verifyShareToken` directly (see App.jsx line 1047). Kept for
+ * type compat only — no production code imports this.
  */
 export async function redeemGuestLink(
   linkId: string,
@@ -86,41 +114,40 @@ export async function redeemGuestLink(
 }
 
 /**
- * Persist the redeemed link locally so subsequent reloads don't need to
- * call the Cloud Function again.
+ * @deprecated Since 2026-08-23 (Manus P1). DIRECTLY HAZARDOUS — calls
+ * `setDoc` on `guestLinks/{auth.uid}` which P1 forbids for ALL clients
+ * (only the `verifyShareToken` callable can create these). If anything
+ * still imports this, it will fail with `permission-denied` after P1
+ * deploys. No production code imports this today, but the export is
+ * preserved so any future import attempt fails loud at the call site,
+ * not at runtime via a confusing 403.
+ *
+ * @throws {Error} Always throws — quarantined after P1.
  */
 export async function saveRedeemedLink(
-  ownerUid: string,
-  eventId: string,
-  guestId: string,
-  redeemedByUid: string,
+  _ownerUid: string,
+  _eventId: string,
+  _guestId: string,
+  _redeemedByUid: string,
 ): Promise<void> {
-  await setDoc(
-    doc(db, 'artifacts', appId, 'users', ownerUid, 'guestLinks', redeemedByUid),
-    {
-      ownerUid,
-      eventId,
-      guestId,
-      redeemedByUid,
-      expiresAt: Date.now() + 72 * 3600 * 1000,
-      createdAt: serverTimestamp(),
-    },
+  throw new Error(
+    'saveRedeemedLink was quarantined in 2026-08-23 (Manus P1). ' +
+    'Use the verifyShareToken callable flow instead — see App.jsx line 1047.',
   );
 }
 
 /**
- * Read the redeemed link for the current auth.uid, if any. Returns null
- * if the user hasn't redeemed a link.
+ * @deprecated Since 2026-08-23 (Manus P1). Kept for type compat but the
+ * `redeemedByUid` query it issues is now redundant: post-P1, the client
+ * only needs to know its own `auth.uid` to satisfy `hasValidGuestLink`
+ * (the rule does the lookup). The ownerUid here is the *inviter's* uid
+ * which the client should already know from the QR URL.
+ *
+ * Kept as a no-op stub so any latent import doesn't crash.
  */
 export async function loadRedeemedLink(
-  ownerUid: string,
-  redeemedByUid: string,
+  _ownerUid: string,
+  _redeemedByUid: string,
 ): Promise<{ eventId: string; guestId: string } | null> {
-  const snap = await getDoc(
-    doc(db, 'artifacts', appId, 'users', ownerUid, 'guestLinks', redeemedByUid),
-  );
-  if (!snap.exists()) return null;
-  const data = snap.data();
-  if (data.expiresAt < Date.now()) return null;
-  return { eventId: data.eventId, guestId: data.guestId };
+  return null;
 }
