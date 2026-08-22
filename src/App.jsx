@@ -3062,6 +3062,59 @@ export default function App() {
     showToast(`🧧 成功發送 $${amount} 電子人情，感謝！`);
   };
 
+  // 2026-08-22 — Guest 心意 message save. Called from
+  // PersonalGuestPortal's GuestMessageCard when a guest types a
+  // 280-char note and taps 儲存. Writes two fields to the
+  // /guests/{id} doc:
+  //   guestMessage           — the trimmed text (or empty string
+  //                            to clear it)
+  //   guestMessageUpdatedAt  — serverTimestamp, so the dashboard
+  //                            can show "X 剛剛留咗一句說話" later
+  //
+  // Rules contract: this write is only permitted when the
+  // Firestore rules allow it, which requires the guest to have
+  // an anonymous auth session AND a valid guestLinks/{uid} doc
+  // pointing at the right (owner, event). guestDataReady is the
+  // same gate the photo-upload path uses — it flips true the
+  // moment the redeem completes (see useEffect at line ~1030).
+  // No point writing before that; the rules would reject.
+  //
+  // Why setDoc(merge: true) instead of updateDoc: the field
+  // doesn't exist on legacy guest docs yet. updateDoc would
+  // throw NOT_FOUND. setDoc with merge creates the field while
+  // preserving every other key on the doc — same pattern the
+  // rest of App.jsx uses for "add a new optional field".
+  //
+  // Why we resolve ownerUid / eventId via the helpers instead of
+  // reading activeGuestPortal.{qOwner,qEvent} directly: those
+  // helpers handle both real guest mode (URL params) and
+  // owner-preview mode (currentEvent fallback), so the same
+  // function works for both paths. See resolveGuestDocOwner +
+  // resolveGuestEventId in lib/guestMode.
+  const handleSaveGuestMessage = async (message) => {
+    if (!user?.uid || !activeGuestPortal) {
+      throw new Error('請先以嘉賓連結登入');
+    }
+    if (!guestDataReady) {
+      throw new Error('連結尚未完成認證，請稍後再試');
+    }
+    const ownerUid = resolveGuestDocOwner(activeGuestPortal);
+    const eventId = resolveGuestEventId(activeGuestPortal);
+    if (!ownerUid || !eventId) {
+      throw new Error('搵唔到所屬活動');
+    }
+    const guestRef = doc(
+      db, 'artifacts', appId,
+      'users', ownerUid,
+      'events', eventId,
+      'guests', activeGuestPortal.id,
+    );
+    await setDoc(guestRef, {
+      guestMessage: String(message || '').slice(0, 280),
+      guestMessageUpdatedAt: serverTimestamp(),
+    }, { merge: true });
+  };
+
   const handleSimulateReceptionScan = async (guestRow) => {
     if (!user || !guestRow) return;
     const ownerUid = resolveGuestDocOwner(guestRow);
@@ -3689,6 +3742,26 @@ export default function App() {
           onDeletePhoto={handleDeletePhoto}
           onUpload={handleRealUpload}
           onRequestRedPacket={() => setShowPaymentModal(true)}
+          // 2026-08-22 — Additive guest-facing cards (see
+          // PersonalGuestPortal's top-of-file header comment).
+          // All four props are optional — the portal hides each
+          // card when its required data is missing, so legacy
+          // owner-preview mounts continue to render cleanly.
+          //
+          //   eventDate / eventTime → CountdownCard
+          //   eventVenue / eventAddress → VenueMapCard
+          //   onSaveGuestMessage → GuestMessageCard (wires to the
+          //     handleSaveGuestMessage handler defined above)
+          //
+          // The portal reads from currentEvent.{date,time,venue,address}
+          // — same fields InvitationEditor reads (line 179) and
+          // shows in its InfoStep (line 747). Adding the new
+          // props is a pure additive change to the contract.
+          eventDate={currentEvent?.date || null}
+          eventTime={currentEvent?.time || null}
+          eventVenue={currentEvent?.venue || null}
+          eventAddress={currentEvent?.address || null}
+          onSaveGuestMessage={handleSaveGuestMessage}
           // 2026-07-18 — Owner preview-as-guest path now has an exit
           // handler. In real guest mode (URL ?o=&e=&g=&token=) we still
           // let the guest sign out via existing flow; in owner preview

@@ -363,6 +363,46 @@ export function HelperPicker({ helpers = [], ownerNames, value = [], onChange })
   );
 }
 
+// 2026-08-21 — Pure helper for the location chip row. Extracted
+// from the RundownTab useMemo so it can be unit-tested without
+// mounting the full rundown tab (which pulls in dnd-kit, framer-
+// motion, and the partner-picker dropdown — too much surface for
+// a one-feature test).
+//
+// Contract:
+//   - Skips entries whose location is empty / whitespace-only.
+//   - Dedups on the trim+lowercased form (so "女家" / "女家 "
+//     / "女家" collapse to one chip).
+//   - Displays the FIRST encountered form for that dedup key
+//     (preserves the user's typing).
+//   - Counts are over the raw entries — not filtered — so chip
+//     counts reflect "how many entries live here overall" not
+//     "how many entries live here AND match the current
+//     filter". Matches the existing category-chip semantic
+//     (全部 (10), 準備/化妝 (6), ...).
+//   - Returns labels sorted by zh-Hant localeCompare for a
+//     stable, predictable chip order.
+export function buildRundownLocationChips(entries) {
+  const seen = new Map();
+  (entries || []).forEach((e) => {
+    const raw = (e.location || '').trim();
+    if (!raw) return;
+    const key = raw.toLowerCase();
+    if (!seen.has(key)) seen.set(key, raw);
+  });
+  const labels = Array.from(seen.values()).sort((a, b) =>
+    a.localeCompare(b, 'zh-Hant'),
+  );
+  const perCount = {};
+  (entries || []).forEach((e) => {
+    const raw = (e.location || '').trim();
+    if (!raw) return;
+    const key = raw.toLowerCase();
+    perCount[key] = (perCount[key] || 0) + 1;
+  });
+  return { labels, perCount };
+}
+
 function RundownTab({
   entries,
   onUpsert,
@@ -389,6 +429,12 @@ function RundownTab({
   const [editing, setEditing] = useState(null);
   const [filterGroup, setFilterGroup] = useState('all');
   const [filterAssigned, setFilterAssigned] = useState('all');
+  // 2026-08-21 — Filter by location (女家 / 男家 / 宴會廳 / 等).
+  // Combines with filterGroup + filterAssigned (AND). Reads
+  // entry.location (a free-text string per the editor at
+  // line 785 — "地點 (例: 君悅酒店宴會廳)"). 'all' means no
+  // location filter, so the full chip row is always reachable.
+  const [filterLocation, setFilterLocation] = useState('all');
   // 2026-08-09 — Track which entry's comments panel is open. Single
   // entry at a time so we only mount one ItemComments subscription.
   const [openCommentsFor, setOpenCommentsFor] = useState(null);
@@ -448,10 +494,12 @@ function RundownTab({
       s.sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
     }
     if (filterGroup !== 'all') s = s.filter((e) => (e.group || 'prep') === filterGroup);
+    if (filterLocation !== 'all')
+      s = s.filter((e) => (e.location || '').trim() === filterLocation);
     if (filterAssigned === 'unassigned')
       s = s.filter((e) => !e.assignedHelpers || e.assignedHelpers.length === 0);
     return s;
-  }, [entries, filterGroup, filterAssigned, sortMode]);
+  }, [entries, filterGroup, filterLocation, filterAssigned, sortMode]);
 
   const counts = useMemo(() => {
     const out = { all: (entries || []).length };
@@ -460,6 +508,17 @@ function RundownTab({
     });
     return out;
   }, [entries]);
+
+  // 2026-08-21 — Location chip data. Sourced from the pure
+  // helper so the dedup + sort + per-loc-count logic is
+  // unit-testable. Both halves (collected entries → keep ALL
+  // of them visible to the user, even the ones without a
+  // location) are reflected in buildRundownLocationChips'
+  // contract — see its docstring below. The location row
+  // renders only when the list has entries with a location
+  // (locationData.labels.length > 0); demo events with no
+  // location data simply don't show the row.
+  const locationData = useMemo(() => buildRundownLocationChips(entries), [entries]);
 
   // 2026-07-22 — Drag-and-drop reorder for manual sort mode.
   // Same algorithm as 敬茶: compute contiguous positions 1..N,
@@ -528,6 +587,51 @@ function RundownTab({
             label={`${lbl} (${counts[g] || 0})`}
           />
         ))}
+        {/* 2026-08-21 — Location filter chip row. Hidden when
+            no entry has a location (every couple sets at least
+            one location, but a freshly-seeded demo event
+            might not). The label prefix "地點:" makes the
+            row visually distinct from the category row
+            above, so users don't confuse the two filters.
+            Same FilterPill chrome as the category row —
+            rose-500 active, white inactive — so a "click +
+            category visible" glance immediately shows the
+            combined state. We also include the 全部地點
+            chip with the total count so the row always has
+            a way back to "no filter", even if a chip is the
+            currently active one. */}
+        {locationData.labels.length > 0 && (
+          <div className="basis-full h-0" aria-hidden="true" />
+        )}
+        {locationData.labels.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 basis-full" data-testid="rundown-location-row">
+            <span className="text-xs font-bold text-slate-500 mr-1">地點:</span>
+            <FilterPill
+              active={filterLocation === 'all'}
+              onClick={() => setFilterLocation('all')}
+              label={`全部地點 (${counts.all})`}
+              data-testid="rundown-location-chip-all"
+            />
+            {locationData.labels.map((loc) => (
+              <FilterPill
+                key={loc}
+                active={filterLocation === loc}
+                onClick={() => setFilterLocation(loc)}
+                label={`${loc} (${locationData.perCount[loc.toLowerCase()] || 0})`}
+                // 2026-08-21 — tooltip the bare location when it
+                // hasn't been clipped by the chip width. Couples
+                // type arbitrary strings here (e.g. "君悅酒店
+                // 宴會廳32樓"), so the chip might truncate; a
+                // native title gives hover access to the full
+                // form. FilterPill spreads props onto the
+                // underlying button so title + data-testid
+                // both reach the DOM.
+                title={loc}
+                data-testid={`rundown-location-chip-${loc}`}
+              />
+            ))}
+          </div>
+        )}
         {unassignedCount > 0 && (
           <FilterPill
             active={filterAssigned === 'unassigned'}
@@ -665,15 +769,30 @@ function RundownTab({
   );
 }
 
-function FilterPill({ active, onClick, label }) {
+// 2026-08-21 — FilterPill now spreads arbitrary props onto the
+// underlying button (so call sites can pass title, aria-label, or
+// data-testid without us redefining the destructure list every
+// time). The active + onClick + label trio is still the contract;
+// extra props are forwarded as-is. The defaultProps-style class
+// merge keeps the visual chrome consistent across the existing
+// category / assigned / location chip rows that render with the
+// same FilterPill.
+function FilterPill({ active, onClick, label, className = '', ...rest }) {
   return (
     <button
       onClick={onClick}
+      type="button"
+      // 2026-08-21 — added type=button to prevent the implicit
+      // submit-button behavior in any future parent <form>
+      // wrapper (existing call sites were already buttons in a
+      // non-form context, but this is a cheap hardening).
       className={`text-xs font-bold px-3 py-1.5 rounded-full border transition-colors ${
         active
           ? 'bg-rose-500 text-white border-rose-500'
           : 'bg-white text-slate-500 border-slate-200 hover:border-rose-200 hover:text-rose-600'
-      }`}
+      } ${className}`}
+      data-testid={`filter-pill-${active ? 'active' : 'inactive'}`}
+      {...rest}
     >
       {label}
     </button>
@@ -844,7 +963,13 @@ function RundownCard({
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-3.5 flex gap-3 items-start">
+    // 2026-08-22 — data-rundown-title mirrors the
+    // SortableRow's data-row-id hook so tests can assert
+    // which rows are visible without depending on the
+    // SortableRow's dnd-kit ref. The attribute value is the
+    // entry.title (the same text users see) which makes the
+    // test assertions self-explanatory.
+    <div className="rounded-xl border border-slate-200 bg-white p-3.5 flex gap-3 items-start" data-rundown-title={entry.title}>
       {/* 2026-07-22 — reorder column. In manual sort mode
           (dragHandleProps provided), render a large drag handle
           that initiates a dnd-kit drag. In time mode (no

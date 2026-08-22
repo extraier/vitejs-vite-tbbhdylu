@@ -927,6 +927,25 @@ match /{path=**}/events/{eventId} {
           // the path; the doc body's eventId must still match the
           // path for the create branch that uses resource.data.eventId
           // for helper-perm lookup.
+          // 2026-08-22 — Guest self-message field whitelist.
+          // Previously the hasValidGuestLink branch had NO field
+          // whitelist, which meant a signed-in guest holding a
+          // valid link could update ANY field on /guests/{id}
+          // (tableNumber, hasAttended, hasGifted, etc.) as long as
+          // resource.data.guestId != null. That worked when the
+          // portal only wrote photo-related fields (none directly
+          // to /guests/{id}), but the new GuestMessageCard on the
+          // personal guest portal lets a guest save a 280-char
+          // 心意 message, which makes the unrestricted branch a
+          // real footgun. The new hasOnly(['guestMessage',
+          // 'guestMessageUpdatedAt']) restriction locks the
+          // guest tier down to ONLY those two fields — anything
+          // else (tableNumber, hasAttended, hasGifted, giftAmount,
+          // guestName, etc.) is owner / canEditGuests territory.
+          //
+          // Mirrors the shape of the canScan branch right above
+          // it, which already uses .diff().affectedKeys().
+          // .hasOnly(...) — same pattern, different field list.
           match /guests/{guestDocId} {
             allow read: if isOwnerOrAnyCoOwner(ownerUid)
               || hasHelperPerm(ownerUid, 'canViewGuestList')
@@ -938,7 +957,9 @@ match /{path=**}/events/{eventId} {
                        .hasOnly(['hasAttended', 'lastScannedBy', 'lastScannedAt']))
               || hasHelperPerm(ownerUid, 'canEditGuests')
               || (hasValidGuestLink(ownerUid, eventId)
-                  && resource.data.guestId != null);
+                  && resource.data.guestId != null
+                  && request.resource.data.diff(resource.data).affectedKeys()
+                       .hasOnly(['guestMessage', 'guestMessageUpdatedAt']));
           }
 
           // Photos — same shape as old /photos/ rule. eventId is in
