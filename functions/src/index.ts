@@ -712,6 +712,18 @@ import { getAuth as getAdminAuth } from 'firebase-admin/auth';
 // Restore 2026-07-02: re-export sendInvitations (defined in invitations.ts)
 export * from './invitations';
 
+// 2026-08-23 — Manus P2a: server-authoritative guestExperience
+// callables. See ./guestExperience.ts for the four callables
+// (publishGuestExperience, getGuestPortalBootstrap, respondToRsvp,
+// saveGuestMessage). Pure helpers live in ./guestExperience.pure.ts
+// and are unit-tested in ./test/guestExperience.pure.test.ts.
+export {
+  publishGuestExperience,
+  getGuestPortalBootstrap,
+  respondToRsvp,
+  saveGuestMessage,
+} from './guestExperience';
+
 // 2026-07-18: helper invite SMTP email (Traditional-Chinese rich HTML).
 // The callable lives in ./helpersMail.ts — re-exported here so
 // `firebase deploy --only functions` picks it up automatically. The
