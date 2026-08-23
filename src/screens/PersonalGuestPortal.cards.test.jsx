@@ -100,14 +100,18 @@ describe('CountdownCard', () => {
     expect(card.textContent).toMatch(/還有 \d+ 天/);
   });
 
-  it('renders the hours countdown when the event is < 2 days out', () => {
-    // Pick a date that's about 30 hours in the future — that
-    // crosses the calendar day boundary so the card's
-    // diffDays === 0 (today) check is false, but it's still
-    // well under the 48-hour threshold so the diffDays < 2
-    // branch fires and we render the hours copy.
+  it('renders the hours countdown when the event is < 2 days out', async () => {
+    // Pick a date that's 40 hours in the future. The "+40h"
+    // matters because the test builds the date from
+    // toISOString().slice(0, 10) (UTC date) and the component
+    // re-parses it as LOCAL date. If we picked +30h and the
+    // wall clock is late evening, the local-tz difference
+    // can flip diffDays to 0 and the test wrongly hits the
+    // "today" branch. 40h guarantees diffDays >= 1 in every
+    // timezone, and diffDays < 2 in every timezone — exactly
+    // the hours branch we want to exercise.
     const future = new Date();
-    future.setHours(future.getHours() + 30);
+    future.setHours(future.getHours() + 40);
     const futureDate = future.toISOString().slice(0, 10);
     const futureTime = future.toTimeString().slice(0, 5);
     render(<CountdownHarness eventDate={futureDate} eventTime={futureTime} />);
