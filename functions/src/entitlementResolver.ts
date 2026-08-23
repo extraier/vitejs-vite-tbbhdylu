@@ -85,8 +85,14 @@ const appId = 'savetheday-production';
 // storageLimitBytes for the actual gate. The resolver still
 // reports the limit correctly; it just becomes advisory.
 
-const FREE_TIER_BASE_BYTES = 200 * 1024 * 1024; // 200 MB
-const BONUS_STORAGE_BYTES = 500 * 1024 * 1024; // 500 MB
+export const FREE_TIER_BASE_BYTES = 200 * 1024 * 1024; // 200 MB
+export const BONUS_STORAGE_BYTES = 500 * 1024 * 1024; // 500 MB
+
+// 2026-08-23 — P4.3: export these so the photo-upload proxy
+// and its tests can import the SAME values the resolver uses,
+// without importing from storageQuota.ts (which would create a
+// circular dep once the proxy also imports
+// resolveServerEntitlementLimit).
 
 // ---- Types -------------------------------------------------------------
 
@@ -274,6 +280,57 @@ export function computeEntitlement(
     receiptId: mostRecentPaid?.paymentId ?? null,
     computedAt: Date.now(),
   };
+}
+
+// 2026-08-23 — Manus P4.3 (PDF Patch 4.3): server-side
+// entitlement-limit resolver for the photo-upload proxy. The
+// previous code read event.storageQuotaBytes (a client-writable
+// field) — any signed-in owner could inflate it to bypass the
+// quota gate. This helper computes the limit from the owner's
+// unlock records, which live in a server-only collection
+// (firestore.rules denies client access to `unlocks`).
+//
+// The proxy calls this before minting an HMAC; the resulting
+// limitBytes is compared against usedBytes + reservedBytes +
+// body.length in a single Admin SDK runTransaction. If the
+// transaction fails (Firestore read error, write error, quota
+// exceeded), the proxy rejects with 503 / 413 — it MUST NOT
+// fall back to a client-trustable default.
+//
+// Returns just the limit (not the full EventEntitlement) so the
+// proxy stays small. The proxy can call computeEntitlement if it
+// needs the features map, but for the storage gate we only need
+// the number.
+export async function resolveServerEntitlementLimit(
+  firestore: FirebaseFirestore.Firestore,
+  ownerUid: string,
+  eventId: string,
+): Promise<number> {
+  const unlocksSnap = await firestore
+    .collection('artifacts').doc(appId)
+    .collection('users').doc(ownerUid)
+    .collection('unlocks')
+    .get();
+
+  const unlocks: UnlockDoc[] = unlocksSnap.docs.map((d) => {
+    const data = d.data() as Record<string, unknown>;
+    return {
+      type: typeof data.type === 'string' ? data.type : '',
+      source: typeof data.source === 'string' ? data.source : undefined,
+      paid: typeof data.paid === 'number' ? data.paid : undefined,
+      paymentId: typeof data.paymentId === 'string' ? data.paymentId : undefined,
+      expiresAt: typeof data.expiresAt === 'number' ? data.expiresAt : null,
+      grantedAt: data.grantedAt as UnlockDoc['grantedAt'],
+      eventId: typeof data.eventId === 'string' ? data.eventId : null,
+    };
+  });
+
+  // computeEntitlement accepts (ownerUid, eventId, unlocks) and
+  // returns the full EventEntitlement (features + storageLimitBytes
+  // + retentionClass). We only use the limit here, but the rest of
+  // the response is the canonical entitlement record.
+  const ent = computeEntitlement(ownerUid, eventId, unlocks);
+  return ent.storageLimitBytes;
 }
 
 // ---- Live resolver (Firestore-backed) ---------------------------------
