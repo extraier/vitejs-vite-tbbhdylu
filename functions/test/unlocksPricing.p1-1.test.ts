@@ -5,7 +5,7 @@
 // with a non-empty reason.
 
 import { describe, it, expect } from 'vitest';
-import { deriveExpectedAmount } from '../src/unlocks';
+import { deriveExpectedAmount, PREMIUM_BUNDLE_PRICE } from '../src/unlocks';
 
 describe('deriveExpectedAmount (P1.1 server-side price derivation)', () => {
   it('returns 49 for custom-template at exact price', () => {
@@ -24,14 +24,32 @@ describe('deriveExpectedAmount (P1.1 server-side price derivation)', () => {
     expect(deriveExpectedAmount('watermark-removed', 29, false, undefined).expectedAmount).toBe(29);
   });
 
-  it('sums the four SKU prices for bundle', () => {
-    const sum = 49 + 29 + 39 + 29; // 146
-    expect(deriveExpectedAmount('bundle', sum, false, undefined).expectedAmount).toBe(sum);
+  // 2026-08-23 — Manus P4.2 (PDF Patch 4): Premium bundle is now
+  // the named HK$99 constant, not the sum of individual SKUs
+  // (49+29+39+29 = 146). The UI has rendered HK$99 since
+  // 2026-07-30; the server now matches.
+  it('returns PREMIUM_BUNDLE_PRICE for bundle', () => {
+    expect(deriveExpectedAmount('bundle', PREMIUM_BUNDLE_PRICE, false, undefined).expectedAmount).toBe(PREMIUM_BUNDLE_PRICE);
+    expect(PREMIUM_BUNDLE_PRICE).toBe(99);
   });
 
-  it('sums the four SKU prices for premium (legacy compat)', () => {
-    const sum = 49 + 29 + 39 + 29;
-    expect(deriveExpectedAmount('premium', sum, false, undefined).expectedAmount).toBe(sum);
+  it('returns PREMIUM_BUNDLE_PRICE for premium (legacy compat)', () => {
+    expect(deriveExpectedAmount('premium', PREMIUM_BUNDLE_PRICE, false, undefined).expectedAmount).toBe(PREMIUM_BUNDLE_PRICE);
+  });
+
+  // 2026-08-23 — Manus P4.2: explicit rejection of the legacy
+  // 146-sum amount. If anyone re-introduces the sum-based path
+  // (e.g. a refactor that loses the named constant), the server
+  // must still reject paying HK$146 — that's no longer the
+  // advertised price. Without this test, an old client or a
+  // cached receipt for HK$146 would silently slip through.
+  it('rejects the legacy 146 sum (PDF Patch 4 regression guard)', () => {
+    const legacySum = 49 + 29 + 39 + 29; // 146
+    expect(() => deriveExpectedAmount('bundle', legacySum, false, undefined)).toThrow(/does not match/);
+    expect(() => deriveExpectedAmount('premium', legacySum, false, undefined)).toThrow(/does not match/);
+    // The error message should reference the new expected amount (99),
+    // not 146 — so the operator sees the right number in the error log.
+    expect(() => deriveExpectedAmount('bundle', legacySum, false, undefined)).toThrow(/expected 99/);
   });
 
   it('tolerates ±$1 FX noise', () => {

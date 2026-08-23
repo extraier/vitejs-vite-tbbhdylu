@@ -57,6 +57,16 @@ export const UNLOCK_PRICING = {
   'watermark-removed': 29,
 } as const;
 
+// 2026-08-23 — Manus P4.2 (PDF Patch 4): HK$99 is the binding
+// Premium bundle price. The UI has been rendering HK$99 since
+// 2026-07-30, but deriveExpectedAmount previously summed the
+// four individual SKUs (49+29+39+29 = HK$146). That mismatch
+// meant a customer paying the displayed HK$99 was rejected by
+// the server (amount $99 != expected $146). Make HK$99 the
+// named server contract: the UI's `BUNDLE_PRICE = 99` constant
+// must equal this. Change BOTH at once if the price ever moves.
+export const PREMIUM_BUNDLE_PRICE = 99;
+
 export const UNLOCK_TYPES = [
   'custom-template',
   'storage-500mb',
@@ -558,10 +568,15 @@ export function deriveExpectedAmount(
 ): { expectedAmount: number } {
   const expectedAmount =
     unlockType === 'bundle' || unlockType === 'premium'
-      ? UNLOCK_PRICING['custom-template']
-        + UNLOCK_PRICING['storage-500mb']
-        + UNLOCK_PRICING['permanent-archive']
-        + UNLOCK_PRICING['watermark-removed']
+      // 2026-08-23 — Manus P4.2 (PDF Patch 4): use the named
+      // HK$99 Premium bundle price instead of summing the four
+      // individual SKUs (49+29+39+29 = 146). The UI has been
+      // rendering HK$99 since 2026-07-30; this mismatch meant a
+      // customer paying the displayed $99 was rejected by the
+      // server with "amount does not match expected $146". The
+      // named constant also makes future price moves a one-line
+      // change instead of a four-line refactor.
+      ? PREMIUM_BUNDLE_PRICE
       : UNLOCK_PRICING[unlockType as UnlockType];
   const amtDelta = Math.abs(amount - expectedAmount);
   if (amtDelta > 1 && !adminOverride) {
