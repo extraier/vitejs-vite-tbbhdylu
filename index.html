@@ -2,31 +2,55 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=heart-2026-07-31" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f43f5e" />
+
+    <!-- Canonical production hostname: do not use the Vercel deployment URL. -->
+    <link rel="canonical" href="https://savetheday.io/" />
+
+    <!-- Stable, square heart favicon with broad browser/crawler fallbacks.
+         2026-08-23 — Manus P6: full asset set (PDF §3):
+           favicon.svg       — vector source, keep stable URL
+           favicon-48.png    — search-result size (Google)
+           favicon-192.png   — Android home-screen / PWA install
+           favicon.ico       — IE/legacy fallback (multi-res 16+32+48)
+           apple-touch-icon  — iOS Add to Home Screen
+           site.webmanifest  — PWA + theme_color + display=standalone -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="icon" href="/favicon-48.png" type="image/png" sizes="48x48" />
+    <link rel="icon" href="/favicon-192.png" type="image/png" sizes="192x192" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+    <link rel="manifest" href="/site.webmanifest" />
 
     <title>Save The Day · 婚禮一站式管理</title>
-    <meta name="description" content="婚禮一站式管理：實時 QR Code 入席、賓客相片收集箱、預算管理。新人、兄弟姊妹、商戶通用平台。" />
+    <meta
+      name="description"
+      content="婚禮一站式管理：實時 QR Code 入席、賓客相片收集箱、預算管理。新人、兄弟姊妹、商戶通用平台。"
+    />
 
-    <!-- Open Graph (Facebook / LINE / WhatsApp / LinkedIn) -->
+    <!-- Open Graph: Facebook, LINE, WhatsApp, LinkedIn. -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Save The Day" />
     <meta property="og:title" content="Save The Day · 婚禮一站式管理" />
-    <meta property="og:description" content="實時 QR Code 入席 · 賓客相片收集箱 · 預算管理。新人、兄弟姊妹、商戶通用平台。" />
-    <meta property="og:image" content="https://vitejs-vite-tbbhdylu.vercel.app/og-image.svg" />
+    <meta
+      property="og:description"
+      content="實時 QR Code 入席 · 賓客相片收集箱 · 預算管理。新人、兄弟姊妹、商戶通用平台。"
+    />
+    <meta property="og:url" content="https://savetheday.io/" />
+    <meta property="og:image" content="https://savetheday.io/og-image.svg" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:url" content="https://vitejs-vite-tbbhdylu.vercel.app" />
     <meta property="og:locale" content="zh_HK" />
 
-    <!-- Twitter / X -->
+    <!-- Twitter / X. -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Save The Day · 婚禮一站式管理" />
-    <meta name="twitter:description" content="實時 QR Code 入席 · 賓客相片收集箱 · 預算管理。新人、兄弟姊妹、商戶通用平台。" />
-    <meta name="twitter:image" content="https://vitejs-vite-tbbhdylu.vercel.app/og-image.svg" />
-
-    <!-- Theme color for mobile browser chrome -->
-    <meta name="theme-color" content="#f43f5e" />
+    <meta
+      name="twitter:description"
+      content="實時 QR Code 入席 · 賓客相片收集箱 · 預算管理。新人、兄弟姊妹、商戶通用平台。"
+    />
+    <meta name="twitter:image" content="https://savetheday.io/og-image.svg" />
   </head>
   <body>
     <div id="root"></div>
