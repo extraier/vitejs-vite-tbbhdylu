@@ -130,6 +130,13 @@ export function NotificationsCenter({
     coupleUid,
     selfUid,
     eventId,
+    // 2026-08-23 — Manus P3 (PDF Patch 3): forward userRole to the
+    // hook. The prop is already in scope and already gates the
+    // visible filter tabs; the hook call just wasn't using it. Owner
+    // / co-owner keep the full source set; vendor / helper get only
+    // the comment inbox (which is the only source that can actually
+    // have items for them, given the P0.4 source gate).
+    userRole,
     refreshKey: 0,
     enabled: true,
   });

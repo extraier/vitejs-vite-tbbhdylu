@@ -675,6 +675,14 @@ export default function App() {
         : userRole === 'owner' || userRole === 'co-owner' || !userRole
         ? currentEvent?.id || null
         : null,
+    // 2026-08-23 — Manus P3 (PDF Patch 3): forward the active role
+    // to the bell so useNotifications can skip owner-only sources
+    // (proposals / tasks / helper-invites) when the viewer is a
+    // vendor or helper. Default 'owner' for legacy callers (admin
+    // sign-in, tests, etc.). The bellProps useMemo below just
+    // spreads this skeleton plus ownerUid, so the field rides
+    // through to both mount points unchanged.
+    userRole: userRole || 'owner',
     enabled: bellEligibleRole && !!user?.uid,
   };
 
@@ -1118,6 +1126,68 @@ export default function App() {
       ownerUid: dataOwnerUid,
     }),
     [bellPropsSkeleton, dataOwnerUid],
+  );
+
+  // 2026-08-23 — Manus P3 (PDF Patch 3): single shared Big Day
+  // comment-alert navigation handler. The bell mounts and the
+  // notification-center mounts previously each shipped their own
+  // inline `(meta) => {...}` closure with subtly different rules:
+  // the owner bell set focused* + commentId, the owner centre
+  // switched view only, and the vendor / helper centre / bell
+  // variants set focused* but suppressed focusedCommentId. This
+  // is one source of truth — every consumer calls into the same
+  // function, and the role decides what gets focused and which
+  // view the user lands in.
+  //
+  // Behaviour matrix:
+  //   role        | focusedKind | focusedParentId | focusedCommentId | view
+  //   ------------|-------------|-----------------|------------------|--------------------
+  //   owner       | meta.kind   | meta.parentId   | meta.commentId   | 'wedding-day'
+  //   co-owner    | meta.kind   | meta.parentId   | meta.commentId   | 'wedding-day'
+  //   vendor      | meta.kind   | meta.parentId   | meta.commentId   | 'vendor-dashboard'
+  //   helper      | meta.kind   | meta.parentId   | null (item-only) | 'helper-dashboard'
+  //   other       | meta.kind   | meta.parentId   | meta.commentId   | 'wedding-day'
+  //
+  // Notes:
+  //   - `currentEvent` is forced to meta.eventId when mismatched so
+  //     the alert lands on the right event even if the user was
+  //     previewing another.
+  //   - `focusedParentKind` / `focusedParentId` are cleared if the
+  //     meta.kind is unknown — defensive against malformed alerts.
+  //   - Helper's `focusedCommentId === null` per the existing P0 §3
+  //     decision (HelperBigDayTab renders no <ItemComments>, so a
+  //     stale value would leak across roles). Restore the
+  //     `meta.commentId` line if HelperBigDayTab ever grows a
+  //     read-only comment thread.
+  //   - The role defaults to userRole when the consumer doesn't
+  //     override it; tests and rare code paths that pass a
+  //     different role can do so explicitly.
+  const openBigDayCommentAlert = useCallback(
+    (meta, role = userRole) => {
+      if (meta?.eventId && currentEvent?.id !== meta.eventId) {
+        setCurrentEvent({ id: meta.eventId });
+      }
+      if (meta?.kind === 'rundown' || meta?.kind === 'resources') {
+        setFocusedParentKind(meta.kind);
+        setFocusedParentId(meta.parentId || null);
+      } else {
+        setFocusedParentKind(null);
+        setFocusedParentId(null);
+      }
+      if (role === 'helper') {
+        setFocusedCommentId(null);
+      } else {
+        setFocusedCommentId(meta?.commentId || null);
+      }
+      setCurrentView(
+        role === 'vendor'
+          ? 'vendor-dashboard'
+          : role === 'helper'
+          ? 'helper-dashboard'
+          : 'wedding-day',
+      );
+    },
+    [currentEvent?.id, userRole],
   );
 
   // 2026-08-20 — Manus bell observability (audit §vendor-bell):
@@ -4040,6 +4110,11 @@ export default function App() {
                           eventId={bellProps.eventId}
                           enabled={bellProps.enabled}
                         onOpenProposal={(jobId) => setViewingProposals(jobId)}
+                        // 2026-08-23 — Manus P3 (PDF Patch 3): single shared handler.
+// The owner-specific setFocusedTaskId paths still happen here
+// because they are unrelated to Big Day alerts; the comment-
+// alert handler delegates to openBigDayCommentAlert so the
+// behaviour matches the centre / vendor-bell mounts exactly.
                         onOpenComment={(meta) => {
                           // 2026-08-09 — bell notification click: scroll
                           // to the comment's task. Sets the focused task
@@ -4056,56 +4131,11 @@ export default function App() {
                           setFocusedTaskId(meta?.taskId || null);
                           setCurrentView('couple-checklist');
                         }}
-                        // 2026-08-17 — Vendor / helper comment on 大日流程 /
-                        // 物資. Routes the recipient to the right view
-                        // based on their role:
-                        //   owner    -> wedding-day (Big Day view)
-                        //   vendor   -> vendor-dashboard (per-task
-                        //              comment panel — vendor has no
-                        //              Big Day view)
-                        //   helper   -> helper-dashboard (same shape)
-                        // Also seeds focusedParent* for owners only
-                        // (A8 deep-link scroll into the entry).
-                        onOpenCommentAlert={(meta) => {
-                          if (meta?.eventId && currentEvent?.id !== meta.eventId) {
-                            setCurrentEvent({ id: meta.eventId });
-                          }
-                          // A8: `kind` field on the alert doc tells us
-                          // which Big Day subtab to switch to:
-                          //   'rundown'   -> 大日流程
-                          //   'resources' -> 物資
-                          // `parentId` is the doc id of the entry/item
-                          // the comment is attached to. <WeddingDay>
-                          // watches these and scrolls to it.
-                          if (meta?.kind === 'rundown' || meta?.kind === 'resources') {
-                            setFocusedParentKind(meta.kind);
-                            setFocusedParentId(meta.parentId || null);
-                          } else {
-                            // Defensive: unknown kind -> clear stale focus.
-                            setFocusedParentKind(null);
-                            setFocusedParentId(null);
-                          }
-                          // 2026-08-20 — Manus: also seed the
-                          // comment-level focus so <ItemComments> can
-                          // scroll to the exact comment that triggered
-                          // the alert (not just the parent row).
-                          setFocusedCommentId(meta?.commentId || null);
-                          // Step 16: role-aware routing. Owner -> Big Day;
-                          // vendor / helper -> their own dashboards. The
-                          // dashboards honour focusedParent* as of
-                          // 2026-08-17 (vendor auto-expands the
-                          // matching <ItemComments>; helper switches to
-                          // the Big Day tab + scrolls).
-                          if (userRole === 'owner' || userRole === 'co-owner' || !userRole) {
-                            setCurrentView('wedding-day');
-                          } else if (userRole === 'vendor') {
-                            setCurrentView('vendor-dashboard');
-                          } else if (userRole === 'helper') {
-                            setCurrentView('helper-dashboard');
-                          } else {
-                            setCurrentView('wedding-day');
-                          }
-                        }}
+                        // 2026-08-23 — Manus P3: delegate to the
+                        // shared handler so the bell + centre stay
+                        // in sync. See openBigDayCommentAlert for
+                        // the per-role routing matrix.
+                        onOpenCommentAlert={(meta) => openBigDayCommentAlert(meta, userRole)}
                         onOpenStatus={(meta) => {
                           if (meta?.eventId && currentEvent?.id !== meta.eventId) {
                             setCurrentEvent({ id: meta.eventId });
@@ -4185,14 +4215,12 @@ export default function App() {
                   setFocusedTaskId(meta?.taskId || null);
                   setCurrentView('couple-checklist');
                 }}
-                // 2026-08-17 — Vendor / helper comment on 大日流程 /
-                // 物資. Same routing logic as the bell above.
-                onOpenCommentAlert={(meta) => {
-                  if (meta?.eventId && currentEvent?.id !== meta.eventId) {
-                    setCurrentEvent({ id: meta.eventId });
-                  }
-                  setCurrentView('wedding-day');
-                }}
+                // 2026-08-23 — Manus P3 (PDF Patch 3): delegate to the shared
+// handler so the centre stays in sync with the bell. Previously
+// this mount only switched view (no focused* writes), which
+// meant owner notification-centre clicks lost the deep-link
+// scroll behaviour that the bell had.
+                onOpenCommentAlert={(meta) => openBigDayCommentAlert(meta, userRole)}
                 onOpenInvite={() => setCurrentView('helpers')}
               />
             )}
@@ -4214,39 +4242,12 @@ export default function App() {
                   )}
                   onOpenProposal={null}
                   onOpenComment={null}
-                  onOpenCommentAlert={(meta) => {
-                    if (meta?.eventId && currentEvent?.id !== meta.eventId) {
-                      setCurrentEvent({ id: meta.eventId });
-                    }
-                    if (meta?.kind === 'rundown' || meta?.kind === 'resources') {
-                      setFocusedParentKind(meta.kind);
-                      setFocusedParentId(meta.parentId || null);
-                    } else {
-                      setFocusedParentKind(null);
-                      setFocusedParentId(null);
-                    }
-                    // 2026-08-20 — comment-level focus (see owner
-                    // header handler above for full context).
-                    //
-                    // 2026-08-20 — Manus P0 §2.3 / §3 (Helper):
-                    // HelperBigDayTab does NOT render an
-                    // <ItemComments> panel, so setting
-                    // focusedCommentId here would have no consumer.
-                    // The focusedCommentId state would leak into
-                    // the next vendor/owner bell click and race
-                    // with that path. The Manus-recommended fix
-                    // is "either a read-only thread or item-only
-                    // behaviour"; this session chose item-only —
-                    // the helper lands on the assigned Big Day
-                    // card (handled by HelperDashboard.focus-effect)
-                    // and the comment-level focus is left null.
-                    // If HelperBigDayTab later grows a read-only
-                    // <ItemComments>, restore the line below.
-                    setFocusedCommentId(null);
-                    setCurrentView(
-                      userRole === 'vendor' ? 'vendor-dashboard' : 'helper-dashboard',
-                    );
-                  }}
+                  // 2026-08-23 — Manus P3 (PDF Patch 3): delegate to the shared
+// handler. The handler already implements the role-aware view
+// switch + focused* seeding + helper's focusedCommentId===null
+// rule, so this mount no longer needs its own logic. See
+// openBigDayCommentAlert for the full behaviour matrix.
+                  onOpenCommentAlert={(meta) => openBigDayCommentAlert(meta, userRole)}
                   onOpenInvite={null}
                 />
               )}
@@ -4902,22 +4903,12 @@ export default function App() {
                                   setFocusedTaskId(meta?.taskId || null);
                                   setCurrentView('couple-checklist');
                                 }}
-                                onOpenCommentAlert={(meta) => {
-                                  if (meta?.eventId && currentEvent?.id !== meta.eventId) {
-                                    setCurrentEvent({ id: meta.eventId });
-                                  }
-                                  if (meta?.kind === 'rundown' || meta?.kind === 'resources') {
-                                    setFocusedParentKind(meta.kind);
-                                    setFocusedParentId(meta.parentId || null);
-                                  } else {
-                                    setFocusedParentKind(null);
-                                    setFocusedParentId(null);
-                                  }
-                                  setFocusedCommentId(meta?.commentId || null);
-                                  if (userRole === 'vendor') {
-                                    setCurrentView('vendor-dashboard');
-                                  }
-                                }}
+                                // 2026-08-23 — Manus P3 (PDF Patch 3): delegate to the shared
+// handler. The previous inline body had a vendor-only view
+// branch (setCurrentView('vendor-dashboard') for vendor, nothing
+// for helper — a latent bug if a helper ever saw this mount).
+// The shared handler now does the right thing for every role.
+                                onOpenCommentAlert={(meta) => openBigDayCommentAlert(meta, userRole)}
                                 onOpenStatus={(meta) => {
                                   if (meta?.eventId && currentEvent?.id !== meta.eventId) {
                                     setCurrentEvent({ id: meta.eventId });

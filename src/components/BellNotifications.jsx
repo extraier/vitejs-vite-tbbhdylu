@@ -103,6 +103,15 @@ export function BellNotifications({
   onOpenStatus,
   onOpenInvite,
   onOpenDashboard,
+  // 2026-08-23 — Manus P3 (PDF Patch 3): role forwarding. The
+  // useNotifications hook accepts a userRole parameter that gates
+  // owner-only sources (proposals / tasks / helper-invites). Bell
+  // callers used to omit it and silently fall into the default
+  // 'owner' path — vendor / helper bells were opening listeners
+  // they never needed. Add userRole as a typed prop, default to
+  // 'owner' so existing single-role callers keep their behaviour,
+  // and forward it to the hook.
+  userRole = 'owner',
   // 2026-08-17 — Manus A9: explicit `enabled` flag from the caller.
   // Defaults to true so the bell subscribes eagerly (the badge needs
   // to appear the moment an alert arrives, without waiting for the
@@ -169,6 +178,10 @@ export function BellNotifications({
     coupleUid,
     selfUid,
     eventId,
+    // 2026-08-23 — Manus P3: forward the caller-supplied role so
+    // vendor / helper bells don't open owner-only listeners. See
+    // useNotifications userRole gate (P0.4) for the gate logic.
+    userRole,
     // Bump a localSeenTick on 全部已讀 so this consumer re-renders
     // immediately even if the hook's window-event listener hasn't
     // fired yet (first interaction, event listener async-mount race).
