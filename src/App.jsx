@@ -887,6 +887,14 @@ export default function App() {
   // open it. The dashboard still works — it now reads this state
   // as a prop instead of owning it.
   const [purchaseModalOpen, setPurchaseModalOpen] = useState(false);
+  // 2026-08-23 — Manus P4.1 (PDF Patch 4): purchaseLockedTypes
+  // tells the global <PurchaseModal> which specific SKU(s) the
+  // caller wants to unlock. Without it, the modal defaults to
+  // the full Premium bundle (HK$99). With it set to a specific
+  // type (e.g. ['custom-template'] from InvitationEditor), the
+  // modal renders the SKU picker for just that item. Cleared
+  // in onClose so a re-open starts fresh.
+  const [purchaseLockedTypes, setPurchaseLockedTypes] = useState([]);
   // 2026-07-31 — change/set-password modal. MyProfile decides 'change' vs
   // 'set' based on hasPasswordProvider() and passes the mode in.
   const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
@@ -5051,13 +5059,34 @@ export default function App() {
       />
       <PurchaseModal
         isOpen={purchaseModalOpen}
-        onClose={() => setPurchaseModalOpen(false)}
+        // 2026-08-23 — Manus P4.1 (PDF Patch 4): clear
+        // purchaseLockedTypes on close so a subsequent open
+        // (e.g. from the dashboard header button) doesn't
+        // inherit the InvitationEditor's ['custom-template']
+        // SKU filter. The locked-types state is request-scoped,
+        // not session-scoped.
+        onClose={() => {
+          setPurchaseModalOpen(false);
+          setPurchaseLockedTypes([]);
+        }}
         ownerUid={user?.uid || ''}
         // 2026-08-19 — Manus P1.1: pass the selected event id
         // so the receipt carries it; the modal's submit button
         // is disabled when this is null (no event selected).
         eventId={currentEvent?.id || null}
+        // 2026-08-23 — Manus P4.1: pass the caller-supplied SKU
+        // filter. Default to [] (modal renders the full Premium
+        // bundle picker); when set to e.g. ['custom-template'],
+        // the modal renders just that single SKU at its
+        // standalone HK$49 price.
+        lockedTypes={purchaseLockedTypes}
         onSuccess={() => {
+          // 2026-08-23 — Manus P4.1: refresh the resolver so the
+          // tier flag and the entitlement-features cache both
+          // reflect the new purchase. The owner can upload
+          // a custom background immediately after the modal
+          // closes without a manual page reload.
+          refreshEntitlement?.();
           // Modal closes itself on success.
         }}
       />
@@ -5265,6 +5294,16 @@ export default function App() {
             // safely optimistic here.
             ownerTier={(entitlementFeatures.customInvitation || currentEvent.tier === 'premium') ? 'premium' : 'free'}
             isAdmin={isAdmin}
+            // 2026-08-23 — Manus P4.1 (PDF Patch 4): the editor
+            // delegates the locked-background upsell to the
+            // global PurchaseModal. The parent sets the locked
+            // type(s) so the modal's SKU picker shows the exact
+            // item the locked background would unlock, then
+            // refreshes entitlement on success.
+            onRequestPremium={() => {
+              setPurchaseLockedTypes(['custom-template']);
+              setPurchaseModalOpen(true);
+            }}
             onClose={() => setShowInvitationEditor(false)}
           />
         </LazyScreen>

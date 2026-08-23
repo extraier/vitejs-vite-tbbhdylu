@@ -7,7 +7,13 @@ import {
   loadLiveTemplates,
 } from '../components/invitation/templates';
 import { InvitationCard } from '../components/invitation/InvitationCard';
-import { UpgradeModal } from '../components/modals/UpgradeModal';
+// 2026-08-23 — Manus P4.1 (PDF Patch 4): removed UpgradeModal import.
+// InvitationEditor no longer owns its own upgrade modal — it
+// delegates to the global <PurchaseModal> the parent (App.jsx)
+// already mounts. The screen calls onRequestPremium when a locked
+// background is hit, the parent sets purchaseLockedTypes and
+// opens the global modal with the locked-type picker shown.
+// See App.jsx for purchaseLockedTypes state + the prop wiring.
 import { db, functions, auth, appId } from '../lib/firebase';
 import { callFirebaseFn } from '../lib/firebaseFn';
 // 2026-08-13 — H-01: helper for attaching the Firebase ID token
@@ -33,6 +39,14 @@ export function InvitationEditor({
   guests,
   ownerTier = 'free',
   isAdmin = false,
+  // 2026-08-23 — Manus P4.1 (PDF Patch 4): onRequestPremium is the
+  // hook the editor uses to ask the parent (App.jsx) to open the
+  // global <PurchaseModal> with lockedTypes=['custom-template'].
+  // Previously the editor mounted its own UpgradeModal here; the
+  // UpgradeModal→PurchaseModal chain had a non-trivial dead-code
+  // path. Now there's one PaymentModal in the whole app, owned by
+  // the parent, and this screen just signals when to open it.
+  onRequestPremium,
   onClose,
   onSent,
 }) {
@@ -56,7 +70,9 @@ export function InvitationEditor({
     address: '',
   });
   const [selectedGuestIds, setSelectedGuestIds] = useState([]);
-  const [showUpgrade, setShowUpgrade] = useState(false);
+  // 2026-08-23 — Manus P4.1: removed showUpgrade state — the editor
+  // no longer owns its own upgrade modal. Locked-background hits
+  // route through onRequestPremium → parent → global PurchaseModal.
   const [sending, setSending] = useState(false);
   const [previewGuestId, setPreviewGuestId] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -201,7 +217,12 @@ export function InvitationEditor({
   // real event's guest uploads. SAFE_ID regex accepts both ids.
   const handleBgUpload = async (file) => {
     if (ownerTier !== 'premium') {
-      setShowUpgrade(true);
+      // 2026-08-23 — Manus P4.1 (PDF Patch 4): non-premium users
+      // hit the global PurchaseModal with lockedTypes=['custom-template']
+      // so the SKU picker shows the exact item this background
+      // would unlock. Parent wires onRequestPremium → setPurchaseLockedTypes
+      // + setPurchaseModalOpen(true).
+      onRequestPremium?.();
       return;
     }
     setIsUploading(true);
@@ -232,7 +253,14 @@ export function InvitationEditor({
         // signed-in designer's Firebase ID token. The proxy
         // verifies the token, then special-cases eventId='inv-bg'
         // to allow only when request.auth.uid === ownerUid.
-        headers: await buildAuthHeaders(),
+        //
+        // 2026-08-23 — Manus P4.1 (PDF Patch 4): the previous call to
+        // `buildAuthHeaders()` is a typo — the function is exported
+        // from src/lib/uploadAuthHeader.js as `buildUploadAuthHeader`.
+        // The typo meant the proxy couldn't verify the caller's
+        // Firebase ID token, so the upload was rejected. Now it
+        // returns the same { Authorization: 'Bearer ...' } header.
+        headers: await buildUploadAuthHeader(),
         body: fd,
       });
       const json = await res.json();
@@ -351,7 +379,11 @@ export function InvitationEditor({
               fileInputRef={fileInputRef}
               ownerTier={ownerTier}
               isAdmin={isAdmin}
-              onPremiumRequired={() => setShowUpgrade(true)}
+              // 2026-08-23 — Manus P4.1 (PDF Patch 4): wire the
+              // template-picker background step directly to the
+              // global PurchaseModal. Same onRequestPremium
+              // contract as handleBgUpload above.
+              onPremiumRequired={() => onRequestPremium?.()}
             />
           )}
           {step === 1 && (
@@ -425,14 +457,10 @@ export function InvitationEditor({
         </div>
       </div>
 
-      <UpgradeModal
-        isOpen={showUpgrade}
-        onClose={() => setShowUpgrade(false)}
-        onConfirm={() => {
-          setShowUpgrade(false);
-          alert('感謝支持！Premium 功能稍後正式開通，現可繼續使用免費模板。');
-        }}
-      />
+      {/* 2026-08-23 — Manus P4.1 (PDF Patch 4): UpgradeModal mount
+          removed. The parent (App.jsx) mounts a single global
+          <PurchaseModal> that this screen signals open via
+          onRequestPremium when a locked background is hit. */}
       </div>
       </div>
   );
