@@ -768,3 +768,73 @@ describe('firestore.rules — environment', () => {
     }
   });
 });
+
+// 2026-08-23 — Manus P4.3 (PDF Patch 4.3): server-only storage
+// quota accounting. The proxy reserves bytes in
+// `/events/{eventId}/privateUsage/storage` via Admin SDK. The
+// rules DENY all client reads and writes to that nested doc so
+// a signed-in owner cannot self-promote their quota (inflate
+// storageQuotaBytes or zero storageUsageBytes) by writing to
+// it directly. Only Admin SDK (the photo-upload proxy, plus
+// future drift-reconciliation CFs) can touch it.
+//
+// Without these deny rules, an attacker with the event write
+// permission would have an obvious path to bypass the quota
+// gate — bypass by going around the proxy and writing to the
+// counter doc directly.
+describe.skipIf(skipEmulator)('firestore.rules — events/{eventId}/privateUsage (P4.3 deny-all)', () => {
+  const ownerUid = 'couple-private-1';
+  const otherUid = 'couple-private-other';
+  const eventId = 'ev-private-test';
+  const path = `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/privateUsage/storage`;
+
+  it('rejects the owner reading privateUsage/storage for their own event', async () => {
+    // Even the owner — who has full event write access — must
+    // not be able to read the server-only quota counter. The
+    // client UI surfaces the LIMIT (computed elsewhere) and
+    // does not need to read the live used count; the upload
+    // progress bar reads from the local file's bytes counter,
+    // not Firestore. A denied read is by design.
+    const db = await asUser(ownerUid);
+    expect(db).not.toBeNull();
+    await assertFails(getDoc(doc(db!, path)));
+  });
+
+  it('rejects the owner writing privateUsage/storage for their own event', async () => {
+    // Critical: even a legitimate owner cannot inflate their
+    // usedBytes to 0 (reset the counter) or bump reservedBytes
+    // to reserve the whole quota. Only the Admin SDK proxy can
+    // mutate this doc.
+    const db = await asUser(ownerUid);
+    expect(db).not.toBeNull();
+    await assertFails(setDoc(doc(db!, path), { usedBytes: 0, reservedBytes: 0 }));
+    await assertFails(updateDoc(doc(db!, path), { usedBytes: 0 }));
+  });
+
+  it('rejects a different signed-in user reading privateUsage/storage', async () => {
+    const db = await asUser(otherUid);
+    expect(db).not.toBeNull();
+    await assertFails(getDoc(doc(db!, path)));
+  });
+
+  it('rejects a different signed-in user writing privateUsage/storage', async () => {
+    const db = await asUser(otherUid);
+    expect(db).not.toBeNull();
+    await assertFails(setDoc(doc(db!, path), { usedBytes: 0, reservedBytes: 0 }));
+    await assertFails(updateDoc(doc(db!, path), { reservedBytes: 999_999_999 }));
+  });
+
+  it('rejects an unauthenticated read', async () => {
+    // asUser(null) returns null — unauthenticated context
+    // (no Firebase Auth session). The rule must deny.
+    const db = await asUser(null);
+    expect(db).toBeNull();
+    await assertFails(getDoc(doc(env.unauthenticatedContext().firestore(), path)));
+  });
+
+  it('rejects an unauthenticated write', async () => {
+    const db = await asUser(null);
+    expect(db).toBeNull();
+    await assertFails(setDoc(doc(env.unauthenticatedContext().firestore(), path), { usedBytes: 0, reservedBytes: 0 }));
+  });
+});

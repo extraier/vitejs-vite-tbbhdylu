@@ -1087,6 +1087,32 @@ match /{path=**}/events/{eventId} {
               && hasHelperPerm(ownerUid, 'canScan');
             allow update, delete: if false;
           }
+
+          // 2026-08-23 — Manus P4.3 (PDF Patch 4.3): server-only
+          // storage quota accounting. The proxy reserves bytes in
+          // this nested doc via Admin SDK; clients can never read
+          // or write it (so they can't self-promote their quota
+          // by inflating usedBytes or zeroing reservedBytes).
+          //
+          // Why deny-all client-side: any signed-in owner can
+          // write to events/{eventId} (the event update rule
+          // above). The previous photo-upload proxy read
+          // event.storageQuotaBytes + event.storageUsageBytes —
+          // both writable by the owner, so a malicious or
+          // naive client could:
+          //   1. inflate storageQuotaBytes → bypass the limit, or
+          //   2. zero storageUsageBytes → reset the counter.
+          // Moving the counter to a separate sub-doc with
+          // deny-all + server-only writes closes both holes.
+          //
+          // The fail-closed proxy reads this via
+          // resolveServerEntitlementLimit + an Admin SDK
+          // runTransaction. The client UI surfaces the limit
+          // (not the live used count) so a denied read here
+          // doesn't break the upload display.
+          match /privateUsage/{anything} {
+            allow read, write: if false;
+          }
         }
 
         // 2026-07-26 — Co-owners collection. Each doc is keyed by
