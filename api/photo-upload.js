@@ -62,6 +62,16 @@ import { randomUUID } from 'node:crypto';
 import { initializeApp, getApps, cert, applicationDefault } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+// 2026-08-23 — Manus P4.3 (PDF Patch 4.3): server-only quota
+// accounting. See api/photo-upload-quota.js for the design.
+// We import both the helpers AND resolveServerEntitlementLimit
+// (the latter is dynamically imported inside the handler to
+// avoid loading firebase-admin at module-import time when the
+// handler is invoked from an environment without credentials).
+// The static import here is safe because both files reference
+// firebase-admin/firestore which is already pulled in above.
+import { resolveServerEntitlementLimit } from '../functions/src/entitlementResolver';
+import { reserveQuota, finalizeQuota, releaseQuota } from './photo-upload-quota.js';
 
 const NAS_UPLOAD_URL =
   process.env.NAS_UPLOAD_URL ||
@@ -422,66 +432,93 @@ async function _handler(req, res) {
     return;
   }
 
-  // 2026-08-19 — Manus P1.4.a: storage-quota enforcement.
-  // The proxy now reads the per-event counter
-  // (event.storageUsageBytes) and the entitlement-derived
-  // limit (event.storageQuotaBytes, seeded by
-  // getUploadPreferencesToken). If the upload would exceed
-  // the quota, reject with HTTP 413 + a structured error
-  // before minting the NAS HMAC. This is the audit's
-  // acceptance criterion: a customer who hits the storage
-  // cap sees a friendly message instead of getting a token,
-  // uploading to the NAS, and finding the bytes are 'on
-  // the card' but invisible to the quota display.
+  // 2026-08-23 — Manus P4.3 (PDF Patch 4.3): server-only quota
+  // gate. Replaces the previous client-trustable check that
+  // read event.storageQuotaBytes (writable by the owner).
   //
-  // For inv-bg / non-events, skip the check — those are
-  // (a) the couple's own invitation background upload, not
-  // subject to the cap, and (b) rate-limited separately
-  // above. The proxy path is still resilient to quota-less
-  // event docs (older events created before this commit):
-  // missing storageUsageBytes defaults to 0; missing
-  // storageQuotaBytes falls back to 200 MB (the free tier).
+  // Flow:
+  //   1. Resolve the entitlement limit via
+  //      resolveServerEntitlementLimit(admin.db, ownerUid, eventId).
+  //      This computes the limit from the owner's unlock
+  //      records (server-only collection). If this fails
+  //      (Firestore unreachable, rules deny), the proxy
+  //      MUST reject — it must NOT fall back to a
+  //      client-trustable default.
+  //   2. Inside reserveQuota() (a single Admin SDK
+  //      runTransaction), check used + reserved + addBytes
+  //      <= limit and atomically increment reservedBytes.
+  //      This closes the TOCTOU window where two concurrent
+  //      uploads both passed the check.
+  //   3. On NAS 2xx → finalizeQuota(): decrement reserved,
+  //      increment used (atomic).
+  //   4. On NAS error → releaseQuota(): decrement reserved.
+  //
+  // For inv-bg / non-events, skip the quota gate entirely
+  // (the couple's own invitation background, rate-limited
+  // separately above).
+  let reservedSlot = null; // { addBytes } once reserved; cleared on finalize/release
   if (eventId !== 'inv-bg') {
+    // ---- Step 1: resolve the entitlement-derived limit. ----
+    let limitBytes;
     try {
-      const eventDocRef = admin.db.doc(
-        `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}`,
-      );
-      const eventSnap = await eventDocRef.get();
-      if (eventSnap.exists) {
-        const eventData = eventSnap.data() || {};
-        const usedBytes = Number.isFinite(eventData.storageUsageBytes)
-          ? eventData.storageUsageBytes
-          : 0;
-        const limitBytes = Number.isFinite(eventData.storageQuotaBytes)
-          && eventData.storageQuotaBytes > 0
-          ? eventData.storageQuotaBytes
-          : 200 * 1024 * 1024; // 200 MB free-tier default
-        const addBytes = body.length;
-        if (usedBytes + addBytes > limitBytes) {
-          const usedMb = (usedBytes / (1024 * 1024)).toFixed(1);
-          const limitMb = (limitBytes / (1024 * 1024)).toFixed(1);
-          const addMb = (addBytes / (1024 * 1024)).toFixed(1);
-          log('quota-exceeded', {
-            usedBytes,
-            limitBytes,
-            addBytes,
-          });
-          res.status(413).json({
-            error: `storage quota exceeded: currently ${usedMb} MB, this upload is ${addMb} MB, limit is ${limitMb} MB.`,
-            code: 'STORAGE_QUOTA_EXCEEDED',
-            usedBytes,
-            limitBytes,
-            addBytes,
-          });
-          return;
-        }
+      limitBytes = await resolveServerEntitlementLimit(admin.db, ownerUid, eventId);
+    } catch (entErr) {
+      // Fail closed. The previous version of this code did:
+      //   log('quota-check-error', { ... });
+      // and proceeded with the upload. That's the failure
+      // mode the PDF §4.3 explicitly bans — a transient
+      // Firestore blip would let uploads through unaccounted
+      // for, slowly inflating the bill.
+      log('quota-limit-resolve-failed', {
+        err: entErr && entErr.message ? entErr.message : String(entErr),
+      });
+      res.status(503).json({
+        error: 'storage quota check temporarily unavailable, please retry',
+        code: 'QUOTA_CHECK_UNAVAILABLE',
+      });
+      return;
+    }
+    // ---- Step 2: reserve the slot. ----
+    try {
+      await reserveQuota({
+        db: admin.db,
+        appId: APP_ID,
+        ownerUid,
+        eventId,
+        addBytes: body.length,
+        limitBytes,
+      });
+      reservedSlot = { addBytes: body.length, limitBytes };
+    } catch (resErr) {
+      if (resErr && resErr.code === 'STORAGE_QUOTA_EXCEEDED') {
+        const usedMb = (resErr.usedBytes / (1024 * 1024)).toFixed(1);
+        const limitMb = (resErr.limitBytes / (1024 * 1024)).toFixed(1);
+        const addMb = (resErr.addBytes / (1024 * 1024)).toFixed(1);
+        log('quota-exceeded', {
+          usedBytes: resErr.usedBytes,
+          reservedBytes: resErr.reservedBytes,
+          limitBytes: resErr.limitBytes,
+          addBytes: resErr.addBytes,
+        });
+        res.status(413).json({
+          error: `storage quota exceeded: currently ${usedMb} MB, this upload is ${addMb} MB, limit is ${limitMb} MB.`,
+          code: 'STORAGE_QUOTA_EXCEEDED',
+          usedBytes: resErr.usedBytes,
+          reservedBytes: resErr.reservedBytes,
+          limitBytes: resErr.limitBytes,
+          addBytes: resErr.addBytes,
+        });
+        return;
       }
-    } catch (quotaErr) {
-      // 2026-08-19 — Don't fail the upload if the quota read
-      // errors (e.g. transient Firestore failure). Log loud
-      // and proceed; the client display will catch the next
-      // quota check on the next upload.
-      log('quota-check-error', { err: quotaErr && quotaErr.message ? quotaErr.message : String(quotaErr) });
+      // Any other error from reserveQuota is also fail-closed.
+      log('quota-reserve-failed', {
+        err: resErr && resErr.message ? resErr.message : String(resErr),
+      });
+      res.status(503).json({
+        error: 'storage quota check temporarily unavailable, please retry',
+        code: 'QUOTA_CHECK_UNAVAILABLE',
+      });
+      return;
     }
   }
 
@@ -556,32 +593,44 @@ async function _handler(req, res) {
     responseBytes: responseText.length,
   });
 
-  // 2026-08-19 — Manus P1.4.a: atomically increment the
-  // per-event storageUsageBytes counter after a successful
-  // upload. We use the response status (2xx) as the
-  // success signal — 4xx/5xx from the NAS means the
-  // photo wasn't stored, so we don't add to the counter.
-  // This is the "increment-after-success" pattern from
-  // the storageQuota docstring. The reservation pattern
-  // is P1.4.b; this is enough to make the counter
-  // accurate for happy-path uploads.
-  if (eventId !== 'inv-bg' && upstream.status >= 200 && upstream.status < 300) {
+  // 2026-08-23 — Manus P4.3: finalize or release the
+  // reservation. If the upstream NAS returned 2xx, move the
+  // bytes from `reservedBytes` to `usedBytes` (atomic). If it
+  // failed, release the reservation so the slot is freed for
+  // the next upload. Both transactions are best-effort: if
+  // the finalize/release transaction itself errors, we log
+  // loud but do NOT fail the upload — the photo is already
+  // on the NAS, and the daily drift-reconciliation cron
+  // reconciles the counter.
+  if (reservedSlot && eventId !== 'inv-bg') {
+    const finalizeOrRelease = upstream.status >= 200 && upstream.status < 300
+      ? () => finalizeQuota({
+          db: admin.db,
+          appId: APP_ID,
+          ownerUid,
+          eventId,
+          addBytes: reservedSlot.addBytes,
+        })
+      : () => releaseQuota({
+          db: admin.db,
+          appId: APP_ID,
+          ownerUid,
+          eventId,
+          addBytes: reservedSlot.addBytes,
+        });
     try {
-      await admin.db.doc(
-        `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}`,
-      ).update({
-        storageUsageBytes: FieldValue.increment(body.length),
-        storageUsageUpdatedAt: FieldValue.serverTimestamp(),
+      await finalizeOrRelease();
+    } catch (finErr) {
+      log('quota-finalize-failed', {
+        kind: upstream.status >= 200 && upstream.status < 300 ? 'finalize' : 'release',
+        err: finErr && finErr.message ? finErr.message : String(finErr),
+        upstreamStatus: upstream.status,
       });
-    } catch (incErr) {
-      // 2026-08-19 — Counter failure must NOT fail the
-      // upload (the photo is already on the NAS). Log
-      // loud so this can be reconciled by the daily
-      // cron in P1.4.c.
-      log('storage-counter-increment-failed', {
-        err: incErr && incErr.message ? incErr.message : String(incErr),
-      });
+      // Fall through — the upload already succeeded or
+      // failed on the NAS side. Counter drift is reconciled
+      // by the daily cron; do not surface this to the client.
     }
+    reservedSlot = null;
   }
 
   // Forward the response. If JSON, pass through with the original

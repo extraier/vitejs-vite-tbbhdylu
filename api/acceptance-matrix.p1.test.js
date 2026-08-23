@@ -70,6 +70,16 @@ const mockState = {
   uidByToken: new Map(),
   events: new Map(),
   storageUsage: new Map(),
+  // 2026-08-23 — Manus P4.3 (PDF Patch 4.3): the new quota
+  // helpers (api/photo-upload-quota.js) write to
+  // privateUsage/storage. Tests can pre-seed the owner's
+  // unlocks to drive resolveServerEntitlementLimit. Default
+  // empty unlocks → FREE_TIER_BASE_BYTES (200 MB) — fine for
+  // tests that don't care about the limit.
+  usage: new Map(),
+  unlocksByOwner: new Map(),
+  guestLinks: new Map(),
+  rateCounters: new Map(),
 };
 
 vi.mock('./photo-upload.js', async (importOriginal) => {
@@ -96,6 +106,19 @@ async function installFakeAdmin() {
   }));
 
   const mockFirebaseAdminFs = vi.hoisted(() => {
+    // 2026-08-23 — Manus P4.3 (PDF Patch 4.3): the new quota
+    // helpers call db.runTransaction + db.collection(...). Mock
+    // both. Also add `set` to the doc ref + handle
+    // privateUsage/storage paths so the quota helpers' writes
+    // land in mockState.usage instead of mockState.events.
+    const runTransaction = async (fn) => {
+      const tx = {
+        get: async (ref) => ref.get(),
+        set: async (ref, patch, opts) => ref.set(patch, opts),
+        update: async (ref, patch) => ref.update(patch),
+      };
+      return await fn(tx);
+    };
     const fsInstance = {
       doc: (path) => ({
         get: async () => {
@@ -103,7 +126,46 @@ async function installFakeAdmin() {
             const d = mockState.events.get(path);
             return { exists: true, data: () => d };
           }
+          if (mockState.guestLinks && mockState.guestLinks.has(path)) {
+            const d = mockState.guestLinks.get(path);
+            return { exists: true, data: () => d };
+          }
+          if (mockState.rateCounters && mockState.rateCounters.has(path)) {
+            return { exists: true, data: () => ({ count: mockState.rateCounters.get(path) }) };
+          }
+          if (mockState.usage && mockState.usage.has(path)) {
+            const d = mockState.usage.get(path);
+            return { exists: true, data: () => d };
+          }
           return { exists: false, data: () => undefined };
+        },
+        set: async (val, opts) => {
+          if (typeof val === 'object' && val !== null &&
+              (typeof val.usedBytes === 'number' ||
+               typeof val.reservedBytes === 'number' ||
+               val._isServerTimestamp)) {
+            const prev = (mockState.usage && mockState.usage.get(path)) || {};
+            const next = { ...prev };
+            if (typeof val.usedBytes === 'number') next.usedBytes = val.usedBytes;
+            if (typeof val.reservedBytes === 'number') next.reservedBytes = val.reservedBytes;
+            if (val.updatedAt || val._isServerTimestamp) {
+              next.updatedAt = val.updatedAt || { _seconds: Math.floor(Date.now() / 1000) };
+            }
+            if (val.lastFinalizedAt || val._isServerTimestamp) {
+              next.lastFinalizedAt = val.lastFinalizedAt || { _seconds: Math.floor(Date.now() / 1000) };
+            }
+            if (val.lastReleasedAt || val._isServerTimestamp) {
+              next.lastReleasedAt = val.lastReleasedAt || { _seconds: Math.floor(Date.now() / 1000) };
+            }
+            mockState.usage.set(path, next);
+            return;
+          }
+          if (mockState.rateCounters && val && val.count &&
+              val.count._isFieldValue && typeof val.count.increment === 'number') {
+            const prev = mockState.rateCounters.get(path) || 0;
+            mockState.rateCounters.set(path, prev + val.count.increment);
+            return;
+          }
         },
         update: async (patch) => {
           if (!patch || typeof patch !== 'object') return;
@@ -118,6 +180,42 @@ async function installFakeAdmin() {
           }
         },
       }),
+      // 2026-08-23 — P4.3: the resolver walks
+      // collection('artifacts').doc().collection('users').doc()
+      //   .collection('unlocks').get(). Return empty unlocks
+      // by default — tests can override via mockState.unlocksByOwner.
+      collection: (name) => {
+        if (name === 'artifacts') {
+          return {
+            doc: () => ({
+              collection: (innerName) => {
+                if (innerName === 'users') {
+                  return {
+                    doc: (uid) => ({
+                      collection: (innerInnerName) => {
+                        if (innerInnerName === 'unlocks') {
+                          return {
+                            get: async () => ({
+                              docs: ((mockState.unlocksByOwner && mockState.unlocksByOwner.get(uid)) || []).map((u, i) => ({
+                                id: `unlock-${i}`,
+                                data: () => u,
+                              })),
+                            }),
+                          };
+                        }
+                        return { get: async () => ({ docs: [] }) };
+                      },
+                    }),
+                  };
+                }
+                return { get: async () => ({ docs: [] }) };
+              },
+            }),
+          };
+        }
+        return { get: async () => ({ docs: [] }) };
+      },
+      runTransaction,
       FieldValue: mockFieldValue,
     };
     return fsInstance;

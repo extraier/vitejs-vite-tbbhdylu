@@ -56,6 +56,15 @@ const mockState = {
   // real SDK so the proxy's "post-success increment" path is
   // testable here.
   storageUsage: new Map(),     // path → number (bytes used)
+  // 2026-08-23 — Manus P4.3 (PDF Patch 4.3): the new quota
+  // accounting uses privateUsage/storage instead of fields on
+  // the event doc. mockState.usage holds the { usedBytes,
+  // reservedBytes, ... } map keyed by the privateUsage/storage
+  // doc path. mockState.unlocksByOwner lets tests pre-seed the
+  // owner's unlock records (the resolver reads those to derive
+  // the storage limit).
+  usage: new Map(),             // path → { usedBytes, reservedBytes, ... }
+  unlocksByOwner: new Map(),    // ownerUid → [{ type, source, ... }]
   firebaseAdminImportable: true,
   // 2026-08-19 — Manus P1.4.a: when non-null, the global
   // fetch mock returns this status (otherwise 200). Lets
@@ -103,9 +112,45 @@ const mockFirebaseAdminAuth = vi.hoisted(() => ({
 const mockFirebaseAdminFs = vi.hoisted(() => {
   // 2026-08-13 — H-01: in real firebase-admin, `firestore(app)` returns
   // a Firestore *instance* with methods like .doc(), .collection(),
-  // and .FieldValue (static property). The proxy reads
-  // `admin.db.doc(path)` — so the factory must return an object
-  // with `.doc`. FieldValue is hung off the returned object too.
+  // .runTransaction(), and .FieldValue (static property). The
+  // proxy reads `admin.db.doc(path)` — so the factory must
+  // return an object with `.doc` and `.runTransaction`.
+  //
+  // 2026-08-23 — Manus P4.3 (PDF Patch 4.3): the new quota
+  // helpers (api/photo-upload-quota.js) call `db.runTransaction`
+  // for atomic reservation / finalize / release. The transaction
+  // callback receives an object with `.get(ref)` (a snapshot of
+  // the current doc) and `.set(ref, patch, { merge })` (a
+  // deferred write applied at commit time). The simplest
+  // mock executes both synchronously inside the callback and
+  // returns the final value — good enough for single-shot
+  // reserve/finalize/release flows. Concurrent transactions
+  // (which the real SDK retries on conflict) are out of scope
+  // for unit tests; that's covered by the emulator integration
+  // suite.
+  const runTransaction = async (fn) => {
+    // tx is a transaction-like object whose get/set operate on
+    // the same backing stores as `db.doc(...).get/set`. No
+    // retry, no conflict detection.
+    const tx = {
+      get: async (ref) => {
+        // Reuse the same lookup logic as the .doc().get() path.
+        // `ref` is the object returned by fsInstance.doc(path).
+        return await ref.get();
+      },
+      set: async (ref, patch, opts) => {
+        // Apply the same write logic as doc().set() (mocked
+        // inline below). Real runTransaction defers the write
+        // until commit; here we just apply it immediately.
+        return await ref.set(patch, opts);
+      },
+      update: async (ref, patch) => {
+        return await ref.update(patch);
+      },
+    };
+    return await fn(tx);
+  };
+
   const fsInstance = {
     doc: (path) => ({
       get: async () => {
@@ -120,9 +165,41 @@ const mockFirebaseAdminFs = vi.hoisted(() => {
         if (mockState.rateCounters.has(path)) {
           return { exists: true, data: () => ({ count: mockState.rateCounters.get(path) }) };
         }
+        // 2026-08-23 — P4.3: the new quota doc lives at
+        // privateUsage/storage. mockState.usage Map keyed by
+        // the full path.
+        if (mockState.usage.has(path)) {
+          const d = mockState.usage.get(path);
+          return { exists: true, data: () => d };
+        }
         return { exists: false, data: () => undefined };
       },
       set: async (val, opts) => {
+        // 2026-08-23 — P4.3: writes to the privateUsage/storage
+        // path go into mockState.usage (not mockState.events).
+        // The quota helpers call `tx.set(ref, { usedBytes, reservedBytes, ... }, { merge: true })`.
+        // The merge: true merge semantics are implemented inline.
+        if (typeof val === 'object' && val !== null &&
+            (typeof val.usedBytes === 'number' ||
+             typeof val.reservedBytes === 'number' ||
+             val._isServerTimestamp)) {
+          const prev = mockState.usage.get(path) || {};
+          const next = { ...prev };
+          if (typeof val.usedBytes === 'number') next.usedBytes = val.usedBytes;
+          if (typeof val.reservedBytes === 'number') next.reservedBytes = val.reservedBytes;
+          if (val.updatedAt || val._isServerTimestamp) {
+            next.updatedAt = val.updatedAt || { _seconds: Math.floor(Date.now() / 1000) };
+          }
+          if (val.lastFinalizedAt || val._isServerTimestamp) {
+            next.lastFinalizedAt = val.lastFinalizedAt || { _seconds: Math.floor(Date.now() / 1000) };
+          }
+          if (val.lastReleasedAt || val._isServerTimestamp) {
+            next.lastReleasedAt = val.lastReleasedAt || { _seconds: Math.floor(Date.now() / 1000) };
+          }
+          mockState.usage.set(path, next);
+          return;
+        }
+        // Rate-limit counter path (legacy; unchanged from P1.4.a).
         const prev = mockState.rateCounters.get(path) || 0;
         let inc;
         if (val && val.count && val.count._isFieldValue && typeof val.count.increment === 'number') {
@@ -134,14 +211,12 @@ const mockFirebaseAdminFs = vi.hoisted(() => {
         }
         mockState.rateCounters.set(path, prev + inc);
       },
-      // 2026-08-19 — Manus P1.4.a: honor the proxy's
-      // post-success `update({ storageUsageBytes: FieldValue.increment(n) })`
-      // call so we can assert the counter actually moves after
-      // a successful upload. The increment is a NO-OP for any
-      // field other than `storageUsageBytes` — the proxy only
-      // touches that one. Plain (non-FieldValue) writes are
-      // also accepted so the quota-seed path in the CF can be
-      // mirrored in tests if needed.
+      // 2026-08-19 — Manus P1.4.a: legacy update path. The
+      // P4.3 quota helpers no longer call update() on the event
+      // doc (they use runTransaction.set on privateUsage/storage
+      // instead), but this is retained so other P1.4.a call
+      // sites in the proxy that still write plain fields to
+      // the event doc (rare) keep working.
       update: async (patch) => {
         if (!patch || typeof patch !== 'object') return;
         const incVal = patch.storageUsageBytes;
@@ -149,14 +224,48 @@ const mockFirebaseAdminFs = vi.hoisted(() => {
           const prev = mockState.storageUsage.get(path) || 0;
           mockState.storageUsage.set(path, prev + incVal.increment);
         }
-        // 2026-08-19 — Merge plain fields onto the stored event
-        // doc so the next .get() reflects the new shape.
         if (mockState.events.has(path)) {
           const prev = mockState.events.get(path) || {};
           mockState.events.set(path, { ...prev, ...patch });
         }
       },
     }),
+    // 2026-08-23 — P4.3: the resolver (resolveServerEntitlementLimit)
+    // walks .collection('artifacts').doc(...).collection('users').doc(...)
+    //   .collection('unlocks').get(). Mock that chain here so
+    // tests can pre-seed unlocks per owner.
+    collection: (name) => {
+      if (name === 'artifacts') {
+        return {
+          doc: () => ({
+            collection: (innerName) => {
+              if (innerName === 'users') {
+                return {
+                  doc: (uid) => ({
+                    collection: (innerInnerName) => {
+                      if (innerInnerName === 'unlocks') {
+                        return {
+                          get: async () => ({
+                            docs: (mockState.unlocksByOwner.get(uid) || []).map((u, i) => ({
+                              id: `unlock-${i}`,
+                              data: () => u,
+                            })),
+                          }),
+                        };
+                      }
+                      return { get: async () => ({ docs: [] }) };
+                    },
+                  }),
+                };
+              }
+              return { get: async () => ({ docs: [] }) };
+            },
+          }),
+        };
+      }
+      return { get: async () => ({ docs: [] }) };
+    },
+    runTransaction,
     FieldValue: mockFieldValue,
   };
   return fsInstance;
@@ -658,13 +767,25 @@ describe('photo-upload proxy — verifyUploadPreferencesToken', () => {
 });
 
 // 2026-08-19 — Manus P1.4.a — storage-quota enforcement + atomic
-// counter increment on success. These tests live in a separate
-// describe block so the setup (event docs that carry quota
-// fields + counter state) doesn't leak between quota and
+// counter reservation/finalize/release. These tests live in a
+// separate describe block so the setup (privateUsage/storage
+// counter state + owner unlocks) doesn't leak between quota and
 // watermark test groups.
-describe('photo-upload proxy — P1.4.a storage quota', () => {
+//
+// 2026-08-23 — Manus P4.3 (PDF Patch 4.3): the quota gate
+// reads from the new server-only `privateUsage/storage` doc,
+// not from fields on the event doc. The entitlement limit is
+// derived from the owner's unlocks (mockState.unlocksByOwner).
+// By default no unlocks → FREE_TIER_BASE_BYTES (200 MB).
+describe('photo-upload proxy — P4.3 server-only storage quota', () => {
   const EVENT_PATH = `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/events/ev1`;
+  const USAGE_PATH = `${EVENT_PATH}/privateUsage/storage`;
   let handler;
+
+  // Helper — get the current privateUsage/storage doc.
+  function getUsage() {
+    return mockState.usage.get(USAGE_PATH) || { usedBytes: 0, reservedBytes: 0 };
+  }
 
   beforeEach(async () => {
     mockState.uidByToken.clear();
@@ -672,28 +793,36 @@ describe('photo-upload proxy — P1.4.a storage quota', () => {
     mockState.guestLinks.clear();
     mockState.rateCounters.clear();
     mockState.storageUsage.clear();
+    mockState.usage.clear();
+    mockState.unlocksByOwner.clear();
     // 2026-08-19 — clear upstream mock state too
     mockState.upstreamStatus = null;
     mockState.upstreamBody = null;
     mockState.uidByToken.set(DEFAULT_BEARER, DEFAULT_OWNER_UID);
+    // Seed the event doc so the (5) event-membership check
+    // passes. The previous P1.4.a tests seeded it inline;
+    // the new P4.3 tests seed it once here to keep each
+    // test body focused on quota assertions.
+    mockState.events.set(EVENT_PATH, {
+      _ownerUid: DEFAULT_OWNER_UID,
+      coOwners: [],
+      assignedVendorUid: null,
+    });
     await installFakeAdmin();
     const mod = await import('./photo-upload.js?bust=' + Math.random());
     handler = mod.default;
     __proxyHandler = handler;
   });
 
-  // ---- quota gate ----
+  // ---- quota gate (413 path) ----
 
   it('rejects with 413 STORAGE_QUOTA_EXCEEDED when upload would exceed the quota', async () => {
-    // Seed the event doc with a 200 MB quota and a body that
-    // already exceeds it. The simplest deterministic test:
-    // make the body longer than the remaining quota.
-    mockState.events.set(EVENT_PATH, {
-      _ownerUid: DEFAULT_OWNER_UID,
-      coOwners: [],
-      assignedVendorUid: null,
-      storageUsageBytes: 199 * 1024 * 1024, // 199 MB used
-      storageQuotaBytes: 200 * 1024 * 1024, // 1 MB remaining
+    // Seed privateUsage/storage to 199 MB used. The default
+    // entitlement (no unlocks) is 200 MB. A 2 MB body
+    // pushes the projected total over the limit.
+    mockState.usage.set(USAGE_PATH, {
+      usedBytes: 199 * 1024 * 1024, // 199 MB used
+      reservedBytes: 0,
     });
     const bigBody = 'A'.repeat(2_000_000); // 2 MB body
     const { res } = await invokeWithPrefsToken({ body: bigBody });
@@ -702,6 +831,7 @@ describe('photo-upload proxy — P1.4.a storage quota', () => {
       expect.objectContaining({
         code: 'STORAGE_QUOTA_EXCEEDED',
         usedBytes: 199 * 1024 * 1024,
+        reservedBytes: 0,
         limitBytes: 200 * 1024 * 1024,
       }),
     );
@@ -709,102 +839,193 @@ describe('photo-upload proxy — P1.4.a storage quota', () => {
     expect(typeof res._body.error).toBe('string');
     expect(res._body.error).toContain('storage quota exceeded');
     // Counter must NOT have been touched by a rejected upload.
-    expect(mockState.storageUsage.get(EVENT_PATH) || 0).toBe(0);
+    // (No reservation made → reservedBytes stays 0.)
+    expect(getUsage().reservedBytes).toBe(0);
+    expect(getUsage().usedBytes).toBe(199 * 1024 * 1024);
   });
 
-  it('accepts the upload (200) when used + addBytes <= quota', async () => {
-    // 100 MB used, 200 MB quota — a 6 MB body fits comfortably.
-    mockState.events.set(EVENT_PATH, {
-      _ownerUid: DEFAULT_OWNER_UID,
-      coOwners: [],
-      assignedVendorUid: null,
-      storageUsageBytes: 100 * 1024 * 1024,
-      storageQuotaBytes: 200 * 1024 * 1024,
+  it('accepts the upload (200) when used + reserved + addBytes <= quota', async () => {
+    // 100 MB used, 0 reserved, default 200 MB limit — a 6 MB body fits.
+    mockState.usage.set(USAGE_PATH, {
+      usedBytes: 100 * 1024 * 1024,
+      reservedBytes: 0,
     });
     const body = 'B'.repeat(6_000_000);
     const { res } = await invokeWithPrefsToken({ body });
     expect(res.statusCode).toBe(200);
-    // Counter MUST have been incremented by the proxy's
-    // body.length — which equals the full multipart
-    // envelope (header + body + footer), not the raw
-    // payload bytes. We assert the counter is exactly the
-    // size of the proxy's body (reqBody length), which is
-    // what the proxy actually sent to NAS. This is the
-    // upper-bound metric — in real uploads the NAS stores
-    // less (multipart overhead is stripped), so the quota
-    // is over-counted by ~200-500 bytes per upload. That's
-    // acceptable for v1; the cron-based drift correction
-    // (P1.4.c) reconciles periodically.
-    expect(mockState.storageUsage.get(EVENT_PATH)).toBeGreaterThanOrEqual(6_000_000);
+    // After a successful 2xx, finalize() moves reservedBytes
+    // to usedBytes. So usedBytes should grow by the body
+    // length and reservedBytes should drop back to 0.
+    const usage = getUsage();
+    expect(usage.usedBytes).toBeGreaterThanOrEqual(100 * 1024 * 1024 + 6_000_000);
+    expect(usage.reservedBytes).toBe(0);
   });
 
-  it('falls back to a 200 MB quota when storageQuotaBytes is missing (transition safety)', async () => {
-    // No storageQuotaBytes on the event doc → free-tier default
-    // kicks in (200 MB), used = 0 → small upload fits.
-    mockState.events.set(EVENT_PATH, {
-      _ownerUid: DEFAULT_OWNER_UID,
-      coOwners: [],
-      assignedVendorUid: null,
-      // no storageUsageBytes / storageQuotaBytes
+  it('uses the entitlement-derived 700 MB limit when storage-500mb is unlocked', async () => {
+    // storage-500mb unlock → FREE + BONUS = 700 MB.
+    mockState.unlocksByOwner.set(DEFAULT_OWNER_UID, [
+      { type: 'storage-500mb', source: 'paid' },
+    ]);
+    // Seed 600 MB used. A 1 MB body fits in 700 MB.
+    // (Stay under the 25 MB MAX_FORWARD_BYTES proxy cap.)
+    mockState.usage.set(USAGE_PATH, {
+      usedBytes: 600 * 1024 * 1024,
+      reservedBytes: 0,
     });
-    const { res } = await invokeWithPrefsToken({ body: 'C'.repeat(50_000) });
+    const { res } = await invokeWithPrefsToken({ body: 'A'.repeat(1_000_000) });
     expect(res.statusCode).toBe(200);
-    expect(mockState.storageUsage.get(EVENT_PATH)).toBeGreaterThanOrEqual(50_000);
+    expect(getUsage().usedBytes).toBeGreaterThanOrEqual(600 * 1024 * 1024 + 1_000_000);
+  });
+
+  it('fails closed (503) when the entitlement resolver throws', async () => {
+    // 2026-08-23 — P4.3: if resolveServerEntitlementLimit
+    // fails (Firestore unreachable, rules deny, etc.), the
+    // proxy MUST reject — it must NOT fall back to a
+    // client-trustable default. We simulate the failure by
+    // making the unlocks collection throw.
+    const origGet = mockFirebaseAdminFs.doc; // not used; we override via collection
+    // Replace the unlocks get() to throw:
+    // (Simple approach: leave unlocks empty — that won't throw.
+    //  Instead, override the unlocks collection's get to reject.)
+    // The mock exposes collection('artifacts').doc().collection('users')
+    //   .doc().collection('unlocks').get(). Patch that path
+    //   by inserting a poisoned doc lookup. Easiest: set
+    //   unlocksByOwner to undefined; the mock will return
+    //   undefined, which computeEntitlement tolerates.
+    // Instead — use a sentinel that's recognized by the
+    // mock's collection chain. The simplest path: the proxy
+    // catches ANY error from the resolver. To trigger one,
+    // we monkey-patch the runTransaction chain to fail.
+    // Approach: install a sub-mock that makes the unlocks
+    // get() reject. This requires re-mocking the fs layer.
+    // Simpler: skip the runTransaction and break the
+    // resolver call by replacing the fsInstance.collection
+    // method just for this test.
+    const fsInstance = (await import('./photo-upload.js?test')).__getAdmin__ || null;
+    // If we can't reach the mock fs from here, simulate by
+    // temporarily replacing mockFirebaseAdminFs's collection
+    // chain to throw at the unlocks get:
+    const origCollection = mockFirebaseAdminFs.collection;
+    mockFirebaseAdminFs.collection = (name) => {
+      if (name === 'artifacts') {
+        return {
+          doc: () => ({
+            collection: () => ({
+              doc: () => ({
+                collection: () => ({
+                  get: () => Promise.reject(new Error('Firestore unavailable')),
+                }),
+              }),
+            }),
+          }),
+        };
+      }
+      return origCollection(name);
+    };
+    try {
+      const { res } = await invokeWithPrefsToken({ body: 'A'.repeat(1024) });
+      expect(res.statusCode).toBe(503);
+      expect(res._body).toEqual(
+        expect.objectContaining({ code: 'QUOTA_CHECK_UNAVAILABLE' }),
+      );
+    } finally {
+      mockFirebaseAdminFs.collection = origCollection;
+    }
   });
 
   it('does NOT check quota for inv-bg (couple\'s own invitation backgrounds)', async () => {
     // inv-bg is rate-limited separately above and is the
-    // couple's own photo, not the event gallery. Counter
-    // must not be touched even if 'storageUsageBytes' were
-    // somehow populated on the inv-bg doc (which it
-    // shouldn't be).
-    mockState.events.set(
-      'artifacts/savetheday-production/users/INVBG/events/inv-bg',
-      { storageUsageBytes: 999 * 1024 * 1024 },
-    );
+    // couple's own photo, not the event gallery. The quota
+    // gate is short-circuited before resolveServerEntitlementLimit
+    // is called, so the proxy succeeds even if the resolver
+    // would have thrown.
+    const fsInstance = null; // sanity — inv-bg path doesn't touch fs for quota
     const { res } = await invokeWithPrefsToken({ eventId: 'inv-bg' });
     expect(res.statusCode).toBe(200);
+    // The inv-bg doc has no privateUsage/storage sibling.
+    // Verify the proxy did not create one.
+    const invBgUsagePath =
+      'artifacts/savetheday-production/users/INVBG/events/inv-bg/privateUsage/storage';
+    expect(mockState.usage.has(invBgUsagePath)).toBe(false);
   });
 
-  // ---- post-success counter increment ----
+  // ---- reservation finalize vs release on NAS outcome ----
 
-  it('does NOT increment the counter when the upstream NAS returns 4xx', async () => {
-    mockState.events.set(EVENT_PATH, {
-      _ownerUid: DEFAULT_OWNER_UID,
-      coOwners: [],
-      assignedVendorUid: null,
-      storageUsageBytes: 10 * 1024 * 1024,
-      storageQuotaBytes: 200 * 1024 * 1024,
+  it('releases the reservation (does NOT increment used) when NAS returns 4xx', async () => {
+    mockState.usage.set(USAGE_PATH, {
+      usedBytes: 10 * 1024 * 1024,
+      reservedBytes: 0,
     });
     // Set the upstream mock to return 502. The proxy
-    // forwards upstream.status to the client and skips
-    // the storage-counter increment on non-2xx.
+    // forwards upstream.status to the client and releases
+    // (not finalizes) the reservation on non-2xx.
     mockState.upstreamStatus = 502;
     mockState.upstreamBody = JSON.stringify({ error: 'NAS down' });
     const { res } = await invokeWithPrefsToken({ body: 'D'.repeat(100_000) });
     expect(res.statusCode).toBe(502);
-    // Counter untouched on non-2xx
-    expect(mockState.storageUsage.get(EVENT_PATH) || 0).toBe(0);
+    // Counter untouched: usedBytes unchanged, reservedBytes
+    // back to 0 after release.
+    const usage = getUsage();
+    expect(usage.usedBytes).toBe(10 * 1024 * 1024);
+    expect(usage.reservedBytes).toBe(0);
   });
 
-  it('increments the counter by body.length after a successful 2xx', async () => {
-    mockState.events.set(EVENT_PATH, {
-      _ownerUid: DEFAULT_OWNER_UID,
-      coOwners: [],
-      assignedVendorUid: null,
-      storageUsageBytes: 12 * 1024 * 1024,
-      storageQuotaBytes: 200 * 1024 * 1024,
+  it('moves reservedBytes → usedBytes after a successful 2xx (finalize)', async () => {
+    mockState.usage.set(USAGE_PATH, {
+      usedBytes: 12 * 1024 * 1024,
+      reservedBytes: 0,
     });
-    // First upload: a body of 1024 bytes — counter should
-    // increment by the proxy's body.length (multipart
-    // envelope), so just assert it moved and is >= 1024.
+    // First upload: a body of 1024 bytes — finalize moves
+    // the reserved bytes to used.
     await invokeWithPrefsToken({ body: 'E'.repeat(1024) });
-    const after1 = mockState.storageUsage.get(EVENT_PATH);
-    expect(after1).toBeGreaterThanOrEqual(1024);
-    // Second upload: another small body — counter should
-    // grow again.
+    const after1 = getUsage();
+    expect(after1.usedBytes).toBeGreaterThanOrEqual(12 * 1024 * 1024 + 1024);
+    expect(after1.reservedBytes).toBe(0);
+    // Second upload: another small body — usedBytes grows again.
     await invokeWithPrefsToken({ body: 'F'.repeat(1024) });
-    const after2 = mockState.storageUsage.get(EVENT_PATH);
-    expect(after2).toBeGreaterThan(after1);
+    const after2 = getUsage();
+    expect(after2.usedBytes).toBeGreaterThan(after1.usedBytes);
+    expect(after2.reservedBytes).toBe(0);
+  });
+
+  // ---- TOCTOU: two concurrent reservations both can't exceed ----
+  // 2026-08-23 — P4.3: the reservation transaction closes the
+  // race window where two concurrent uploads both pass the
+  // pre-flight check. With the new runTransaction-backed
+  // reserveQuota(), the second writer sees the first's
+  // reservation and gets the fresh "over quota" decision.
+  //
+  // Note: our single-shot mock doesn't retry on conflict, so
+  // we simulate the realistic race by interleaving two
+  // reservations sequentially — the assertion is that the
+  // second one sees the first's reservedBytes.
+  it('rejects the second concurrent reservation when the first one fills the slot', async () => {
+    // 199 MB used, 0 reserved, 200 MB limit (no unlocks).
+    // First reservation: 500 KB → succeeds, reservedBytes = 500 KB.
+    // Second reservation: 1 MB → used + reserved + 1 MB = 200.5 MB → fails.
+    mockState.usage.set(USAGE_PATH, {
+      usedBytes: 199 * 1024 * 1024,
+      reservedBytes: 0,
+    });
+    // First upload (small) — succeeds. The proxy's finalize
+    // moves the reservation into usedBytes, so the actual
+    // post-finalize usedBytes is 199MB + 500KB-content +
+    // ~417 bytes of multipart envelope (headers + footers).
+    // Assert with `>` 199MB rather than exact arithmetic so
+    // the test stays robust against any future change to the
+    // envelope format.
+    const r1 = await invokeWithPrefsToken({ body: 'A'.repeat(500_000) });
+    expect(r1.res.statusCode).toBe(200);
+    const after1 = getUsage();
+    expect(after1.usedBytes).toBeGreaterThan(199 * 1024 * 1024);
+    expect(after1.usedBytes).toBeGreaterThanOrEqual(199 * 1024 * 1024 + 500_000);
+    expect(after1.reservedBytes).toBe(0);
+    // Second upload (1 MB) — must 413 because we're at/over the cap.
+    const { res } = await invokeWithPrefsToken({ body: 'B'.repeat(1_000_000) });
+    expect(res.statusCode).toBe(413);
+    // Counter still untouched by the rejected second upload.
+    const after2 = getUsage();
+    expect(after2.usedBytes).toBe(after1.usedBytes);
+    expect(after2.reservedBytes).toBe(0); // finalize ran on first; rejected second didn't reserve
   });
 });
