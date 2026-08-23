@@ -82,6 +82,14 @@ import { signInAnonymously } from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from './lib/firebase';
 import { callFirebaseFn } from './lib/firebaseFn';
+// 2026-08-23 — Manus P2b: the canonical READ paths for the guest
+// portal in P2. useGuestExperience reads the public projection doc
+// (owner-controlled, privacy-filtered); useGuestPortalBootstrap
+// fetches the active guest's own record via a server call (no
+// enumeration of other guests). Both replace direct Firestore
+// subscriptions that the P1 audit flagged as over-broad.
+import { useGuestExperience } from './hooks/useGuestExperience';
+import { useGuestPortalBootstrap } from './hooks/useGuestPortalBootstrap';
 
 import { LoginScreen } from './screens/LoginScreen';
 import { VendorSignupCard } from './components/VendorSignupCard';
@@ -1366,13 +1374,17 @@ export default function App() {
      // the data scoped but was fragile (rules had to allowlist the
      // field on every operation). Moving the path makes the scope
      // structural and rules uniform.
+     // 2026-08-23 — Manus P2b: gate the allGuests subscription on
+     // !guest.isGuestMode. Guests no longer need this subscription
+     // — useGuestPortalBootstrap fetches the single bound guest via
+     // callable (PDF §3.2). The subscription still serves the owner
+     // GuestList path. Same path string + same event-scoping rules,
+     // only the gate condition changed.
      const { data: allGuests } = useFirestoreCollection(
-         guestDataReady && dataOwnerUid && currentEvent
+         !guest.isGuestMode && guestDataReady && dataOwnerUid && currentEvent
            ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'guests')
-           : (guestDataReady && dataOwnerUid && guest.isGuestMode && guest.qEvent
-               ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', guest.qEvent, 'guests')
-               : null),
-         [targetUid, guestDataReady, guest.qEvent, currentEvent?.id],
+           : null,
+         [!guest.isGuestMode, targetUid, guestDataReady, guest.qEvent, currentEvent?.id],
        );
 
      // 2026-07-15 — scanLog subscription for the reception scanner's
@@ -2232,22 +2244,80 @@ export default function App() {
   // 2026-08-04 — The events subscription above (line 836) is gated on
   // !guest.isGuestMode so it never fires for guests. The fallback
   // `events.find(...)` was therefore always undefined, leaving
-  // currentEvent unset. Fetch the single event directly for guests.
+  // 2026-08-23 — Manus P2b: read the OWNER-published
+  // guestExperience/public projection (PDF §3.3). This is the
+  // privacy-filtered read path for the guest portal — replaces the
+  // canonical /events/{eventId} read the old guestModeEvent did.
+  // Hook only subscribes when we're in real guest mode AND the
+  // token redemption has succeeded; owner-preview mode keeps using
+  // currentEvent (owner context).
+  //
+  // 2026-08-23 — FALLBACK: while owners haven't yet published a
+  // guestExperience/public doc for legacy events, fall through to
+  // the canonical /events/{eventId} read (still allowed by P1
+  // rules). The projection path is preferred when both exist —
+  // useGuestExperience is the privacy-filtered shape.
+  const { data: guestExperience, loading: guestExpLoading } =
+    useGuestExperience({
+      enabled:
+        guest.isGuestMode && redeemStatus === 'ok' && !!guest.qOwner && !!guest.qEvent,
+      ownerUid: guest.qOwner,
+      eventId: guest.qEvent,
+    });
   const { data: guestModeEvent } = useFirestoreDoc(
     guest.isGuestMode && guest.qOwner && guest.qEvent
       ? doc(db, 'artifacts', appId, 'users', guest.qOwner, 'events', guest.qEvent)
       : null,
     [guest.isGuestMode, guest.qOwner, guest.qEvent],
   );
+
+  // 2026-08-23 — Manus P2b: fetch the BOUND guest via the
+  // getGuestPortalBootstrap callable (PDF §3.2). Replaces the
+  // allGuests collection subscription that matched by guestId. The
+  // callable returns only this guest's record — no enumeration of
+  // other guests on the event.
+  const {
+    data: guestBootstrap,
+    loading: guestBootstrapLoading,
+    error: guestBootstrapError,
+    refetch: refetchGuestBootstrap,
+  } = useGuestPortalBootstrap({
+    enabled:
+      guest.isGuestMode &&
+      redeemStatus === 'ok' &&
+      !!guest.qOwner &&
+      !!guest.qEvent,
+    ownerUid: guest.qOwner,
+    eventId: guest.qEvent,
+  });
+
+  // Keep currentEvent unset for guests (PDF: "Do not subscribe to
+  // the canonical event as a guest"). The hook above is the
+  // authoritative source for guest-mode UI.
+
   useEffect(() => {
     if (!guest.isGuestMode) return;
-    if (guestModeEvent) setCurrentEvent(guestModeEvent);
-    if (allGuests?.length) {
-      const g = allGuests.find((x) => x.guestId === guest.qGuest);
-      if (g) setActiveGuestPortal(g);
+    // When the bootstrap resolves, populate activeGuestPortal from
+    // the server-authoritative shape. Falling back to the legacy
+    // allGuests match is intentionally NOT done — that's the
+    // privacy regression we're closing.
+    if (guestBootstrap?.guest) {
+      // Carry the URL-derived qOwner/qEvent on the guest object so
+      // PersonalGuestPortal's entry-pass QR builder still works
+      // (it reads guest.{qOwner,qEvent} for the deep link).
+      const merged = {
+        ...guestBootstrap.guest,
+        qOwner: guest.qOwner,
+        qEvent: guest.qEvent,
+      };
+      setActiveGuestPortal(merged);
+    }
+    if (guestBootstrapError) {
+      // eslint-disable-next-line no-console
+      console.error('[guest-portal-bootstrap]', guestBootstrapError);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [guest.isGuestMode, guestModeEvent, allGuests]);
+  }, [guest.isGuestMode, guestBootstrap, guestBootstrapError]);
 
   // Expose for QrCodeModal fallback (and PersonalGuestPortal's
   // EntryPassCard).
@@ -3062,28 +3132,16 @@ export default function App() {
     showToast(`🧧 成功發送 $${amount} 電子人情，感謝！`);
   };
 
-  // 2026-08-22 — Guest 心意 message save. Called from
-  // PersonalGuestPortal's GuestMessageCard when a guest types a
-  // 280-char note and taps 儲存. Writes two fields to the
-  // /guests/{id} doc:
-  //   guestMessage           — the trimmed text (or empty string
-  //                            to clear it)
-  //   guestMessageUpdatedAt  — serverTimestamp, so the dashboard
-  //                            can show "X 剛剛留咗一句說話" later
+  // 2026-08-23 — Manus P2b: replace the direct /guests/{id} setDoc
+  // with the saveGuestMessage Cloud Function (PDF §3.2). The direct
+  // write was the path P1 closed via the rules (guest can no longer
+  // write to /guests/{id} without going through the callable). The
+  // callable validates the guest link server-side before merging
+  // the message + timestamp.
   //
-  // Rules contract: this write is only permitted when the
-  // Firestore rules allow it, which requires the guest to have
-  // an anonymous auth session AND a valid guestLinks/{uid} doc
-  // pointing at the right (owner, event). guestDataReady is the
-  // same gate the photo-upload path uses — it flips true the
-  // moment the redeem completes (see useEffect at line ~1030).
-  // No point writing before that; the rules would reject.
-  //
-  // Why setDoc(merge: true) instead of updateDoc: the field
-  // doesn't exist on legacy guest docs yet. updateDoc would
-  // throw NOT_FOUND. setDoc with merge creates the field while
-  // preserving every other key on the doc — same pattern the
-  // rest of App.jsx uses for "add a new optional field".
+  // Signature unchanged: (message: string) => Promise<void>. The
+  // GuestMessageCard in PersonalGuestPortal keeps its existing
+  // try/catch + showToast flow.
   //
   // Why we resolve ownerUid / eventId via the helpers instead of
   // reading activeGuestPortal.{qOwner,qEvent} directly: those
@@ -3103,16 +3161,18 @@ export default function App() {
     if (!ownerUid || !eventId) {
       throw new Error('搵唔到所屬活動');
     }
-    const guestRef = doc(
-      db, 'artifacts', appId,
-      'users', ownerUid,
-      'events', eventId,
-      'guests', activeGuestPortal.id,
-    );
-    await setDoc(guestRef, {
-      guestMessage: String(message || '').slice(0, 280),
-      guestMessageUpdatedAt: serverTimestamp(),
-    }, { merge: true });
+    try {
+      const saveMessage = httpsCallable(functions, 'saveGuestMessage');
+      await saveMessage({ ownerUid, eventId, message });
+      // The bootstrap snapshot may carry a stale guestMessage until
+      // we refetch. Refresh it so the portal shows the just-saved
+      // text on next render.
+      refetchGuestBootstrap();
+    } catch (e) {
+      // Surface the server's structured HttpsError message if present.
+      const msg = e?.message || '儲存心意時發生錯誤，請稍後再試';
+      throw new Error(msg);
+    }
   };
 
   const handleSimulateReceptionScan = async (guestRow) => {
@@ -3720,7 +3780,19 @@ export default function App() {
       {(guest.isGuestMode || userRole === 'guest_portal') ? (
         <PersonalGuestPortal
           guest={activeGuestPortal}
-          eventName={currentEvent?.name}
+          // 2026-08-23 — Manus P2b: in guest mode, read display data
+          // from the projection. With P2 still rolling out,
+          // guestExperience may be null on legacy events — fall
+          // through to the canonical event doc (guestModeEvent) so
+          // the portal still renders. The projection shape and the
+          // canonical event shape are similar enough that the
+          // PersonalGuestPortal's existing prop contract works for
+          // both.
+          eventName={
+            guest.isGuestMode
+              ? guestExperience?.hero?.coupleNames || guestModeEvent?.name || null
+              : currentEvent?.name
+          }
           isUploading={isUploading}
           uploadProgress={uploadProgress}
           isStorageFull={isStorageFull}
@@ -3757,10 +3829,31 @@ export default function App() {
           // — same fields InvitationEditor reads (line 179) and
           // shows in its InfoStep (line 747). Adding the new
           // props is a pure additive change to the contract.
-          eventDate={currentEvent?.date || null}
-          eventTime={currentEvent?.time || null}
-          eventVenue={currentEvent?.venue || null}
-          eventAddress={currentEvent?.address || null}
+          eventDate={
+            guest.isGuestMode
+              ? guestExperience?.hero?.dateLabel || guestModeEvent?.date || null
+              : currentEvent?.date || null
+          }
+          eventTime={
+            guest.isGuestMode
+              ? // Schedule slot 0 startsAt — projection's first
+                // published slot. Falls through to legacy event
+                // time when no projection (still allowed by P1 rules).
+                guestExperience?.schedule?.[0]?.startsAt?.toDate?.()?.toISOString?.()
+                  || guestModeEvent?.time
+                  || null
+              : currentEvent?.time || null
+          }
+          eventVenue={
+            guest.isGuestMode
+              ? guestExperience?.venues?.[0]?.name || guestModeEvent?.venue || null
+              : currentEvent?.venue || null
+          }
+          eventAddress={
+            guest.isGuestMode
+              ? guestExperience?.venues?.[0]?.address || guestModeEvent?.address || null
+              : currentEvent?.address || null
+          }
           onSaveGuestMessage={handleSaveGuestMessage}
           // 2026-07-18 — Owner preview-as-guest path now has an exit
           // handler. In real guest mode (URL ?o=&e=&g=&token=) we still

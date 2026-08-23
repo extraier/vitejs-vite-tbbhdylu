@@ -291,4 +291,85 @@ if [[ "${SKIP_IAM_AUDIT:-0}" != "1" ]]; then
   echo "==> IAM audit: $IAM_FIXED fixed, $IAM_SKIPPED event triggers (correctly skipped), $IAM_ERRORS errors"
 fi
 
+# ----------------------------------------------------------------------------
+# Post-deploy IAM self-heal: just-deployed callables
+# (2026-08-23, publishGuestExperience parallel-CREATE race).
+#
+# The broad sweep above (Post-deploy IAM audit) enumerates ALL v2
+# functions in us-central1 and is the right long-term safety net.
+# But for the just-deployed set, we explicitly self-heal even if
+# propagation hasn't reached `gcloud functions list` yet — that's
+# the race where firebase-tools drops an `allUsers →
+# roles/run.invoker` binding during a parallel CREATE.
+#
+# Each iteration is wrapped in `set +e`/`set -e` so a single
+# function's IAM failure does NOT abort the rest of the script.
+#
+# Uses CLOUDSDK_PYTHON so gcloud finds Python 3.14 (gcloud no
+# longer supports the macOS Python 3.9 system default).
+#
+# Set SKIP_DEPLOYED_IAM=1 to opt out.
+# ----------------------------------------------------------------------------
+if [[ "${SKIP_DEPLOYED_IAM:-0}" != "1" ]]; then
+  echo "==> Self-healing allUsers invoker on every callable this run deployed ..."
+  export CLOUDSDK_PYTHON="${CLOUDSDK_PYTHON:-/opt/homebrew/bin/python3.14}"
+
+  # Build the target list.
+  # - With CLI args, the just-deployed set is exactly "$@".
+  # - Without CLI args (deploy-all), enumerate v2 HTTPS callables via
+  #   the same `gcloud functions list --v2` source the broad audit
+  #   uses, filtering out event triggers (those MUST NOT get allUsers).
+  declare -a IAM_TARGETS=()
+  if [[ $# -gt 0 ]]; then
+    IAM_TARGETS=("$@")
+  else
+    while IFS= read -r fn; do
+      [[ -n "$fn" ]] && IAM_TARGETS+=("$fn")
+    done < <(gcloud functions list --v2 --regions=us-central1 \
+                --project="$PROJECT" --format=json 2>/dev/null \
+              | jq -r '.[] | select(.eventTrigger | not) | (.name | split("/") | last)')
+  fi
+
+  if [[ ${#IAM_TARGETS[@]} -eq 0 ]]; then
+    echo "  (no callable targets discovered — nothing to self-heal)"
+  else
+    # `set +e` so a failing `add-iam-policy-binding` for one function
+    # does NOT abort the rest of the loop (or the script).
+    set +e
+    for fn in "${IAM_TARGETS[@]}"; do
+      [[ -z "$fn" ]] && continue
+
+      # Cloud Run service name: lowercase, with underscores converted
+      # to hyphens (Cloud Run rejects underscores in service names).
+      #   publishGuestExperience → publishguestexperience
+      #   admin_setDisabled      → admin-setdisabled
+      cr_name=$(printf '%s' "$fn" | tr '_' '-' | tr '[:upper:]' '[:lower:]')
+
+      # Check existing IAM. `get-iam-policy` may fail if the Cloud Run
+      # service hasn't been observed yet (parallel-CREATE race) — treat
+      # that as "not bound" and attempt the add.
+      POLICY_JSON=$(gcloud run services get-iam-policy "$cr_name" \
+          --region=us-central1 --project="$PROJECT" --format=json 2>/dev/null \
+          || echo '{}')
+      HAS_ALL_USERS=$(printf '%s' "$POLICY_JSON" | jq -r \
+          '[.bindings[]? | select(.role == "roles/run.invoker") | .members[]] | any(. == "allUsers")')
+
+      if [[ "$HAS_ALL_USERS" == "true" ]]; then
+        echo "⏭ IAM: function $fn already bound"
+        continue
+      fi
+
+      if gcloud run services add-iam-policy-binding "$cr_name" \
+          --region=us-central1 --project="$PROJECT" \
+          --member=allUsers --role=roles/run.invoker >/dev/null 2>&1; then
+        echo "✅ IAM: function $fn bound to allUsers"
+      else
+        echo "❌ IAM: function $fn add-iam-policy-binding FAILED"
+        echo "    (service may still be propagating from the parallel deploy — retry in ~30s if needed)"
+      fi
+    done
+    set -e
+  fi
+fi
+
 echo "==> Done."
