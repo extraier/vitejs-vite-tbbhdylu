@@ -247,12 +247,17 @@ if [[ "${SKIP_IAM_AUDIT:-0}" != "1" ]]; then
   # Enumerate all v2 functions; skip event triggers (Firestore, Eventarc, etc.)
   while IFS= read -r fn_json; do
     [[ -z "$fn_json" ]] && continue
-    # Parse: name (last segment), trigger type (has eventTrigger? → event : https)
+    # Parse: name (last segment), trigger type. Skip Eventarc/Firestore
+    # triggers AND cron (onSchedule) triggers — neither should have
+    # allUsers invoker. onSchedule functions don't appear in .eventTrigger
+    # (that's a different field) so we explicitly check for the absence
+    # of .httpsTrigger too. The Cloud Run URL still exists for cron
+    # functions but only Cloud Scheduler should hit it.
     fn_name=$(echo "$fn_json" | jq -r '.name | split("/") | last')
-    is_event_trigger=$(echo "$fn_json" | jq -r 'if .eventTrigger then "event" else "https" end')
+    is_event_trigger=$(echo "$fn_json" | jq -r 'if .eventTrigger then "event" elif .httpsTrigger then "https" else "other" end')
 
-    # Skip Eventarc/Firestore triggers — they MUST NOT have allUsers invoker
-    if [[ "$is_event_trigger" == "event" ]]; then
+    # Skip Eventarc/Firestore triggers AND cron (onSchedule) triggers
+    if [[ "$is_event_trigger" != "https" ]]; then
       IAM_SKIPPED=$((IAM_SKIPPED + 1))
       continue
     fi
