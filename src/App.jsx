@@ -3113,6 +3113,29 @@ export default function App() {
     showToast('🗑️ 嘉賓已刪除');
   };
 
+  // 2026-08-23 — Manus P2c: replace the direct /guests/{id} updateDoc
+  // with the confirmRedPacket Cloud Function (PDF §3.3). The
+  // direct write was the path P1 closed via the rules (guests
+  // can no longer write hasGifted / giftAmount without going
+  // through the callable). The callable validates the guest link
+  // server-side, validates the amount (HK$88–100,000), writes a
+  // payment/{paymentId} audit record + merges hasGifted/giftAmount
+  // onto the guest doc atomically (single Firestore transaction).
+  //
+  // The PaymentModal still shows the couple's uploaded QRs
+  // (PayMe / FPS / AlipayHK / WeChat Pay HK); the guest sends
+  // externally, then taps a "已發送 $X" button which calls THIS
+  // function with the amount. Audit trail = the security win.
+  //
+  // Signature unchanged: (amount: number) => Promise<void>. The
+  // PaymentModal keeps its existing onSend + showToast flow.
+  //
+  // Why we resolve ownerUid / eventId via the helpers instead of
+  // reading activeGuestPortal.{qOwner,qEvent} directly: those
+  // helpers handle both real guest mode (URL params) and
+  // owner-preview mode (currentEvent fallback), so the same
+  // function works for both paths. See resolveGuestDocOwner +
+  // resolveGuestEventId in lib/guestMode.
   const handleGiveRedPacket = async (amount) => {
     if (!user || !activeGuestPortal) return;
     const ownerUid = resolveGuestDocOwner(activeGuestPortal);
@@ -3121,15 +3144,19 @@ export default function App() {
       showToast('✗ 發送失敗：搵唔到所屬活動');
       return;
     }
-    const guestRef = doc(
-      db, 'artifacts', appId,
-      'users', ownerUid,
-      'events', eventId,
-      'guests', activeGuestPortal.id,
-    );
-    await updateDoc(guestRef, { hasGifted: true, giftAmount: amount });
-    setShowPaymentModal(false);
-    showToast(`🧧 成功發送 $${amount} 電子人情，感謝！`);
+    try {
+      const confirm = httpsCallable(functions, 'confirmRedPacket');
+      await confirm({ ownerUid, eventId, amount });
+      // Refresh the bootstrap snapshot so the portal reflects the
+      // updated hasGifted / giftAmount without waiting for a full
+      // page reload.
+      refetchGuestBootstrap();
+      setShowPaymentModal(false);
+      showToast(`🧧 成功發送 $${amount} 電子人情，感謝！`);
+    } catch (e) {
+      const msg = e?.message || '發送失敗，請稍後再試';
+      showToast(`✗ ${msg}`);
+    }
   };
 
   // 2026-08-23 — Manus P2b: replace the direct /guests/{id} setDoc

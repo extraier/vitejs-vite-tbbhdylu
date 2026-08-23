@@ -724,6 +724,14 @@ export {
   saveGuestMessage,
 } from './guestExperience';
 
+// 2026-08-23 — Manus P2c: confirmRedPacket callable. PDF §3.3:
+// "Do not retain the direct handleGiveRedPacket write: map its
+// successful payment confirmation to a new server callable that
+// verifies the same guest link and creates a payment/audit record."
+// Pure helpers live in ./redPacket.pure.ts (amount validation +
+// audit-record shape).
+export { confirmRedPacket } from './redPacket';
+
 // 2026-07-18: helper invite SMTP email (Traditional-Chinese rich HTML).
 // The callable lives in ./helpersMail.ts — re-exported here so
 // `firebase deploy --only functions` picks it up automatically. The

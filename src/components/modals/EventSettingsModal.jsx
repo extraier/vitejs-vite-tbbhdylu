@@ -22,6 +22,10 @@
 
 import { X } from 'lucide-react';
 import { OwnerNamesEditor } from '../OwnerNamesEditor';
+// 2026-08-23 — Manus P2c: owner-facing publish trigger for the
+// guestExperience/public projection. Pairs with the publishGuestExperience
+// Cloud Function deployed in P2a.
+import { GuestExperiencePublisher } from '../GuestExperiencePublisher';
 
 export function EventSettingsModal({
   open,
@@ -58,6 +62,21 @@ export function EventSettingsModal({
         <section className="mb-6">
           <OwnerNamesEditor
             currentUser={currentUser}
+            eventId={currentEvent?.id}
+            onToast={onToast}
+          />
+        </section>
+
+        {/* 2026-08-23 — Manus P2c: guest-experience publish trigger.
+            One button writes the privacy-filtered public doc that
+            the guest portal reads. Without this publish, guests on
+            legacy events see the canonical event doc (P2b fallback).
+            Once published, the projection takes over and the privacy
+            boundary holds (no guest list, no PII, no admin fields). */}
+        <section className="mb-6">
+          <GuestExperiencePublisher
+            currentUser={currentUser}
+            currentEvent={currentEvent}
             eventId={currentEvent?.id}
             onToast={onToast}
           />
