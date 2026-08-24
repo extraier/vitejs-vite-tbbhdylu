@@ -880,33 +880,31 @@ describe.skipIf(skipEmulator)('firestore.rules — CSP reports', () => {
     });
   });
 
-  it('allows an admin to list the exact nested CSP reports collection', async () => {
+  it('allows an admin to get and list CSP reports', async () => {
     const adminDb = env
       .authenticatedContext('admin-user', { admin: true })
       .firestore();
 
-    // Sanity: a single-doc get should work first
     await assertSucceeds(
       getDoc(doc(adminDb, ...reportCollectionPath, 'report-1')),
     );
-
     await assertSucceeds(
       getDocs(collection(adminDb, ...reportCollectionPath)),
     );
   });
 
-  it('denies non-admin reads of the CSP reports collection and a report document', async () => {
+  it('denies non-admin get and list access to CSP reports', async () => {
     const memberDb = env.authenticatedContext('ordinary-user').firestore();
 
     await assertFails(
-      getDocs(collection(memberDb, ...reportCollectionPath)),
+      getDoc(doc(memberDb, ...reportCollectionPath, 'report-1')),
     );
     await assertFails(
-      getDoc(doc(memberDb, ...reportCollectionPath, 'report-1')),
+      getDocs(collection(memberDb, ...reportCollectionPath)),
     );
   });
 
-  it('denies every client write, including writes attempted by an admin', async () => {
+  it('denies all client writes, including an admin write', async () => {
     const adminDb = env
       .authenticatedContext('admin-user', { admin: true })
       .firestore();
@@ -914,6 +912,7 @@ describe.skipIf(skipEmulator)('firestore.rules — CSP reports', () => {
     await assertFails(
       setDoc(doc(adminDb, ...reportCollectionPath, 'forged-report'), {
         violatedDirective: 'script-src',
+        createdAt: Timestamp.fromMillis(1),
       }),
     );
   });
