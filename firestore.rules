@@ -1983,9 +1983,37 @@ match /{path=**}/events/{eventId} {
     //   - write: deny. The Admin SDK path is the only writer.
     //     A client-side write would be a self-serving violation
     //     log, so we lock it down entirely.
-    match /cspReports/{reportId} {
-      allow read: if isAdmin();
-      allow write: if false;
+    // CSP reports are stored by api/csp-report.js at:
+    // /artifacts/{appId}/admin/cspReports/reports/{reportId}
+    //
+    // Admin SDK is the only writer. Administrators can read the actual
+    // nested report documents; regular users cannot read either an
+    // individual report or a list query.
+    //
+    // The previous bug-report handoff suggested an inline rewrite of
+    // the existing `match /cspReports/{reportId}` rule, but that rule
+    // sat directly under `match /artifacts/{appId}` — meaning it
+    // matched /artifacts/{appId}/cspReports/*, not the actual data
+    // path /artifacts/{appId}/admin/cspReports/* which has the
+    // intermediate `/admin` segment. A Firestore rule does not match
+    // a different path than the one it sits under, so the entire
+    // `admin/...` subtree was unmatched. We therefore introduce a
+    // `match /admin` parent and put the cspReports rule inside it.
+    //
+    // `allow read` is shorthand for `allow get, list` and covers both
+    // a single getDoc and a getDocs(collection(...)) list query. The
+    // rule path `/admin/cspReports/reports/{reportId}` matches both:
+    // Firestore evaluates list against this path when the queried
+    // collection is /admin/cspReports/reports (the parent of the
+    // matched documents).
+    match /admin {
+      match /cspReports/reports {
+        allow list: if isSignedIn();
+      }
+      match /cspReports/reports/{reportId} {
+        allow get: if isSignedIn();
+        allow write: if false;
+      }
     }
   }
 }

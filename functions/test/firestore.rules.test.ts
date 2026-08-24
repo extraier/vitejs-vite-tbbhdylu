@@ -838,3 +838,83 @@ describe.skipIf(skipEmulator)('firestore.rules — events/{eventId}/privateUsage
     await assertFails(setDoc(doc(env.unauthenticatedContext().firestore(), path), { usedBytes: 0, reservedBytes: 0 }));
   });
 });
+
+describe.skipIf(skipEmulator)('firestore.rules — CSP reports', () => {
+  // The CSP report screen on the admin panel was broken because
+  // the reader (src/screens/AdminCspReports.jsx, line 51) and the
+  // writer (api/csp-report.js, lines 322-327) both use the nested
+  // collection path:
+  //
+  //   artifacts/savetheday-production/admin/cspReports/reports/{autoId}
+  //
+  // but the rule only matched docs DIRECTLY under cspReports
+  // (match /cspReports/{reportId}). The Admin SDK bypassed
+  // rules, so writes succeeded silently; reads from the admin
+  // screen were denied. This test pins both halves of that fix:
+  // the rule now has to be a 2-level match
+  // (match /admin/cspReports/reports/{reportId}).
+  //
+  // We seed the doc via withSecurityRulesDisabled so the rule
+  // itself isn't blocked from writing the fixture (writes are
+  // denied by the rule). The rule then governs reads only.
+  const reportCollectionPath = [
+    'artifacts',
+    'savetheday-production',
+    'admin',
+    'cspReports',
+    'reports',
+  ] as const;
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await setDoc(
+        doc(adminDb, ...reportCollectionPath, 'report-1'),
+        {
+          violatedDirective: 'script-src',
+          blockedUri: 'https://blocked.example/script.js',
+          source: 'legacy-csp-report',
+          createdAt: Timestamp.fromMillis(1),
+        },
+      );
+    });
+  });
+
+  it('allows an admin to list the exact nested CSP reports collection', async () => {
+    const adminDb = env
+      .authenticatedContext('admin-user', { admin: true })
+      .firestore();
+
+    // Sanity: a single-doc get should work first
+    await assertSucceeds(
+      getDoc(doc(adminDb, ...reportCollectionPath, 'report-1')),
+    );
+
+    await assertSucceeds(
+      getDocs(collection(adminDb, ...reportCollectionPath)),
+    );
+  });
+
+  it('denies non-admin reads of the CSP reports collection and a report document', async () => {
+    const memberDb = env.authenticatedContext('ordinary-user').firestore();
+
+    await assertFails(
+      getDocs(collection(memberDb, ...reportCollectionPath)),
+    );
+    await assertFails(
+      getDoc(doc(memberDb, ...reportCollectionPath, 'report-1')),
+    );
+  });
+
+  it('denies every client write, including writes attempted by an admin', async () => {
+    const adminDb = env
+      .authenticatedContext('admin-user', { admin: true })
+      .firestore();
+
+    await assertFails(
+      setDoc(doc(adminDb, ...reportCollectionPath, 'forged-report'), {
+        violatedDirective: 'script-src',
+      }),
+    );
+  });
+});
