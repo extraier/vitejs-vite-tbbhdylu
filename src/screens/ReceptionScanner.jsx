@@ -17,9 +17,11 @@
 // Scanning tokens come from the QrCodeModal (per-guest link
 // /?q=<eventId>/<guestId>) and resolve to { eventId, guestId }.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import QrScanner from 'qr-scanner';
 import { parseGuestQrToken } from '../lib/firestorePaths';
+import { playSuccessChime } from '../lib/successChime';
+import { shouldAutoOpenManualFallback } from '../lib/manualFallback';
 import {
   ScanLine,
   Clock,
@@ -46,8 +48,52 @@ export function ReceptionScanner({
   const [scannerError, setScannerError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
-  const [feedback, setFeedback] = useState(null); // { kind: 'ok'|'warn', name, table, at }
+  const [feedback, setFeedback] = useState(null); // { kind: 'ok'|'warn', name, table, at, id }
   const feedbackTimer = useRef(null);
+
+  // 2026-08-25 — Manus P9: optional Web Audio success chime.
+  // Browsers require a user gesture before audio can start; we
+  // expose a button so staff can opt in once per session.
+  const audioContextRef = useRef(null);
+  const [soundEnabled, setSoundEnabled] = useState(false);
+
+  const enableSuccessSound = useCallback(async () => {
+    const AudioContextClass =
+      typeof window !== 'undefined'
+        ? (window.AudioContext || window.webkitAudioContext)
+        : null;
+
+    if (!AudioContextClass) {
+      setSoundEnabled(false);
+      return;
+    }
+
+    const context = audioContextRef.current || new AudioContextClass();
+    audioContextRef.current = context;
+
+    try {
+      if (context.state === 'suspended') await context.resume();
+      setSoundEnabled(context.state === 'running');
+    } catch {
+      // Audio remains optional. Visual feedback is always reliable.
+      setSoundEnabled(false);
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      audioContextRef.current?.close?.().catch(() => {});
+    },
+    [],
+  );
+
+  // 2026-08-25 — Manus P9: manual fallback state. Auto-opens
+  // after a 「無效 QR Code」 or 「無此賓客」 warning so staff
+  // can pick a guest from the dropdown immediately. Cross-owner
+  // / cross-event warnings do NOT auto-open — those are
+  // intentional safety stops, not fallbacks.
+  const [manualGuestKey, setManualGuestKey] = useState('');
+  const [showManualFallback, setShowManualFallback] = useState(false);
 
   // ---- Live attendance counter ----
   const attendedCount = useMemo(
@@ -76,6 +122,29 @@ export function ReceptionScanner({
       )
       .slice(0, 8);
   }, [searchQuery, eventGuests]);
+
+  // ---- Manual fallback list (pending first, then by name) ----
+  const manualGuestOptions = useMemo(
+    () =>
+      [...eventGuests].sort((a, b) => {
+        if (Boolean(a.hasAttended) !== Boolean(b.hasAttended)) {
+          return Number(a.hasAttended) - Number(b.hasAttended);
+        }
+        return (a.name || a.guestId || '').localeCompare(
+          b.name || b.guestId || '',
+          'zh-HK',
+        );
+      }),
+    [eventGuests],
+  );
+
+  const selectedManualGuest = useMemo(
+    () =>
+      manualGuestOptions.find(
+        (guest) => (guest.id || guest.guestId) === manualGuestKey,
+      ) || null,
+    [manualGuestKey, manualGuestOptions],
+  );
 
   // ---- QR scanner lifecycle ----
   useEffect(() => {
@@ -145,6 +214,8 @@ export function ReceptionScanner({
       eventGuests,
     });
     if (result.kind === 'checkin') {
+      // Audio cue first; visual feedback must not depend on it.
+      playSuccessChime({ context: audioContextRef.current });
       flashFeedback({
         kind: 'ok',
         name: result.guest.name || result.guest.guestId,
@@ -154,10 +225,26 @@ export function ReceptionScanner({
       return;
     }
     flashFeedback({ kind: 'warn', name: result.name, detail: result.detail });
+
+    // Auto-open the manual fallback for ordinary QR failures. We
+    // deliberately do NOT auto-open on 其他婚禮/其他活動 — those
+    // are safety stops, not prompts to check in someone else.
+    if (shouldAutoOpenManualFallback(result)) {
+      setShowManualFallback(true);
+    }
   }
 
   function flashFeedback({ kind, name, detail }) {
-    setFeedback({ kind, name, detail });
+    // Unique id per feedback so React re-mounts the card and
+    // the success animation replays on each scan, not just on
+    // the first one. Date.now() is sufficient resolution for
+    // 2.2s-clearTimeout feedback cycles.
+    setFeedback({
+      kind,
+      name,
+      detail,
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    });
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
     feedbackTimer.current = setTimeout(() => setFeedback(null), 2200);
   }
@@ -173,6 +260,8 @@ export function ReceptionScanner({
       });
       return;
     }
+    // Audio cue first; visual feedback must not depend on it.
+    playSuccessChime({ context: audioContextRef.current });
     flashFeedback({
       kind: 'ok',
       name: guest.name || guest.guestId,
@@ -209,21 +298,31 @@ export function ReceptionScanner({
       {/* ---- Visual feedback overlay (auto-clears in 2.2s) ---- */}
       {feedback && (
         <div
+          key={feedback.id}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
           className={`fixed inset-x-0 top-4 z-50 mx-auto max-w-md px-4 animate-in slide-in-from-top-4 fade-in duration-200`}
         >
           <div
-            className={`rounded-2xl shadow-2xl p-4 flex items-center gap-3 ${
+            className={`relative overflow-hidden rounded-2xl shadow-2xl p-4 flex items-center gap-3 ${
               feedback.kind === 'ok'
                 ? 'bg-emerald-500 text-white'
                 : 'bg-amber-500 text-white'
             }`}
           >
-            {feedback.kind === 'ok' ? (
-              <CheckCircle2 className="w-8 h-8 flex-shrink-0" />
-            ) : (
-              <AlertCircle className="w-8 h-8 flex-shrink-0" />
+            {feedback.kind === 'ok' && (
+              <span
+                aria-hidden="true"
+                className="absolute inset-0 rounded-2xl bg-white/20 motion-safe:animate-ping"
+              />
             )}
-            <div className="flex-1 min-w-0">
+            {feedback.kind === 'ok' ? (
+              <CheckCircle2 className="relative z-10 w-10 h-10 flex-shrink-0 motion-safe:animate-bounce" />
+            ) : (
+              <AlertCircle className="relative z-10 w-8 h-8 flex-shrink-0" />
+            )}
+            <div className="relative z-10 flex-1 min-w0">
               <div className="font-black text-lg truncate">
                 {feedback.kind === 'ok' ? '✓ 報到成功' : '⚠️ 注意'}
               </div>
@@ -284,12 +383,105 @@ export function ReceptionScanner({
           </div>
 
           <button
-            onClick={() => setSearchOpen(true)}
-            className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl hover:bg-slate-700 flex items-center justify-center gap-2 border border-slate-700"
+            type="button"
+            onClick={enableSuccessSound}
+            className={`w-full mb-2 rounded-xl border px-3 py-2 text-sm font-bold transition-colors ${
+              soundEnabled
+                ? 'border-emerald-400 bg-emerald-50 text-emerald-700'
+                : 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
+            }`}
+            aria-pressed={soundEnabled}
           >
-            <Search className="w-4 h-4" />
-            手動搜尋賓客 (找不到 QR?)
+            {soundEnabled ? '🔊 成功提示音已啟用' : '🔈 點按啟用成功提示音'}
           </button>
+
+          <div className="rounded-2xl border border-slate-700 bg-slate-800/80 p-3 text-left">
+            <button
+              type="button"
+              onClick={() => {
+                setShowManualFallback((visible) => !visible);
+                setSearchOpen(true);
+              }}
+              className="w-full text-white font-bold py-2 flex items-center justify-between gap-2"
+              aria-expanded={showManualFallback}
+            >
+              <span className="flex items-center gap-2">
+                <Search className="w-4 h-4" />
+                QR 掃描失敗？改用手動賓客名單
+              </span>
+              <span aria-hidden="true">{showManualFallback ? '⌃' : '⌄'}</span>
+            </button>
+
+            {showManualFallback && (
+              <div className="mt-3 space-y-3 border-t border-slate-700 pt-3">
+                <label
+                  className="block text-sm font-bold text-slate-100"
+                  htmlFor="manual-guest-select"
+                >
+                  從目前婚禮的賓客名單選擇
+                </label>
+                <select
+                  id="manual-guest-select"
+                  value={manualGuestKey}
+                  onChange={(event) => setManualGuestKey(event.target.value)}
+                  className="w-full rounded-xl border border-slate-500 bg-white px-3 py-3 text-slate-900"
+                >
+                  <option value="">請選擇賓客…</option>
+                  {manualGuestOptions.map((guest) => {
+                    const key = guest.id || guest.guestId;
+                    return (
+                      <option
+                        key={key}
+                        value={key}
+                        disabled={guest.hasAttended}
+                      >
+                        {(guest.name || guest.guestId || '未命名賓客') +
+                          (guest.table ? ` · 桌號 ${guest.table}` : '') +
+                          (guest.hasAttended ? ' · 已報到' : '')}
+                      </option>
+                    );
+                  })}
+                </select>
+
+                {selectedManualGuest && (
+                  <div className="rounded-xl bg-slate-700 px-3 py-2 text-sm text-white">
+                    <div className="font-bold">
+                      {selectedManualGuest.name || selectedManualGuest.guestId}
+                    </div>
+                    <div className="text-slate-300">
+                      {selectedManualGuest.table
+                        ? `桌號 ${selectedManualGuest.table}`
+                        : '未設定桌號'}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  disabled={!selectedManualGuest || selectedManualGuest.hasAttended}
+                  onClick={() => {
+                    if (!selectedManualGuest) return;
+                    handleManualPick(selectedManualGuest);
+                    setManualGuestKey('');
+                    setShowManualFallback(false);
+                  }}
+                  className="w-full rounded-xl bg-indigo-500 py-3 font-bold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-600"
+                >
+                  {selectedManualGuest?.hasAttended
+                    ? '此賓客已報到'
+                    : '確認手動報到'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSearchOpen(true)}
+                  className="w-full text-sm font-bold text-indigo-200 underline"
+                >
+                  以姓名、編號或桌號搜尋
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -375,11 +567,9 @@ export function ReceptionScanner({
             </div>
 
             <div className="overflow-y-auto flex-1 p-2">
-              {(searchQuery.trim() ? searchResults : eventGuests)
-                .slice(0, 20)
-                .map((g) => (
-                  <button
-                    key={g.id || g.guestId}
+              {(searchQuery.trim() ? searchResults : manualGuestOptions).map((g) => (
+                <button
+                  key={g.id || g.guestId}
                     onClick={() => handleManualPick(g)}
                     disabled={g.hasAttended}
                     className={`w-full text-left p-3 rounded-xl mb-1 flex justify-between items-center transition-colors ${

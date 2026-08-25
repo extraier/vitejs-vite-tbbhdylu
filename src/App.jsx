@@ -61,6 +61,7 @@ import {
 import { tryAutoLinkContacts } from './lib/contactLink';
 import { resolveEligibleAssignedVendors } from './lib/eligibleVendors';
 import { parseEventScopedRef } from './lib/firestorePaths';
+import { getEntitlementEventId } from './lib/entitlementGate';
 import { useAuth } from './hooks/useAuth';
 import { usePartnerInvitePreview } from './hooks/usePartnerInvitePreview';
 import { useHelperAuth } from './hooks/useHelperAuth';
@@ -2472,8 +2473,20 @@ export default function App() {
   // the resolver is mid-fetch (loading=true) and defaults to
   // false — a couple who has paid should NOT see their
   // premium UI vanish during the ~200ms resolver round-trip.
+  // 2026-08-25 — Manus P9: gate the entitlement call so reception,
+  // helper, vendor, and guest contexts do not make an owner-only
+  // getEventEntitlement request. The callable currently resolves
+  // an event from the authenticated owner's namespace, so a
+  // reception account reading the couple's event would otherwise
+  // log a recurring 404 in the console.
+  const entitlementEventId = getEntitlementEventId({
+    userRole,
+    dataOwnerUid,
+    userUid: user?.uid || null,
+    eventId: currentEvent?.id || null,
+  });
   const { features: entitlementFeatures, storageLimitBytes: entitlementBytes, refresh: refreshEntitlement } =
-    useEventEntitlement(currentEvent?.id || null);
+    useEventEntitlement(entitlementEventId);
   const entitlementIsPremium = !!(entitlementFeatures.customInvitation
     || entitlementFeatures.watermarkRemoved
     || entitlementFeatures.extraStorage
