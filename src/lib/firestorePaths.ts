@@ -130,30 +130,72 @@ export function parseOwnerUid(path: string): string | null {
 }
 
 /**
- * Parse a QR-token-shaped string used in ReceptionScanner.
+ * Parse a reception QR payload.
  *
- * Accepts:
- *   - "{eventId}/{guestId}" raw
- *   - "https://savetheday.io/?q={eventId}/{guestId}"
- *   - "?q={eventId}/{guestId}"
+ * Current invitation QR URL (live in production via QrCodeModal.jsx):
+ *   https://savetheday.io/?o={ownerUid}&e={eventId}&g={guestId}
  *
- * Returns { eventId, guestId } or { eventId: null, guestId } if only guestId
- * is provided, or null if the string can't be parsed.
+ * Legacy formats kept for already-issued QR codes:
+ *   https://savetheday.io/?q={eventId}/{guestId}
+ *   {eventId}/{guestId}
+ *   {guestId}
  */
-export function parseGuestQrToken(raw: string): { eventId: string | null; guestId: string | null } | null {
+export type GuestQrToken = {
+  ownerUid: string | null;
+  eventId: string | null;
+  guestId: string | null;
+};
+
+export function parseGuestQrToken(raw: string): GuestQrToken | null {
   if (!raw || typeof raw !== 'string') return null;
-  let body = raw;
-  // Strip URL prefix — anything before and including '?q='
-  const qMatch = body.match(/[?&]q=([^&]+)/);
-  if (qMatch) {
-    body = decodeURIComponent(qMatch[1]);
+
+  const value = raw.trim();
+  if (!value) return null;
+
+  // Parse the canonical invitation URL first. `new URL` with a base
+  // also supports relative forms such as `?o=...&e=...&g=...`.
+  try {
+    const url = new URL(value, 'https://savetheday.io');
+    const ownerUid = url.searchParams.get('o');
+    const eventId = url.searchParams.get('e');
+    const guestId = url.searchParams.get('g');
+
+    if (ownerUid || eventId || guestId) {
+      // A canonical invitation token must be complete. Do not accept a
+      // partially populated URL and accidentally scan the wrong person.
+      if (!ownerUid || !eventId || !guestId) return null;
+      return { ownerUid, eventId, guestId };
+    }
+
+    // Legacy share format: ?q={eventId}/{guestId}
+    const legacy = url.searchParams.get('q');
+    if (legacy) {
+      const [legacyEventId, legacyGuestId] = legacy
+        .split('/')
+        .filter(Boolean);
+      if (!legacyEventId || !legacyGuestId) return null;
+      return {
+        ownerUid: null,
+        eventId: legacyEventId,
+        guestId: legacyGuestId,
+      };
+    }
+  } catch {
+    // Continue with raw-token parsing below.
   }
-  const parts = body.split('/').filter(Boolean);
-  if (parts.length === 0) return null;
+
+  const parts = value.split('/').filter(Boolean);
   if (parts.length === 1) {
-    return { eventId: null, guestId: parts[0] };
+    return { ownerUid: null, eventId: null, guestId: parts[0] };
   }
-  return { eventId: parts[0], guestId: parts[1] };
+  if (parts.length === 2) {
+    return {
+      ownerUid: null,
+      eventId: parts[0],
+      guestId: parts[1],
+    };
+  }
+  return null;
 }
 
 /**

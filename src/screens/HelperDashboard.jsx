@@ -331,6 +331,8 @@ export function HelperDashboard({
           )}
           {activeTab === 'scan' && (
             <ReceptionScanner
+              ownerUid={ownerUid}
+              eventId={helperAssignment?.eventId || null}
               eventGuests={eventGuests}
               recentScans={recentScans}
               onCheckIn={onCheckIn}

@@ -37,6 +37,8 @@ export function ReceptionScanner({
   recentScans = [],
   onCheckIn,
   onManualCheckIn,
+  ownerUid: activeOwnerUid = null,
+  eventId: activeEventId = null,
 }) {
   const videoRef = useRef(null);
   const scannerRef = useRef(null);
@@ -99,6 +101,14 @@ export function ReceptionScanner({
             highlightCodeOutline: true,
             preferredCamera: 'environment',
             maxScansPerSecond: 5,
+            onDecodeError: (error) => {
+              const message = error?.message || String(error || '');
+              // Normal camera frames rarely contain a QR code. This is
+              // expected, not an actionable scanner failure.
+              if (/no qr code found/i.test(message)) return;
+              // Preserve unexpected decoder diagnostics without flooding console.
+              console.warn('[ReceptionScanner] QR decode error:', error);
+            },
           },
         );
         scannerRef.current = scanner;
@@ -128,32 +138,22 @@ export function ReceptionScanner({
   }, []);
 
   function handleScanResult(data) {
-    // QR tokens look like "https://savetheday.io/?q=<eventId>/<guestId>"
-    // or just "<eventId>/<guestId>" raw. Parse defensively.
-    // 2026-08-13 — LOW audit refactor: replaced inline parsing with the
-    // shared parseGuestQrToken helper. Behavior is identical: accepts
-    // raw, URL with ?q=, or single-guestId forms; returns null if empty.
-    const parsed = parseGuestQrToken(data);
-    const eventId = parsed?.eventId ?? null;
-    const guestId = parsed?.guestId ?? null;
-    if (!guestId) return;
-    const guest = eventGuests.find(
-      (g) => g.guestId === guestId || g.id === guestId,
-    );
-    if (!guest) {
-      flashFeedback({ kind: 'warn', name: '無此賓客', detail: guestId });
-      return;
-    }
-    if (guest.hasAttended) {
+    const result = resolveScan({
+      raw: data,
+      activeOwnerUid,
+      activeEventId,
+      eventGuests,
+    });
+    if (result.kind === 'checkin') {
       flashFeedback({
-        kind: 'warn',
-        name: guest.name || guest.guestId,
-        detail: `已報到過 · ${guest.table ? '桌號 ' + guest.table : ''}`,
+        kind: 'ok',
+        name: result.guest.name || result.guest.guestId,
+        detail: result.guest.table,
       });
+      onCheckIn?.(result.guest);
       return;
     }
-    flashFeedback({ kind: 'ok', name: guest.name || guest.guestId, detail: guest.table });
-    onCheckIn?.(guest);
+    flashFeedback({ kind: 'warn', name: result.name, detail: result.detail });
   }
 
   function flashFeedback({ kind, name, detail }) {
@@ -440,4 +440,94 @@ function CounterCard({ icon, label, value, tone, highlight }) {
       <div className="text-2xl font-black">{value}</div>
     </div>
   );
+}
+
+/**
+ * Pure resolution of a scan payload → a decision tree.
+ *
+ * Extracted from the React component so the binding logic
+ * (parseGuestQrToken + owner/event guard + guest lookup +
+ * attendance check) is unit-testable without mocking QrScanner
+ * or mounting React. The component wraps this with feedback UI
+ * and onCheckIn callback.
+ *
+ * 2026-08-25 — P8: reception desk was rejecting valid invitation
+ * QRs because the parser only knew the legacy ?q=event/guest form.
+ * The canonical format is now ?o=owner&e=event&g=guest. We also
+ * bind the lookup to the active owner/event so the scanner can
+ * never silently check in a guest from a different wedding.
+ */
+export function resolveScan({
+  raw,
+  activeOwnerUid = null,
+  activeEventId = null,
+  eventGuests = [],
+}) {
+  const parsed = parseGuestQrToken(raw);
+
+  if (!parsed?.guestId) {
+    return {
+      kind: 'warn',
+      name: '無效 QR Code',
+      detail: '請掃描由 Save The Day 產生的嘉賓邀請 QR Code',
+    };
+  }
+
+  // Never redirect the scanner to a QR-selected wedding. The QR
+  // must belong to the owner/event already assigned to this desk.
+  if (
+    activeOwnerUid &&
+    parsed.ownerUid &&
+    parsed.ownerUid !== activeOwnerUid
+  ) {
+    return {
+      kind: 'warn',
+      name: '其他婚禮的 QR Code',
+      detail: '此 QR Code 不屬於目前接待處的婚禮',
+    };
+  }
+
+  if (
+    activeEventId &&
+    parsed.eventId &&
+    parsed.eventId !== activeEventId
+  ) {
+    return {
+      kind: 'warn',
+      name: '其他活動的 QR Code',
+      detail: '請確認目前已選擇正確婚禮',
+    };
+  }
+
+  if (eventGuests.length === 0) {
+    return {
+      kind: 'warn',
+      name: '賓客名單載入中',
+      detail: '請稍候數秒後重新掃描，或使用手動搜尋',
+    };
+  }
+
+  const guest = eventGuests.find(
+    (candidate) =>
+      candidate.guestId === parsed.guestId ||
+      candidate.id === parsed.guestId,
+  );
+
+  if (!guest) {
+    return {
+      kind: 'warn',
+      name: '無此賓客',
+      detail: parsed.guestId,
+    };
+  }
+
+  if (guest.hasAttended) {
+    return {
+      kind: 'warn',
+      name: guest.name || guest.guestId,
+      detail: `已報到過${guest.table ? ` · 桌號 ${guest.table}` : ''}`,
+    };
+  }
+
+  return { kind: 'checkin', guest };
 }

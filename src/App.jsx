@@ -4745,6 +4745,8 @@ export default function App() {
             {userRole === 'reception' && currentEvent && currentView === 'reception-scanner' && (
               <LazyScreen>
                 <ReceptionScanner
+                  ownerUid={dataOwnerUid}
+                  eventId={currentEvent.id}
                   eventGuests={eventGuests}
                   recentScans={recentScans || []}
                   onCheckIn={handleSimulateReceptionScan}

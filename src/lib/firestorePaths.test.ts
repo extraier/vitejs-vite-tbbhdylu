@@ -120,24 +120,54 @@ describe('parseOwnerUid', () => {
 });
 
 describe('parseGuestQrToken', () => {
-  it('parses raw eventId/guestId', () => {
-    expect(parseGuestQrToken('EVT/GUEST')).toEqual({ eventId: 'EVT', guestId: 'GUEST' });
+  it('parses the canonical owner/event/guest invitation URL', () => {
+    expect(
+      parseGuestQrToken('https://savetheday.io/?o=owner-1&e=event-1&g=guest-1'),
+    ).toEqual({
+      ownerUid: 'owner-1',
+      eventId: 'event-1',
+      guestId: 'guest-1',
+    });
   });
+
+  it('rejects an incomplete canonical invitation URL', () => {
+    expect(
+      parseGuestQrToken('https://savetheday.io/?o=owner-1&e=event-1'),
+    ).toBeNull();
+  });
+
+  it('parses raw eventId/guestId', () => {
+    expect(parseGuestQrToken('EVT/GUEST')).toEqual({
+      ownerUid: null,
+      eventId: 'EVT',
+      guestId: 'GUEST',
+    });
+  });
+
   it('parses URL with ?q=', () => {
     expect(parseGuestQrToken('https://savetheday.io/?q=EVT/GUEST')).toEqual({
+      ownerUid: null,
       eventId: 'EVT',
       guestId: 'GUEST',
     });
   });
+
   it('parses URL-encoded values', () => {
     expect(parseGuestQrToken('https://savetheday.io/?q=EVT%2FGUEST')).toEqual({
+      ownerUid: null,
       eventId: 'EVT',
       guestId: 'GUEST',
     });
   });
+
   it('returns only guestId when no eventId', () => {
-    expect(parseGuestQrToken('GUEST')).toEqual({ eventId: null, guestId: 'GUEST' });
+    expect(parseGuestQrToken('GUEST')).toEqual({
+      ownerUid: null,
+      eventId: null,
+      guestId: 'GUEST',
+    });
   });
+
   it('returns null for empty string', () => {
     expect(parseGuestQrToken('')).toBeNull();
   });
