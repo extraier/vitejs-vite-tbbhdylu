@@ -2407,11 +2407,18 @@ export default function App() {
   // QR card in PersonalGuestPortal can build its link on first
   // render, before the Firestore subscription resolves.
   useEffect(() => {
+    // 2026-08-25 — Manus P10: dataOwnerUid is the canonical owner
+    // of the wedding's Firestore tree (it may differ from
+    // user.uid when the signed-in user is a co-owner). The
+    // canonical value must come BEFORE the guest-portal fallback
+    // chain. The PersonalGuestPortal still uses this global for
+    // its EntryPassCard, but QrCodeModal now reads the explicit
+    // prop and ignores this fallback.
     window.__ownerUid =
-      user?.uid || guest.qOwner || '';
+      dataOwnerUid || guest.qOwner || user?.uid || '';
     window.__currentEventId =
       currentEvent?.id || guest.qEvent || '';
-  }, [user?.uid, currentEvent?.id, guest.qOwner, guest.qEvent]);
+  }, [dataOwnerUid, user?.uid, currentEvent?.id, guest.qOwner, guest.qEvent]);
 
   // ---- Derived data ----
   const eventTasks = useMemo(
@@ -5203,8 +5210,15 @@ export default function App() {
       />
       <QrCodeModal
         guest={viewingQrCode}
-        eventId={currentEvent?.id}
-        eventName={currentEvent?.name}
+        ownerUid={dataOwnerUid || null}
+        eventId={currentEvent?.id || null}
+        eventName={currentEvent?.name || ''}
+        ownerLabel={
+          currentEvent?.ownerName ||
+          currentEvent?.coupleName ||
+          currentEvent?.brideName ||
+          '此婚禮資料擁有人'
+        }
         onClose={() => setViewingQrCode(null)}
         onCopy={() => showToast('✅ 網址已複製！')}
       />

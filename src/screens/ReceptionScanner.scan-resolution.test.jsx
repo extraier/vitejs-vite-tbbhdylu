@@ -124,4 +124,48 @@ describe('resolveScan', () => {
     expect(result.kind).toBe('warn');
     expect(result.name).toBe('無效 QR Code');
   });
+
+  // 2026-08-25 — Manus P10: a regenerated co-owner QR is
+  // accepted at reception. Before P10 the same QR was rejected as
+  // 「其他婚禮的 QR Code」 because the modal was encoding the
+  // co-owner's UID. After P10 the modal encodes dataOwnerUid —
+  // the reception scanner sees the canonical owner and proceeds.
+  it('accepts a co-owner-issued QR once it has been regenerated with the canonical owner', () => {
+    const result = resolveScan({
+      raw: `https://savetheday.io/?o=${ACTIVE_OWNER}&e=${ACTIVE_EVENT}&g=${ACTIVE_GUEST}`,
+      activeOwnerUid: ACTIVE_OWNER,
+      activeEventId: ACTIVE_EVENT,
+      eventGuests: guests,
+    });
+    expect(result.kind).toBe('checkin');
+    expect(result.guest.name).toBe('王小明');
+    expect(result.guest.guestId).toBe(ACTIVE_GUEST);
+  });
+
+  // 2026-08-25 — Manus P10: existing wrong-owner QRs must remain
+  // rejected. The scanner must NOT silently accept pre-regen QRs
+  // even after P10 — that would defeat the safety guard.
+  it('still rejects a QR from a different owner (P10 must not weaken the scanner)', () => {
+    const result = resolveScan({
+      raw: `https://savetheday.io/?o=DIFFERENT-OWNER&e=${ACTIVE_EVENT}&g=${ACTIVE_GUEST}`,
+      activeOwnerUid: ACTIVE_OWNER,
+      activeEventId: ACTIVE_EVENT,
+      eventGuests: guests,
+    });
+    expect(result.kind).toBe('warn');
+    expect(result.name).toBe('其他婚禮的 QR Code');
+  });
+
+  // 2026-08-25 — Manus P10: a co-owner's QR that omits o=
+  // entirely is not a valid canonical URL — must fail loudly.
+  it('rejects a co-owner QR that omits the o parameter', () => {
+    const result = resolveScan({
+      raw: `https://savetheday.io/?e=${ACTIVE_EVENT}&g=${ACTIVE_GUEST}`,
+      activeOwnerUid: ACTIVE_OWNER,
+      activeEventId: ACTIVE_EVENT,
+      eventGuests: guests,
+    });
+    expect(result.kind).toBe('warn');
+    expect(result.name).toBe('無效 QR Code');
+  });
 });

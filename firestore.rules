@@ -1021,6 +1021,15 @@ match /{path=**}/events/{eventId} {
               || hasHelperPerm(ownerUid, 'canViewGuestList')
               || hasValidGuestLink(ownerUid, eventId);
             allow create, delete: if isOwnerOrAnyCoOwner(ownerUid);
+            // 2026-08-25 — Manus P10: QR regeneration audit fields.
+            // The owner / co-owner tier can write any field, so they
+            // already cover qrRegeneratedAt / qrRegeneratedByUid /
+            // qrCanonicalOwnerUid / qrCanonicalEventId. The helper
+            // tier is restricted to reception scan fields — a helper
+            // who somehow ends up on the QR modal cannot write the
+            // audit metadata. The canEditGuests helper branch is
+            // unchanged from before (full update), since reception
+            // helpers do not have canEditGuests by default.
             allow update: if isOwnerOrAnyCoOwner(ownerUid)
               || (hasHelperPerm(ownerUid, 'canScan')
                   && request.resource.data.diff(resource.data).affectedKeys()
