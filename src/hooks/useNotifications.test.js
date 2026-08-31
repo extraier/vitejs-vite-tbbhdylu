@@ -509,11 +509,19 @@ describe('useNotifications', () => {
           !head?.__isCollection ||
           head.args[5] !== 'notifications'
         ) return false;
-        // The filter MUST be `where('type', '==', 'bigday-comment')`.
+        // 2026-08-31 — Manus P11: the filter is now
+        // `where('type', 'in', [4 strings])` instead of `==`.
+        // Single-field `in` queries auto-index; no composite
+        // needed. The four types must include all three P11
+        // additions so helper bells see them.
         return filter?.__isWhere
           && filter.args[0] === 'type'
-          && filter.args[1] === '=='
-          && filter.args[2] === 'bigday-comment';
+          && filter.args[1] === 'in'
+          && Array.isArray(filter.args[2])
+          && filter.args[2].includes('bigday-comment')
+          && filter.args[2].includes('bigday-assignment')
+          && filter.args[2].includes('bigday-update')
+          && filter.args[2].includes('task-status');
       });
       expect(matched).toBe(true);
     });

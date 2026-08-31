@@ -111,6 +111,11 @@ export function NotificationsCenter({
   // 2026-08-17 — Big Day comment-alert click handler. Routes to
   // WeddingDay instead of the checklist.
   onOpenCommentAlert,
+  // 2026-08-31 — Manus P11: helper-assignment / item-update /
+  // task-status alert routing. Falls back to onOpenCommentAlert
+  // when the parent didn't wire this prop, so the bell keeps
+  // working with just the comment handler.
+  onOpenHelperNotification,
   onOpenInvite,
 }) {
   const [filter, setFilter] = useState('all');
@@ -193,6 +198,22 @@ export function NotificationsCenter({
       // checklist because rundown / resource comments live there.
       case 'comment':
         if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
+        else if (onOpenComment) onOpenComment(item.meta);
+        break;
+      // 2026-08-31 — Manus P11: helper bell assignments + updates
+      // route through the new `onOpenHelperNotification` so
+      // focusedParentKind / focusedParentId get set for the
+      // Big Day tab. Falls back to the comment path when the
+      // parent component didn't wire the new handler.
+      case 'assignment':
+        if (onOpenHelperNotification) onOpenHelperNotification(item.meta);
+        else if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
+        else if (onOpenComment) onOpenComment(item.meta);
+        break;
+      // 2026-08-31 — Manus P11: task-status alerts. The
+      // new handler sets focusedTaskId on the Tasks tab.
+      case 'task-status':
+        if (onOpenHelperNotification) onOpenHelperNotification(item.meta);
         else if (onOpenComment) onOpenComment(item.meta);
         break;
       case 'invite':

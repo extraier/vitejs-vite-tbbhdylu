@@ -100,6 +100,11 @@ export function BellNotifications({
   // 2026-08-17 — Big Day comment-alert click handler. Routes the
   // couple to the WeddingDay view instead of the checklist.
   onOpenCommentAlert,
+  // 2026-08-31 — Manus P11: helper-assignment / item-update /
+  // task-status alerts route through the new handler.
+  // Falls back to onOpenCommentAlert when the parent didn't
+  // wire this prop.
+  onOpenHelperNotification,
   onOpenStatus,
   onOpenInvite,
   onOpenDashboard,
@@ -356,6 +361,18 @@ export function BellNotifications({
           // back to onOpenComment for callers that haven't migrated
           // to the alert handler yet.
           if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
+          else if (onOpenComment) onOpenComment(item.meta);
+          break;
+        // 2026-08-31 — Manus P11: assignment / update / task-status
+        // alerts all route through the new helper-aware handler
+        // so focusedParentKind + focusedParentId + focusedTaskId
+        // land correctly. Falls back to onOpenCommentAlert when
+        // the parent didn't wire the new prop, mirroring the
+        // comment-case fallback pattern.
+        case 'assignment':
+        case 'task-status':
+          if (onOpenHelperNotification) onOpenHelperNotification(item.meta);
+          else if (onOpenCommentAlert) onOpenCommentAlert(item.meta);
           else if (onOpenComment) onOpenComment(item.meta);
           break;
         case 'invite':

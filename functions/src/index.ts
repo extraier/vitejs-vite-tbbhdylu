@@ -1276,6 +1276,17 @@ export { mintPhotoDeleteToken } from './photoDeleteToken';
 // functions/src/vendorComment.ts for the auth + write shape.
 export { vendorPostComment, vendorPostCommentHelper } from './vendorComment';
 export { onBigDayCommentCreated } from './commentAlertTrigger';
+// 2026-08-31 — Manus P11: helper-assignment and task-status
+// alert triggers. See functions/src/helperAssignmentTrigger.ts
+// and functions/src/taskStatusTrigger.ts for the full design
+// notes. Both triggers fan out private inbox notifications to
+// the assigned helper on writes to the relevant event-scoped
+// collections.
+export {
+  onRundownAssignedItemWritten,
+  onResourcesAssignedItemWritten,
+} from './helperAssignmentTrigger';
+export { onTaskStatusWritten } from './taskStatusTrigger';
 
 // 2026-08-13 — H-03 audit follow-up. Backfills the `vendor: true`
 // custom claim for every existing /vendors/{authUid} doc whose

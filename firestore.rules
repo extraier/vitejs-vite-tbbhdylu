@@ -878,11 +878,31 @@ match /{path=**}/events/{eventId} {
               || (isSignedIn()
                   && request.auth.uid == resource.data.assignedVendorUid
                   && request.resource.data.diff(resource.data).affectedKeys()
-                       .hasOnly(['status', 'actualCost', 'completedAt', 'notes']))
+                       .hasOnly(['status', 'actualCost', 'completedAt', 'notes',
+                         // 2026-08-31 — Manus P11: vendor status
+                         // writes carry statusUpdatedByUid / role
+                         // so the taskStatusTrigger can identify
+                         // the actor + suppress the helper's
+                         // self-alert when the helper is the
+                         // vendor's assignee. Owner / co-owner
+                         // write the same fields via the
+                         // recordTaskStatusUpdate path.
+                         'statusUpdatedByUid', 'statusUpdatedByRole',
+                         'isCompleted']))
               || (isSignedIn()
                   && request.auth.uid == resource.data.assignedHelperUid
                   && request.resource.data.diff(resource.data).affectedKeys()
-                       .hasOnly(['status', 'statusUpdatedAt', 'statusNote']));
+                       .hasOnly(['status', 'statusUpdatedAt', 'statusNote',
+                         // 2026-08-31 — Manus P11: helper must
+                         // declare its own UID on the write so the
+                         // trigger can suppress a self-alert.
+                         // Cross-actor impersonation is blocked by
+                         // the equality check below: the writer
+                         // must equal the assigned helper.
+                         'statusUpdatedByUid', 'statusUpdatedByRole',
+                         'isCompleted'])
+                  && request.resource.data.statusUpdatedByUid == request.auth.uid
+                  && request.resource.data.statusUpdatedByRole == 'helper');
 
             // 2026-07-27 — Nested comments + statusUpdates. Moved
             // from the old owner-scoped /tasks/{taskId}/comments/ and

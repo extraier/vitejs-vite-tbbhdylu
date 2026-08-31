@@ -374,6 +374,161 @@ function inviteItems(docs) {
   }));
 }
 
+// 2026-08-31 — Manus P11: helper-assignment / item-update alerts.
+//
+// Cloud Function `helperAssignmentTrigger` writes alerts to:
+//   /artifacts/{appId}/users/{recipientUid}/notifications/
+//     bigday-{kind}_{eventId}_{parentKind}_{parentId}_{version}_{recipientUid}
+//
+// The `type` field is `bigday-assignment` (newly assigned helper)
+// or `bigday-update` (existing helper, item detail changed).
+// The trigger writes the parentKind (`rundown` | `resources`) and
+// parentId (the rundown / resource doc id) directly into the doc
+// so the bell can route clicks without re-reading the source doc.
+//
+// Doc shape:
+//   {
+//     type: 'bigday-assignment' | 'bigday-update',
+//     notificationVersion: 1,
+//     recipientUid,                // inbox owner
+//     ownerUid,                    // wedding primary owner
+//     eventId,                     // the event the item belongs to
+//     kind: 'rundown' | 'resources',
+//     parentId, parentTitle,       // rundown / resource item ref
+//     assignmentAction: 'assigned' | 'updated',
+//     text,                        // human-readable preview (CF-built)
+//     createdAt,                   // server timestamp (millis)
+//     readAt intentionally absent — absence == unread.
+//   }
+//
+// IMPORTANT: the recipient is the helper / vendor assigned at
+// the time of the AFTER snapshot. Co-owner / reception sessions
+// do NOT see these (the recipientUid is enforced by Firestore
+// rules on /notifications/{alertId}). The bell-click handler in
+// App.jsx routes these alerts to the helper-dashboard view with
+// `focusedParentKind` + `focusedParentId` so the modal opens on
+// the right tab.
+export function helperAssignmentItems(docs, fallbackEventId) {
+  return docs.map((d) => {
+    const kind = d.kind === 'resources' ? 'resources' : 'rundown';
+    const isAssigned = d.assignmentAction === 'assigned';
+    const actionLabel = isAssigned ? '指派' : '更新';
+    const parentLabel = kind === 'rundown' ? '大日流程' : '物資';
+    const previewParent = d.parentTitle || parentLabel;
+    const preview = summarize(d.text) || `「${previewParent}」已${actionLabel}`;
+    const resolvedEventId = d.eventId || fallbackEventId || null;
+    return {
+      id: `assignment:${d.id}`,
+      category: 'assignment',
+      actorRole: 'owner',
+      actorName: '婚禮主人',
+      actorInitial: '主',
+      title: `${parentLabel}被${actionLabel}：「${previewParent}」`,
+      preview,
+      meta: {
+        alertId: d.id,
+        eventId: resolvedEventId,
+        kind,
+        parentId: d.parentId || null,
+        parentTitle: d.parentTitle || null,
+        assignmentAction: isAssigned ? 'assigned' : 'updated',
+      },
+      href: {
+        view: 'helper-dashboard',
+        eventId: resolvedEventId,
+        kind,
+        parentId: d.parentId || null,
+        parentTitle: d.parentTitle || null,
+        source: 'assignment',
+      },
+      createdAt: toMillis(d.createdAt),
+      sourceKey: 'assignment',
+      readAt: d.readAt || null,
+      alertDocId: d.id,
+    };
+  });
+}
+
+// 2026-08-31 — Manus P11: task-status alerts.
+//
+// Cloud Function `taskStatusTrigger` writes alerts to:
+//   /artifacts/{appId}/users/{recipientUid}/notifications/
+//     task-status_{eventId}_{taskId}_{revision}_{recipientUid}
+//
+// Only fires when (a) a helper is assigned, (b) status actually
+// changed, (c) actor is NOT the helper themselves. The trigger
+// writes `taskId`, `fromStatus`, `toStatus`, `authorUid`,
+// `authorRole` directly so the bell can render an actionable
+// preview + click-through to the right task.
+//
+// Doc shape:
+//   {
+//     type: 'task-status',
+//     notificationVersion: 1,
+//     recipientUid,                // helper inbox
+//     ownerUid, eventId, taskId,
+//     parentTitle: <task title>,
+//     fromStatus, toStatus,        // status ids, may be null on edge
+//     authorUid, authorRole,       // who flipped the status
+//     text,                        // "任務「X」已由Y由A更新為B"
+//     createdAt,
+//     readAt absent == unread.
+//   }
+//
+// Click routing: the bell opens the helper-dashboard Tasks tab
+// with `focusedTaskId` set to the taskId. App.jsx already has the
+// `focusedTaskId` state from P9 (it was added for the manual
+// guest fallback dropdown), so we reuse it.
+export function taskStatusItems(docs, fallbackEventId) {
+  const STATUS_LABEL = {
+    'todo': '待辦',
+    'in-progress': '進行中',
+    'done': '已完成',
+    'blocked': '受阻',
+  };
+  const ROLE_LABEL = {
+    'owner': '婚禮主人',
+    'co-owner': '婚禮主人',
+    'vendor': '商戶',
+    'helper': '助手',
+  };
+  return docs.map((d) => {
+    const fromLabel = STATUS_LABEL[d.fromStatus] || '待辦';
+    const toLabel = STATUS_LABEL[d.toStatus] || '已更新';
+    const actorName = ROLE_LABEL[d.authorRole] || '團隊成員';
+    const preview = summarize(d.text) || `「${d.parentTitle || '任務'}」${toLabel}`;
+    const resolvedEventId = d.eventId || fallbackEventId || null;
+    return {
+      id: `task-status:${d.id}`,
+      category: 'task-status',
+      actorRole: d.authorRole === 'vendor' ? 'vendor' : 'helper',
+      actorName,
+      actorInitial: initialOf(actorName),
+      title: `任務更新：「${d.parentTitle || '任務'}」`,
+      preview,
+      meta: {
+        alertId: d.id,
+        eventId: resolvedEventId,
+        taskId: d.taskId || null,
+        fromStatus: d.fromStatus || null,
+        toStatus: d.toStatus || null,
+        authorUid: d.authorUid || null,
+        authorRole: d.authorRole || null,
+      },
+      href: {
+        view: 'helper-dashboard',
+        eventId: resolvedEventId,
+        taskId: d.taskId || null,
+        source: 'task-status',
+      },
+      createdAt: toMillis(d.createdAt),
+      sourceKey: 'task-status',
+      readAt: d.readAt || null,
+      alertDocId: d.id,
+    };
+  });
+}
+
 // 2026-08-17 — Bidirectional recipient-private inbox (Manus step 11).
 //
 // Cloud Function writes alerts to:
@@ -652,7 +807,7 @@ export function useNotifications({
   //
   // Subscribes to the SIGNED-IN USER's PRIVATE notification inbox:
   //   /artifacts/{appId}/users/{selfUid}/notifications/
-  //   where type == 'bigday-comment'
+  //   where type in ('bigday-comment', 'bigday-assignment', 'bigday-update', 'task-status')
   //
   // Each recipient (owner, co-owner, vendor, helper) has their own
   // inbox; the hook is now role-agnostic. The bell subscriber is
@@ -660,14 +815,24 @@ export function useNotifications({
   // hook backs owner, vendor, and helper bells with no special-casing
   // in the source.
   //
-  // Filter `type == 'bigday-comment'` so other notification
-  // categories that may eventually share the /notifications/
-  // collection (e.g. future 'proposal-reply', 'task-reminder') don't
-  // leak into the Big Day bell.
+  // The single `type in [...]` query is a single-field filter — no
+  // composite index needed (firestore single-field indexes are
+  // auto-created). Splitting into four `==` listeners would multiply
+  // reads and add unsubscribe churn; `in` keeps it to one round
+  // trip per inbox change.
   //
-  // `where` requires a Firestore composite index — see the rule
-  // block added in firestore.rules. Index: collection-id
-  // 'notifications', fields: type ASC, createdAt DESC.
+  // 2026-08-31 — Manus P11: extended from `'bigday-comment'`
+  // to four types:
+  //   - 'bigday-comment'    — comment written under rundown/resources item
+  //   - 'bigday-assignment' — helper newly assigned to rundown/resources item
+  //   - 'bigday-update'     — existing helper's item detail changed
+  //   - 'task-status'       — assigned-helper task status flipped
+  //
+  // The hook normalizes each type to a `bell item` with a
+  // `category` field. The bell dropdown groups by category so
+  // the same UI works for owners (only see comment/assignment
+  // types since rules gate the inbox by recipientUid) and
+  // helpers (see all four types when they ARE the recipient).
   //
   // `eventId` is intentionally NOT a dependency here — the inbox is
   // per-user and includes alerts from every event they participate
@@ -689,29 +854,46 @@ export function useNotifications({
     );
     const q = query(
       inboxRef,
-      where('type', '==', 'bigday-comment'),
+      where(
+        'type',
+        'in',
+        [
+          'bigday-comment',
+          'bigday-assignment',
+          'bigday-update',
+          'task-status',
+        ],
+      ),
       fsLimit(TASKS_LIMIT),
     );
     const unsub = onSnapshot(
       q,
       (snap) => {
         if (cancelled) return;
-        const list = snap.docs.map((d) => {
-          const data = d.data();
+        const list = snap.docs.map((docSnap) => {
+          const data = docSnap.data();
           return {
-            id: d.id,
+            id: docSnap.id,
             // notificationVersion: 1 — schema version. Hook currently
             // reads no versioned fields, but reserve the slot so a
             // future migration can branch.
+            type: data.type || 'bigday-comment',
             kind: data.kind === 'resources' ? 'resources' : 'rundown',
             parentId: data.parentId || null,
             parentTitle: data.parentTitle || null,
             commentId: data.commentId || null,
+            // 2026-08-31 — Manus P11: task-status alerts carry
+            // taskId / fromStatus / toStatus / author fields
+            // instead of commentId / kind.
+            taskId: data.taskId || null,
+            fromStatus: data.fromStatus || null,
+            toStatus: data.toStatus || null,
+            assignmentAction: data.assignmentAction || null,
+            authorUid: data.authorUid || null,
+            authorRole: data.authorRole || 'vendor',
             eventId: data.eventId || null,
             ownerUid: data.ownerUid || null,
-            authorUid: data.authorUid || null,
             authorName: data.authorName || null,
-            authorRole: data.authorRole || 'vendor',
             text: data.text || '',
             createdAt: data.createdAt,
             readAt: data.readAt || null,
@@ -738,12 +920,30 @@ export function useNotifications({
   // limits (PROPOSALS_LIMIT, TASKS_LIMIT) still cap how many docs the
   // hook can fetch — bump those if a single event has more than 50
   // tasks or 50 proposals in active conversation.
+  //
+  // 2026-08-31 — Manus P11: split commentAlerts by `type` so each
+  // type renders with its own normalizer. Comment items still use
+  // `commentItems` (its shape is unchanged); assignment + update
+  // + task-status use the new helpers. All four normalizers
+  // produce the same bell-item shape so the merged[] array is
+  // uniformly sortable by `createdAt`.
   const merged = useMemo(() => {
+    const commentOnly = commentAlerts.filter(
+      (a) => (a.type || 'bigday-comment') === 'bigday-comment',
+    );
+    const assignmentOnly = commentAlerts.filter(
+      (a) => a.type === 'bigday-assignment' || a.type === 'bigday-update',
+    );
+    const taskStatusOnly = commentAlerts.filter(
+      (a) => a.type === 'task-status',
+    );
     const items = [
       ...proposalItems(proposals || [], ownerUid),
       ...taskItems(tasks, ownerUid, eventId),
       ...inviteItems(helpers.filter((h) => h.status === 'active')),
-      ...commentItems(commentAlerts, ownerUid, eventId),
+      ...commentItems(commentOnly, ownerUid, eventId),
+      ...helperAssignmentItems(assignmentOnly, eventId),
+      ...taskStatusItems(taskStatusOnly, eventId),
     ];
     items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     return items;
@@ -798,11 +998,35 @@ export function useNotifications({
       return true;
     }).length;
 
+    // 2026-08-31 — Manus P11: assignment + task-status alerts
+    // share the same inbox + readAt semantics as comments, so
+    // they fold into the same `comment` badge. We do NOT split
+    // them into separate counters because the bell dropdown
+    // renders a single unified list — the badge total is the
+    // right top-line metric for the bell icon.
+    //
+    // (If the UX later asks for per-category breakdown, add
+    // `assignment` and `task-status` keys here and surface them
+    // on the bell with category-grouped counts. Today: one
+    // unified comment inbox = one badge.)
+    const assignmentAndTaskNew = (commentAlerts || []).filter((c) => {
+      // Only count assignment/update/task-status — comment count
+      // is already captured by `commentNew` above.
+      const t = c.type || 'bigday-comment';
+      if (t === 'bigday-comment') return false;
+      if (c.readAt) return false;
+      const createdMs = toMillis(c.createdAt);
+      if (lastSeenCommentAt > 0 && createdMs <= lastSeenCommentAt) {
+        return false;
+      }
+      return true;
+    }).length;
+
     return {
       proposal: proposalNew,
       task: taskNew,
       invite: inviteNew,
-      comment: commentNew,
+      comment: commentNew + assignmentAndTaskNew,
     };
   }, [ownerUid, eventId, proposals, tasks, helpers, commentAlerts, seenTick, refreshKey]);
 

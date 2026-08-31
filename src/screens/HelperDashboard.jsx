@@ -600,6 +600,14 @@ function HelperTaskCard({ task, ownerUid, currentUser, showToast }) {
       await updateDoc(ref, {
         status: newStatusId,
         statusUpdatedAt: Date.now(),
+        // 2026-08-31 — Manus P11: persist the actor identity on
+        // the task doc itself. The taskStatusTrigger needs these
+        // fields to (a) suppress a self-alert when the helper
+        // wrote their own status and (b) render the actor name
+        // in the bell preview. The rules allowlist below
+        // permits these fields on direct helper writes.
+        statusUpdatedByUid: currentUser.uid,
+        statusUpdatedByRole: 'helper',
         ...(newStatusId === 'done' ? { isCompleted: true } : {}),
         ...(task.status === 'done' && newStatusId !== 'done'
           ? { isCompleted: false }

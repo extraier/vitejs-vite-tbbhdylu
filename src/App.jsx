@@ -1199,6 +1199,78 @@ export default function App() {
     [currentEvent?.id, userRole],
   );
 
+  // 2026-08-31 — Manus P11: routing for the helper bell's new
+  // notification categories (assignment / update / task-status).
+  //
+  // The existing `openBigDayCommentAlert` is wired for comments
+  // (kind='rundown'|'resources' + parentId + commentId). For the
+  // P11 normalizer shapes, we dispatch on what the bell item
+  // carries in `meta`:
+  //
+  //   - task-status:  meta.taskId  → helper-dashboard with
+  //                   focusedTaskId set (P9 already added this).
+  //   - assignment/
+  //     update:       meta.kind ∈ {'rundown','resources'} +
+  //                   meta.parentId → helper-dashboard with
+  //                   focusedParentKind + focusedParentId set,
+  //                   matching the comment routing shape.
+  //   - fallback:     delegate to openBigDayCommentAlert so a
+  //                   shape change doesn't silently lose the click.
+  //
+  // Same role-revalidation gate as openBigDayCommentAlert: if the
+  // alert is for a different event than the one currently active
+  // in the helper session, we switch events BEFORE navigating.
+  // That keeps the focusedTaskId/focusedParentId pointing at a
+  // doc that actually exists in the new event context.
+  const openHelperNotification = useCallback(
+    (meta, role = userRole) => {
+      if (!meta) return;
+      // 2026-08-31 — P11 routing safety: the bell item carries
+      // its own `meta.eventId` (the trigger writes the AFTER
+      // snapshot's eventId at fan-out time). If the helper is
+      // currently viewing a different event, switch first.
+      if (meta.eventId && currentEvent?.id !== meta.eventId) {
+        setCurrentEvent({ id: meta.eventId });
+      }
+      if (role !== 'helper') {
+        // Owners / co-owners / vendors don't have a helper
+        // dashboard to land on — fall back to the comment path
+        // so the existing bell item handler runs unchanged.
+        return openBigDayCommentAlert(meta, role);
+      }
+      if (meta.taskId) {
+        // task-status alert: focus the task on the Tasks tab.
+        // P9 introduced `focusedTaskId` for the manual guest
+        // dropdown; we reuse it so this is the same focusedTask
+        // flow that already exists. Clear the parent focus so
+        // the helper dashboard doesn't have a stale Big Day
+        // highlight alongside the task highlight.
+        setFocusedTaskId(meta.taskId);
+        setFocusedParentKind(null);
+        setFocusedParentId(null);
+        setFocusedCommentId(null);
+      } else if (meta.kind === 'rundown' || meta.kind === 'resources') {
+        // bigday-assignment / bigday-update: focus the parent
+        // item on the Big Day tab. This mirrors the comment
+        // path: owner/co-owner/helper all land on the same
+        // parentKind + parentId pair.
+        setFocusedParentKind(meta.kind);
+        setFocusedParentId(meta.parentId || null);
+        setFocusedTaskId(null);
+        setFocusedCommentId(null);
+      } else {
+        // Unknown / future shape — fall back.
+        return openBigDayCommentAlert(meta, role);
+      }
+      setCurrentView('helper-dashboard');
+    },
+    [
+      currentEvent?.id,
+      userRole,
+      openBigDayCommentAlert,
+    ],
+  );
+
   // 2026-08-20 — Manus bell observability (audit §vendor-bell):
   // diagnostic callback for the bell error boundary. The bell
   // emit is fire-and-forget — console.error only. We DO NOT
@@ -1730,6 +1802,13 @@ export default function App() {
       status: newStatusId,
       statusUpdatedAt: Date.now(),
       statusNote: statusNote || null,
+      // 2026-08-31 — Manus P11: actor identity for the
+      // taskStatusTrigger. Without these fields, the trigger
+      // fails closed and the assigned helper does NOT receive a
+      // status alert. Persisting them here means vendor status
+      // updates also produce the helper alert.
+      statusUpdatedByUid: user.uid,
+      statusUpdatedByRole: 'vendor',
     };
     if (newStatusId === 'done') {
       update.isCompleted = true;
@@ -4164,6 +4243,12 @@ export default function App() {
                         // in sync. See openBigDayCommentAlert for
                         // the per-role routing matrix.
                         onOpenCommentAlert={(meta) => openBigDayCommentAlert(meta, userRole)}
+                        // 2026-08-31 — Manus P11: helper-assignment
+                        // / task-status alerts route through the
+                        // new handler, which sets focusedTaskId
+                        // / focusedParentKind / focusedParentId for
+                        // the helper dashboard.
+                        onOpenHelperNotification={(meta) => openHelperNotification(meta, userRole)}
                         onOpenStatus={(meta) => {
                           if (meta?.eventId && currentEvent?.id !== meta.eventId) {
                             setCurrentEvent({ id: meta.eventId });
@@ -4243,11 +4328,18 @@ export default function App() {
                   setFocusedTaskId(meta?.taskId || null);
                   setCurrentView('couple-checklist');
                 }}
+                // 2026-08-31 — Manus P11: hook up the helper
+                // routing handler so future non-owner bell mounts
+                // get the same dispatch. Owners won't see
+                // assignment / task-status alerts (rules gate the
+                // inbox by recipientUid), so this branch is
+                // mostly defensive for now.
+                onOpenHelperNotification={(meta) => openHelperNotification(meta, userRole)}
                 // 2026-08-23 — Manus P3 (PDF Patch 3): delegate to the shared
-// handler so the centre stays in sync with the bell. Previously
-// this mount only switched view (no focused* writes), which
-// meant owner notification-centre clicks lost the deep-link
-// scroll behaviour that the bell had.
+                // handler so the centre stays in sync with the bell. Previously
+                // this mount only switched view (no focused* writes), which
+                // meant owner notification-centre clicks lost the deep-link
+                // scroll behaviour that the bell had.
                 onOpenCommentAlert={(meta) => openBigDayCommentAlert(meta, userRole)}
                 onOpenInvite={() => setCurrentView('helpers')}
               />
@@ -4270,11 +4362,16 @@ export default function App() {
                   )}
                   onOpenProposal={null}
                   onOpenComment={null}
+                  // 2026-08-31 — Manus P11: helper-assignment /
+                  // task-status alerts route through the new
+                  // handler, which sets focusedParentKind /
+                  // focusedTaskId for the helper dashboard.
+                  onOpenHelperNotification={(meta) => openHelperNotification(meta, userRole)}
                   // 2026-08-23 — Manus P3 (PDF Patch 3): delegate to the shared
-// handler. The handler already implements the role-aware view
-// switch + focused* seeding + helper's focusedCommentId===null
-// rule, so this mount no longer needs its own logic. See
-// openBigDayCommentAlert for the full behaviour matrix.
+                  // handler. The handler already implements the role-aware view
+                  // switch + focused* seeding + helper's focusedCommentId===null
+                  // rule, so this mount no longer needs its own logic. See
+                  // openBigDayCommentAlert for the full behaviour matrix.
                   onOpenCommentAlert={(meta) => openBigDayCommentAlert(meta, userRole)}
                   onOpenInvite={null}
                 />
@@ -4934,11 +5031,17 @@ export default function App() {
                                   setCurrentView('couple-checklist');
                                 }}
                                 // 2026-08-23 — Manus P3 (PDF Patch 3): delegate to the shared
-// handler. The previous inline body had a vendor-only view
-// branch (setCurrentView('vendor-dashboard') for vendor, nothing
-// for helper — a latent bug if a helper ever saw this mount).
-// The shared handler now does the right thing for every role.
+                                // handler. The previous inline body had a vendor-only view
+                                // branch (setCurrentView('vendor-dashboard') for vendor, nothing
+                                // for helper — a latent bug if a helper ever saw this mount).
+                                // The shared handler now does the right thing for every role.
                                 onOpenCommentAlert={(meta) => openBigDayCommentAlert(meta, userRole)}
+                                // 2026-08-31 — Manus P11: helper-assignment
+                                // / task-status alerts route through the
+                                // new handler so focusedTaskId /
+                                // focusedParentKind land correctly on
+                                // the helper dashboard.
+                                onOpenHelperNotification={(meta) => openHelperNotification(meta, userRole)}
                                 onOpenStatus={(meta) => {
                                   if (meta?.eventId && currentEvent?.id !== meta.eventId) {
                                     setCurrentEvent({ id: meta.eventId });
