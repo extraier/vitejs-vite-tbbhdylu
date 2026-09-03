@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Policy — FoodSwipe HK</title>
+<meta name="description" content="Privacy Policy for FoodSwipe HK, a Hong Kong restaurant and dish discovery app.">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang HK",
+                 "Microsoft JhengHei", Helvetica, Arial, sans-serif;
+    line-height: 1.65;
+    color: #1f2937;
+    background: #fafaf9;
+    margin: 0;
+    padding: 2rem 1rem;
+  }
+  main {
+    max-width: 760px;
+    margin: 0 auto;
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  h1 {
+    font-size: 1.875rem;
+    font-weight: 800;
+    color: #ea580c;
+    margin: 0 0 0.25rem;
+    letter-spacing: -0.01em;
+  }
+  .subtitle {
+    color: #6b7280;
+    font-size: 0.95rem;
+    margin: 0 0 2rem;
+  }
+  h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #111827;
+    margin: 2rem 0 0.75rem;
+    padding-top: 1rem;
+    border-top: 1px solid #f3f4f6;
+  }
+  h2:first-of-type {
+    margin-top: 1rem;
+    padding-top: 0;
+    border-top: none;
+  }
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #1f2937;
+    margin: 1.5rem 0 0.5rem;
+  }
+  p, li {
+    font-size: 0.975rem;
+    color: #374151;
+  }
+  ul, ol {
+    padding-left: 1.4rem;
+    margin: 0.5rem 0 1rem;
+  }
+  li { margin-bottom: 0.4rem; }
+  code {
+    background: #f3f4f6;
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.9em;
+    color: #1f2937;
+  }
+  .contact {
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 10px;
+    padding: 1rem 1.25rem;
+    margin-top: 2rem;
+  }
+  .contact p { margin: 0.25rem 0; }
+  .meta {
+    color: #9ca3af;
+    font-size: 0.85rem;
+    margin-top: 2.5rem;
+    text-align: right;
+  }
+  a { color: #ea580c; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Privacy Policy — FoodSwipe HK</h1>
+<p class="subtitle">Last updated: September 2, 2026</p>
+
+<p>
+  FoodSwipe HK ("the App", "we", "us", "our") is a Hong Kong restaurant
+  and dish discovery application operated by an individual developer
+  (Roger Lau). This Privacy Policy explains what information the App
+  collects, how it is used, and the choices you have.
+</p>
+<p>
+  By installing or using the App, you agree to this Privacy Policy.
+</p>
+
+<h2>1. Information We Collect</h2>
+
+<h3>1.1 Account information</h3>
+<p>
+  If you create an account, we collect:
+</p>
+<ul>
+  <li>Email address (for email/password sign-in)</li>
+  <li>Display name and profile photo URL (provided by your sign-in method)</li>
+  <li>User identifier (a unique Firebase UID)</li>
+</ul>
+<p>
+  Sign-in is handled by Firebase Authentication. You can sign in with:
+  email + password, Google, or Facebook. The credentials you use to
+  authenticate are processed by the respective provider and are not
+  stored on our servers. We only receive your UID, display name, and
+  profile photo URL.
+</p>
+
+<h3>1.2 Content you create</h3>
+<ul>
+  <li><strong>Reviews and ratings</strong> (1–5 stars, optional text up to 500 characters, optional photos up to 4)</li>
+  <li><strong>Replies to reviews</strong> (text up to 300 characters)</li>
+  <li><strong>Swipe actions</strong> (which dishes you liked or passed on)</li>
+  <li><strong>Reported errors</strong> for dishes (restaurant name, dish name, reason, optional notes)</li>
+</ul>
+
+<h3>1.3 Device and usage data</h3>
+<ul>
+  <li>
+    <strong>Push notification tokens</strong> — if you grant notification permission, we store an
+    FCM token to deliver match alerts and other updates. You can revoke
+    this in the App's settings or your device settings.
+  </li>
+  <li>
+    <strong>Crash and error logs</strong> — Firebase Crashlytics collects
+    anonymized crash reports and device metadata (OS version, device model,
+    app version) to help us debug issues. No personal content is included.
+  </li>
+</ul>
+
+<h2>2. How We Use Your Information</h2>
+<p>We use the information to:</p>
+<ul>
+  <li>Display your profile and review history in the App</li>
+  <li>Show your reviews and ratings to other users</li>
+  <li>Notify you when a swipe partner likes the same dish as you</li>
+  <li>Show aggregate ratings (e.g. "4.3 stars from 12 reviews") on dish cards</li>
+  <li>Debug crashes and improve the App</li>
+  <li>Respond to support requests</li>
+</ul>
+<p>We do <strong>not</strong>:</p>
+<ul>
+  <li>Sell your data to third parties</li>
+  <li>Show you targeted advertising based on your profile</li>
+  <li>Track your activity across other apps or websites</li>
+</ul>
+
+<h2>3. Where Your Data Is Stored</h2>
+<p>
+  All data is stored in Google Firebase:
+</p>
+<ul>
+  <li><strong>Cloud Firestore</strong> (Singapore region) — your profile, reviews, likes, notifications</li>
+  <li><strong>Firebase Storage</strong> (Singapore region) — your review photos</li>
+  <li><strong>Firebase Authentication</strong> — sign-in credentials</li>
+  <li><strong>Firebase Cloud Messaging</strong> — push notification tokens</li>
+  <li><strong>Firebase Crashlytics</strong> — anonymized crash reports</li>
+</ul>
+<p>
+  Firebase is operated by Google LLC. Google may process data outside of Hong Kong.
+  See <a href="https://firebase.google.com/support/privacy" target="_blank" rel="noopener">Firebase Privacy</a>.
+</p>
+
+<h2>4. Public Information</h2>
+<p>The following is <strong>publicly visible</strong> to any user (including anonymous users) of the App:</p>
+<ul>
+  <li>Your display name and profile photo on reviews and replies you post</li>
+  <li>Star ratings, comment text, and review photos you submit</li>
+  <li>Your replies to other users' reviews</li>
+</ul>
+<p>
+  Other public information is anonymized: e.g. the swipe deck shows
+  dish averages like "4.3 ★ (12 reviews)" but does not reveal which user
+  submitted which rating.
+</p>
+
+<h2>5. Sharing and Third Parties</h2>
+<p>We share data only with:</p>
+<ul>
+  <li><strong>Firebase / Google LLC</strong> — as described above</li>
+  <li><strong>Google Sign-In</strong> — if you choose that sign-in method (Google receives your auth request; we receive your UID + profile)</li>
+  <li><strong>Facebook Login</strong> — if you choose that sign-in method (Facebook receives your auth request; we receive your UID + profile)</li>
+</ul>
+<p>We do not share your data with advertisers, analytics companies, or data brokers.</p>
+
+<h2>6. Your Rights and Choices</h2>
+<h3>Access, edit, delete</h3>
+<ul>
+  <li>
+    <strong>Reviews</strong> — edit or delete your own reviews from inside the App
+    (dish detail → your review → "刪除" / "更新評價")
+  </li>
+  <li>
+    <strong>Replies</strong> — delete your own replies from the dish detail screen
+  </li>
+  <li>
+    <strong>Account deletion</strong> — sign in, then email
+    <a href="mailto:privacy@foodswipehk.com">privacy@foodswipehk.com</a> to request
+    full deletion of your account and all associated data
+    (profile, reviews, replies, likes, notifications).
+    We will delete within 30 days.
+  </li>
+</ul>
+<h3>Notifications</h3>
+<p>
+  You can disable push notifications at any time in the App's settings
+  or in your device's notification settings. Disabling removes your
+  FCM token from our database.
+</p>
+<h3>Sign-in revocation</h3>
+<p>
+  You can revoke Google or Facebook sign-in from your Google/Facebook
+  account settings. You can reset your password from the App's sign-in
+  screen.
+</p>
+
+<h2>7. Data Retention</h2>
+<ul>
+  <li>Your account data is kept until you delete your account or after 24 months of inactivity</li>
+  <li>Reviews you delete are removed immediately; cached copies on Google Cloud may persist for up to 90 days as part of normal backup rotation</li>
+  <li>Crash logs are retained for 90 days</li>
+</ul>
+
+<h2>8. Children's Privacy</h2>
+<p>
+  The App is not directed at children under 13. We do not knowingly collect
+  personal information from children under 13. If you believe we have collected
+  such information, please contact us to delete it.
+</p>
+
+<h2>9. Security</h2>
+<p>
+  We use Firebase's security features including encrypted data in transit
+  (HTTPS/TLS), Firestore Security Rules that restrict who can read and write
+  which documents, and Firebase Authentication for sign-in.
+</p>
+<p>
+  No method of transmission over the Internet, however, is 100% secure.
+  We cannot guarantee absolute security.
+</p>
+
+<h2>10. International Data Transfers</h2>
+<p>
+  Firebase's default data storage region for this project is
+  <code>asia-southeast1</code> (Singapore). Google may process data in other
+  regions as part of normal operations. By using the App, you understand
+  your data may be transferred to and processed in those regions.
+</p>
+
+<h2>11. Changes to This Policy</h2>
+<p>
+  We may update this Privacy Policy. The "Last updated" date at the top
+  will reflect the change. Material changes will be announced via an
+  in-app notification on the next time you open the App.
+</p>
+
+<h2>12. Contact</h2>
+<div class="contact">
+  <p><strong>Privacy inquiries, account deletion requests, or questions:</strong></p>
+  <p>📧 <a href="mailto:privacy@foodswipehk.com">privacy@foodswipehk.com</a></p>
+  <p>Developer: Roger Lau · FoodSwipe HK · Hong Kong</p>
+</div>
+
+<p class="meta">
+  This document is published at <code id="url-here"></code>.
+</p>
+
+<script>
+  document.getElementById('url-here').textContent = window.location.origin + window.location.pathname;
+</script>
+
+</main>
+</body>
+</html>
