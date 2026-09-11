@@ -1288,6 +1288,20 @@ export {
 } from './helperAssignmentTrigger';
 export { onTaskStatusWritten } from './taskStatusTrigger';
 
+// 2026-09-11 — Manus P12.1: vendor-side delay reporting.
+// Assigned vendors self-report delays via `reportVendorDelay`;
+// the owner (or a co-owner) approves or rejects via
+// `approveVendorDelay`. Both callables verify authorization
+// server-side (no client-supplied vendorUid) and write the
+// `vendorDelayReports/{reportId}` subcollection on the
+// rundown / resource entry. See functions/src/vendorDelayReport.ts
+// for the full design notes (projection merge, idempotency,
+// owner/co-owner check).
+export {
+  reportVendorDelay,
+  approveVendorDelay,
+} from './vendorDelayReport';
+
 // 2026-08-13 — H-03 audit follow-up. Backfills the `vendor: true`
 // custom claim for every existing /vendors/{authUid} doc whose
 // user lacks it. The H-03 root-cause fix (commit before) routes

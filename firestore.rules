@@ -421,6 +421,25 @@ match /{path=**}/events/{eventId} {
       );
     }
 
+    // 2026-09-11 — Manus P12 (vendor projection + delay reports):
+    // returns true iff request.auth.uid is the vendor currently
+    // assigned to the given rundown entry. Used to gate
+    // /events/{eventId}/rundown/{entryId}/vendorDelayReports/{reportId}
+    // reads to the assigned vendor.
+    //
+    // Reads the parent rundown doc directly — does NOT call
+    // isOwnerOrAnyCoOwner (which would otherwise throw on the event
+    // doc get() inside isCoOwnerOfEventDoc, even when this branch
+    // would conceptually return false). The path is well-formed by
+    // the time the caller reaches this helper: the doc at
+    // /rundown/{entryId} must already exist for a sub-doc to be
+    // readable.
+    function isHelperAssignedToRundownEntry(ownerUid, eventId, entryId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)) &&
+        get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid;
+    }
+
     match /artifacts/{appId} {
 
       // 2026-08-07 — Platform-wide payment settings. Single doc at
@@ -771,6 +790,51 @@ match /{path=**}/events/{eventId} {
               allow update, delete: if isOwnerOrAnyCoOwner(ownerUid)
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid);
             }
+
+            // 2026-09-11 — Manus P12 vendor delay reports.
+            //
+            // Vendor submits a delay report (reportVendorDelay
+            // callable); owner / co-owner later approves or rejects
+            // it (approveVendorDelay callable). Both callables write
+            // via Admin SDK, so client writes are forbidden by
+            // `allow create, update, delete: if false;`. Reads are
+            // gated to:
+            //   - owner / co-owner (any report on their event);
+            //   - the vendor currently assigned to the parent
+            //     rundown entry (so they can see their own report
+            //     come back as approved/rejected).
+            //
+            // The vendor branch re-uses
+            // isHelperAssignedToRundownEntry (added in the helpers
+            // block above) which reads the parent rundown doc's
+            // assignedVendorUid directly. No event-doc access means
+            // no recursive permission-denied throw.
+            match /vendorDelayReports/{reportId} {
+              // 2026-09-11 — Same isOwnerOrAnyCoOwner → safe-branches
+              // replacement the rundown comments block uses
+              // (see `match /rundown/{entryId}/comments/{commentId}`
+              // above for the full explanation). The
+              // vendorDelayReports doc has NO `eventId` field of its
+              // own, so calling isCoOwnerOfEventDoc(ownerUid) — which
+              // is what isOwnerOrAnyCoOwner eventually evaluates —
+              // throws on `resource.data.eventId is string` and the
+              // whole OR chain aborts, denying the legitimate
+              // co-owner read. The safe replacement:
+              //   - isOwner(ownerUid) — pure UID comparison.
+              //   - isCoOwnerOfAnyEvent(ownerUid) — reads the
+              //     standalone /coOwners/{uid} doc, which has its
+              //     own read rule allowing the co-owner themselves
+              //     to read it. No dependency on the event doc.
+              //   - isHelperAssignedToRundownEntry(ownerUid, eventId,
+              //     entryId) — vendor branch; reads the parent
+              //     rundown doc directly, no event-doc access.
+              allow read: if (
+                  isOwner(ownerUid)
+                  || isCoOwnerOfAnyEvent(ownerUid)
+                  || isHelperAssignedToRundownEntry(ownerUid, eventId, entryId)
+                );
+              allow create, update, delete: if false;
+            }
           }
           // 2026-08-09 — Resources (物資分配) — same permission shape
           // as /rundown: helpers with canViewChecklist + assigned
@@ -832,6 +896,74 @@ match /{path=**}/events/{eventId} {
                 || (isSignedIn() && request.auth.uid == resource.data.authorUid);
             }
           }
+
+          // 2026-09-11 — Manus P12 vendor projection subtree.
+          //
+          // helperAssignmentTrigger fans out a per-vendor projection of
+          // each assigned rundown entry to
+          //   /events/{eventId}/vendorViews/{vendorUid}/rundown/{entryId}
+          // The vendor's client subscribes to their own subtree (via a
+          // collectionGroup or direct query) to render VendorDashboard
+          // without needing to read every owner's event tree.
+          //
+          // Two invariants must hold for a read:
+          //   1. Path binding: request.auth.uid == vendorUid (the URL
+          //      segment is the vendor's own UID, not the owner's).
+          //   2. The vendor must have an active vendorAccess marker at
+          //      /events/{eventId}/vendorAccess/{vendorUid}. The marker
+          //      is the per-event authorization that the owner/manager
+          //      granted. Written by trigger (Admin SDK), never by
+          //      clients.
+          //
+          // Writes are explicitly denied — only the trigger writes the
+          // projection (Admin SDK bypasses rules), so any client write
+          // attempt is automatically rejected.
+          match /vendorViews/{vendorUid}/rundown/{entryId} {
+            allow get: if (
+                isSignedIn()
+                && request.auth.uid == vendorUid
+                // VendorAccess marker must exist for this exact
+                // {ownerUid, eventId, vendorUid} triple. exists() only
+                // — we know the path is well-formed by the time the
+                // projection is written.
+                && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/vendorAccess/$(vendorUid))
+                // Belt-and-suspenders: confirm the document's own
+                // owner / event / vendor fields match the URL
+                // binding. Catches a stale doc whose marker was
+                // revoked but the projection was not yet swept.
+                && resource.data.ownerUid == ownerUid
+                && resource.data.eventId == eventId
+                && resource.data.vendorUid == vendorUid
+              );
+            // List queries against the projection subtree are gated
+            // by the same path + marker check, but resource.data is
+            // not bound for list — we only verify identity. The doc
+            // field checks above are run per-doc when the SDK
+            // hydrates individual matches.
+            allow list: if (
+                isSignedIn()
+                && request.auth.uid == vendorUid
+                && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/vendorAccess/$(vendorUid))
+              );
+            allow create, update, delete: if false;
+          }
+
+          // 2026-09-11 — Manus P12 vendor access marker.
+          //
+          // A per-(owner, event, vendor) doc that records "this vendor
+          // has been granted access to this event". Read by the vendor
+          // themselves; written only via Admin SDK (the
+          // helperAssignmentTrigger or a future grant access flow).
+          // Path is well-formed to match the marker check above.
+          match /vendorAccess/{vendorUid} {
+            allow read: if (
+                isSignedIn()
+                && request.auth.uid == vendorUid
+                && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/vendorAccess/$(vendorUid))
+              );
+            allow write: if false;
+          }
+
           match /teaCeremony/{personId} {
             allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
           }

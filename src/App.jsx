@@ -129,6 +129,11 @@ const VendorOnboarding = lazy(() => import('./screens/VendorOnboarding').then((m
 const ReceptionScanner = lazy(() => import('./screens/ReceptionScanner').then((m) => ({ default: m.ReceptionScanner })));
 const HelperDashboard = lazy(() => import('./screens/HelperDashboard').then((m) => ({ default: m.HelperDashboard })));
 const DiscoverDirectory = lazy(() => import('./screens/DiscoverDirectory').then((m) => ({ default: m.DiscoverDirectory })));
+// 2026-09-11 — P12.3 vendor rundown projection listener. Tiny
+// headless component, imported eagerly (no chunk overhead).
+import { VendorRundownProjection } from './components/VendorRundownProjection';
+import { VendorProjectionErrorBoundary } from './components/VendorProjectionErrorBoundary';
+import { VendorDelayReportModal } from './components/VendorDelayReportModal';
 const InvitationEditor = lazy(() => import('./screens/InvitationEditor').then((m) => ({ default: m.InvitationEditor })));
 const RedPacketManager = lazy(() => import('./screens/RedPacketManager').then((m) => ({ default: m.RedPacketManager })));
 import { MyProfile } from './screens/MyProfile';
@@ -1952,6 +1957,157 @@ export default function App() {
       u2 && u2();
     };
   }, [user?.uid, userRole]);
+
+  // 2026-09-11 — P12.3 vendor rundown projection state.
+  //
+  // Each per-event listener (mounted by
+  // <VendorRundownProjection>) pushes sanitized rows into
+  // vendorRundownSnapshots. We store rows from ALL events in a
+  // flat array; the dashboard filters by ownerUid/eventId per
+  // event-group block. Errors from any single listener surface
+  // as a banner-equivalent state that lives alongside
+  // vendorRundownSnapshots (per-event failure does NOT
+  // contaminate sibling events).
+  const [vendorRundownSnapshots, setVendorRundownSnapshots] = useState([]);
+  const [vendorRundownProjectionError, setVendorRundownProjectionError] =
+    useState(null);
+
+  // 2026-09-11 — delay-report Modal state. VendorDashboard
+  // hands us ownerUid/eventId/entryId/currentDelayMinutes; we
+  // open a lightweight Modal with delayMinutes input + note
+  // textarea, call reportVendorDelay, and surface the result
+  // via showToast. The Modal is rendered at the App level (not
+  // inside VendorDashboard) so VendorDashboard stays
+  // presentation-only.
+  const [delayReportModal, setDelayReportModal] = useState(null);
+  // (form fields are managed locally inside the Modal subtree;
+  // see openDelayReportModal below.)
+
+  const openDelayReportModal = useCallback((payload) => {
+    if (!payload || !payload.ownerUid || !payload.eventId || !payload.entryId) {
+      return;
+    }
+    setDelayReportModal({
+      ownerUid: payload.ownerUid,
+      eventId: payload.eventId,
+      entryId: payload.entryId,
+      currentDelayMinutes: payload.currentDelayMinutes || 0,
+    });
+  }, []);
+
+  const submitDelayReport = useCallback(
+    async ({ delayMinutes, note }) => {
+      if (!delayReportModal) return;
+      const { ownerUid, eventId, entryId } = delayReportModal;
+      try {
+        const { reportVendorDelay } = await import('./lib/vendorDelayReport');
+        const result = await reportVendorDelay({
+          ownerUid,
+          eventId,
+          entryId,
+          delayMinutes: Number(delayMinutes) || 0,
+          note: note || null,
+        });
+        if (result?.ok) {
+          showToast?.('已通知新人');
+          setDelayReportModal(null);
+        } else {
+          showToast?.(result?.message || '提交延誤報告失敗，請稍後再試。');
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[vendorDelayReport] failed:', err?.message);
+        showToast?.('提交延誤報告失敗，請稍後再試。');
+      }
+    },
+    [delayReportModal, showToast],
+  );
+
+  // 2026-09-11 — Dedupe (ownerUid, eventId) pairs across the
+  // three assigned-row sources. Each unique pair gets ONE
+  // <VendorRundownProjection> listener mounted, wrapped in a
+  // per-event ErrorBoundary so a single failure doesn't take
+  // out the assigned-rows + bell. The pairs are recomputed on
+  // every render via a memo so transient flicker (a row
+  // arriving then vanishing) doesn't churn listener
+  // subscriptions — we only react to stable pair sets.
+  const projectionPairs = useMemo(() => {
+    const seen = new Set();
+    const pairs = [];
+    const allAssigned = [
+      ...(assignedRundown || []),
+      ...(assignedResources || []),
+      ...(assignedTasks || []),
+    ];
+    for (const row of allAssigned) {
+      if (!row || !row.ownerUid || !row.eventId) continue;
+      const key = `${row.ownerUid}/${row.eventId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push({ ownerUid: row.ownerUid, eventId: row.eventId });
+    }
+    return pairs;
+  }, [assignedRundown, assignedResources, assignedTasks]);
+
+  // Per-pair onSnapshot handler: replace any rows for this
+  // pair with the new set. Idempotent across listener re-fires.
+  const handleProjectionSnapshot = useCallback((rows, meta) => {
+    if (!meta || !meta.ownerUid || !meta.eventId) return;
+    setVendorRundownSnapshots((prev) => {
+      const next = prev.filter(
+        (r) =>
+          !(
+            r &&
+            r.ownerUid === meta.ownerUid &&
+            r.eventId === meta.eventId
+          ),
+      );
+      // Tag rows with the projection source pair so the
+      // dashboard filter is a simple equality check.
+      const tagged = rows.map((r) => ({
+        ...r,
+        ownerUid: r.ownerUid || meta.ownerUid,
+        eventId: r.eventId || meta.eventId,
+      }));
+      return [...next, ...tagged];
+    });
+    // Clear any prior error for this pair — recovery is silent.
+    setVendorRundownProjectionError((prev) => {
+      if (!prev) return prev;
+      if (
+        prev.ownerUid === meta.ownerUid &&
+        prev.eventId === meta.eventId
+      ) {
+        return null;
+      }
+      return prev;
+    });
+  }, []);
+
+  const handleProjectionError = useCallback((err, meta) => {
+    // eslint-disable-next-line no-console
+    console.warn('[vendorProjection] listener failed:', err?.message, meta);
+    // Drop rows for the failed pair so the dashboard falls back
+    // to "今日全日流程未有完整截圖" for that event only. Sibling
+    // pairs are untouched.
+    if (meta && meta.ownerUid && meta.eventId) {
+      setVendorRundownSnapshots((prev) =>
+        prev.filter(
+          (r) =>
+            !(
+              r &&
+              r.ownerUid === meta.ownerUid &&
+              r.eventId === meta.eventId
+            ),
+        ),
+      );
+    }
+    setVendorRundownProjectionError({
+      ownerUid: meta?.ownerUid || null,
+      eventId: meta?.eventId || null,
+      message: err?.message || 'snapshot failed',
+    });
+  }, []);
 
    // Aggregate unread count for the header inbox badge.
    const totalUnread = inquiries.reduce((sum, inq) => {
@@ -5103,7 +5259,74 @@ export default function App() {
                     // and doesn't need to be re-fired.
                     setFocusedCommentId(null);
                   }}
+                  // 2026-09-11 — P12.3 vendor rundown projection.
+                  // Flat array of sanitized rows fed by the
+                  // per-event <VendorRundownProjection> listeners
+                  // rendered below. The dashboard filters by
+                  // (ownerUid, eventId) per event-group block.
+                  vendorRundownSnapshots={vendorRundownSnapshots}
+                  // 2026-09-11 — P12.3 vendor delay-report
+                  // callback. VendorDashboard fires this when the
+                  // vendor clicks 報告延誤 on an assigned snapshot
+                  // row. We open a lightweight Modal (rendered
+                  // outside the dashboard tree) so the dashboard
+                  // stays presentation-only.
+                  onReportDelay={openDelayReportModal}
                 />
+                {/* 2026-09-11 — P12.3 per-event rundown
+                    projection listeners. Mounted INSIDE the
+                    vendor-dashboard LazyScreen so they only
+                    exist while the vendor is on the dashboard.
+                    Each pair gets ONE listener, wrapped in a
+                    per-event ErrorBoundary so a single listener
+                    crash doesn't take out the assigned-rows +
+                    bell. The boundary renders null on caught
+                    error → the dashboard gracefully falls back to
+                    the "今日全日流程未有完整截圖" caption for
+                    that event only. */}
+                {user?.uid && projectionPairs.map((p) => (
+                  <VendorProjectionErrorBoundary
+                    key={`${p.ownerUid}/${p.eventId}`}
+                    fallback={null}
+                    onError={(err, info, propsBag) => {
+                      // eslint-disable-next-line no-console
+                      console.warn(
+                        '[VendorProjection] boundary caught:',
+                        err?.message,
+                        info?.componentStack?.slice(0, 200),
+                        p,
+                      );
+                      handleProjectionError(err, {
+                        ownerUid: p.ownerUid,
+                        eventId: p.eventId,
+                        source: 'boundary',
+                      });
+                      // Reference unused vars to satisfy
+                      // no-unused-vars lints in some configs.
+                      void propsBag;
+                    }}
+                  >
+                    <VendorRundownProjection
+                      ownerUid={p.ownerUid}
+                      eventId={p.eventId}
+                      vendorUid={user.uid}
+                      onSnapshot={handleProjectionSnapshot}
+                      onError={handleProjectionError}
+                    />
+                  </VendorProjectionErrorBoundary>
+                ))}
+                {/* 2026-09-11 — P12.3 vendor delay-report Modal.
+                    Renders only when the vendor clicks 報告延誤
+                    on an assigned snapshot row. State is held at
+                    the App level so the dashboard can stay
+                    presentation-only. */}
+                {delayReportModal && (
+                  <VendorDelayReportModal
+                    initial={delayReportModal.currentDelayMinutes}
+                    onCancel={() => setDelayReportModal(null)}
+                    onSubmit={submitDelayReport}
+                  />
+                )}
               </LazyScreen>
             )}
 

@@ -90,6 +90,147 @@ const TASK_STATUSES = [
 
 const STATUS_BY_ID = Object.fromEntries(TASK_STATUSES.map((s) => [s.id, s]));
 
+// 2026-09-11 — P12.3 vendor rundown projection section.
+//
+// Read-only list of every rundown entry for a single event.
+// Renders BEFORE the assigned-rows "🕒 大日流程" subsection
+// inside the event-group block. The component is intentionally
+// UI-only: it never reads Firestore directly. App.jsx owns the
+// per-event subscription via <VendorRundownProjection/>.
+//
+// Visual rules:
+//   * non-assigned rows: muted (gray-50), no action buttons
+//   * assigned rows: teal outline + '你的工作' badge + 報告延誤 button
+//   * approved delay marker: amber pill when approvedDelayMinutes > 0
+//   * empty state: subtle '今日全日流程未有完整截圖' caption — never
+//     hide the section (the toggle "只看我的工作" needs an anchor)
+//
+// Why this is its own component rather than inlined in the event
+// group? Two reasons:
+//   1. The event-group IIFE in VendorDashboard is already deep
+//      enough — pulling this out keeps the section readable.
+//   2. The snapshot test imports this in isolation to assert the
+//      heading + badge + toggle without spinning up the whole
+//      VendorDashboard state machine.
+export function VendorRundownSnapshotSection({ rows = [], onReportDelay = null }) {
+  const [onlyMine, setOnlyMine] = useState(false);
+  const visibleRows = onlyMine
+    ? rows.filter((row) => row.isAssignedToViewer === true)
+    : rows;
+  return (
+    <div
+      className="mb-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3"
+      data-testid="vendor-rundown-snapshot"
+    >
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h4 className="text-xs font-bold text-slate-700">
+            📅 全日流程 (只讀)
+          </h4>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            其他商戶嘅工作只供你理解流程，不能修改
+          </p>
+        </div>
+        <label className="flex items-center gap-1.5 text-[11px] text-slate-600 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="accent-[#0F766E]"
+            checked={onlyMine}
+            onChange={(e) => setOnlyMine(e.target.checked)}
+            data-testid="vendor-rundown-only-mine"
+          />
+          <span>只看我的工作</span>
+        </label>
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-[11px] text-slate-400 italic">
+          今日全日流程未有完整截圖
+        </p>
+      ) : (
+        <ul className="space-y-1.5">
+          {visibleRows.map((row) => {
+            const isMine = row.isAssignedToViewer === true;
+            const approved =
+              typeof row.approvedDelayMinutes === 'number' &&
+              row.approvedDelayMinutes > 0;
+            return (
+              <li
+                key={`${row.ownerUid || ''}_${row.eventId || ''}_${row.id}`}
+                data-testid="vendor-rundown-row"
+                data-assigned-to-viewer={isMine ? 'true' : 'false'}
+                className={
+                  isMine
+                    ? 'bg-white border border-[#14B8A6]/60 rounded-md p-2 flex items-start gap-2'
+                    : 'bg-gray-50 rounded-md p-2 flex items-start gap-2 text-slate-600'
+                }
+              >
+                <span
+                  className={
+                    isMine
+                      ? 'text-xs font-bold text-[#0F766E] w-12 shrink-0'
+                      : 'text-xs font-mono text-slate-500 w-12 shrink-0'
+                  }
+                >
+                  {row.startTime || '—'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span
+                      className={
+                        isMine
+                          ? 'text-xs font-bold text-[#1F2937]'
+                          : 'text-xs text-slate-700'
+                      }
+                    >
+                      {row.title || '（未命名項目）'}
+                    </span>
+                    {isMine && (
+                      <span
+                        className="text-[10px] font-black px-1.5 py-0.5 rounded-full bg-[#14B8A6] text-white"
+                        data-testid="vendor-rundown-mine-badge"
+                      >
+                        你的工作
+                      </span>
+                    )}
+                    {approved && (
+                      <span
+                        className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#FCD34D] text-[#1F2937]"
+                        data-testid="vendor-rundown-approved-delay"
+                      >
+                        已延遲 {row.approvedDelayMinutes} 分鐘
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-0.5 truncate">
+                    📍 {row.location || '地點待定'}
+                  </p>
+                </div>
+                {isMine && typeof onReportDelay === 'function' && (
+                  <button
+                    type="button"
+                    className="shrink-0 text-[10px] font-bold px-2 py-1 rounded-md border border-[#14B8A6] text-[#0F766E] hover:bg-[#14B8A6] hover:text-white transition-colors"
+                    data-testid="vendor-rundown-report-delay"
+                    onClick={() =>
+                      onReportDelay({
+                        ownerUid: row.ownerUid,
+                        eventId: row.eventId,
+                        entryId: row.entryId || row.id,
+                        currentDelayMinutes: row.approvedDelayMinutes || 0,
+                      })
+                    }
+                  >
+                    報告延誤
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function VendorAssignedItem({ item, currentUser, forceExpanded = false, onFocusedRef, focusedCommentId = null, onFocusedCommentHandled = null }) {
   const [expanded, setExpanded] = useState(forceExpanded);
   const rowRef = useRef(null);
@@ -321,6 +462,26 @@ export function VendorDashboard({
   // task list and notification inbox are independent concerns.
   // Default null = no banner.
   vendorAssignedTasksError = null,
+  // 2026-09-11 — P12.3 vendor rundown projection. Sanitized,
+  // read-only copy of the couple's full rundown (not just the
+  // assigned rows) sourced from
+  // /artifacts/{appId}/users/{ownerUid}/events/{eventId}/
+  //   vendorViews/{vendorUid}/rundown/{entryId}
+  // via per-event <VendorRundownProjection> listeners in App.jsx.
+  // Each doc has isAssignedToViewer + operationalStatus +
+  // approvedDelayMinutes. The dashboard renders a separate
+  // read-only "📅 全日流程" section per event so vendors
+  // understand the surrounding context of the work they're
+  // assigned. Defaults to empty array so existing callers (and
+  // tests) don't have to provide it.
+  vendorRundownSnapshots = [],
+  // 2026-09-11 — P12.3 vendor delay-report callback. Fires when
+  // the vendor clicks 報告延誤 on an assigned snapshot row.
+  // App.jsx wires this to the reportVendorDelay callable +
+  // Modal. The dashboard is intentionally UI-only — it does
+  // NOT call httpsCallable directly. Default no-op so missing
+  // wiring is silent (the button just won't open a modal).
+  onReportDelay = null,
 }) {
   const vendorName = vendor?.name || '（未設定商戶名稱）';
   // 2026-07-15 — hierarchical category: getVendorCategoryLabel resolves
@@ -666,6 +827,37 @@ export function VendorDashboard({
                       {rd.length + rs.length + tk.length} 個
                     </span>
                   </div>
+                  {(() => {
+                    // 2026-09-11 — P12.3 vendor rundown projection
+                    // section. Reads from
+                    // vendorRundownSnapshots (prop, fed by
+                    // <VendorRundownProjection> listeners in
+                    // App.jsx) and renders a read-only timeline
+                    // of every entry for this event. Only the
+                    // rows where isAssignedToViewer === true
+                    // show the 報告延誤 button + click handler;
+                    // other rows are pure read-only context.
+                    const snapshotRows = Array.isArray(vendorRundownSnapshots)
+                      ? vendorRundownSnapshots.filter(
+                          (r) =>
+                            r &&
+                            r.ownerUid === ev.ownerUid &&
+                            r.eventId === ev.eventId,
+                        )
+                      : [];
+                    const sorted = [...snapshotRows].sort((a, b) => {
+                      const at = a.startTime || '';
+                      const bt = b.startTime || '';
+                      if (at !== bt) return at.localeCompare(bt);
+                      return (a.sequence ?? 0) - (b.sequence ?? 0);
+                    });
+                    return (
+                      <VendorRundownSnapshotSection
+                        rows={sorted}
+                        onReportDelay={onReportDelay}
+                      />
+                    );
+                  })()}
                   {rd.length > 0 && (
                     <div className="mb-3">
                       <h4 className="text-xs font-bold text-emerald-800 mb-1.5">
