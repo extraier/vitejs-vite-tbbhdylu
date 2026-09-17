@@ -115,6 +115,70 @@ export function eventItemPath(
 }
 
 /**
+ * 2026-09-12 — Hermes P13 (seating chart): convenience builders
+ * for the four seating-related subcollections.
+ *
+ * Each collection is event-scoped:
+ *   /seating/{seatingId}             — floor plan meta (style, canvas)
+ *   /tables/{tableId}                — physical table geometry
+ *   /tableAssignments/{guestId}      — guest→table mapping
+ *   /floorDecor/{decorId}            — walls/stage/dance floor
+ *
+ * Helpers return strings, never DocumentReference objects — same
+ * convention as the rest of firestorePaths.ts so they can be
+ * unit-tested without Firebase mock and work with Cloud Function
+ * responses that only carry path strings.
+ */
+
+export type SeatingCollection = 'seating' | 'tables' | 'tableAssignments' | 'floorDecor';
+
+export function seatingItemPath(
+  appId: string,
+  ctx: EventScopedPath & { collection: SeatingCollection; itemId: string },
+): string {
+  return eventItemPath(appId, {
+    ownerUid: ctx.ownerUid,
+    eventId: ctx.eventId,
+    kind: ctx.collection,
+    itemId: ctx.itemId,
+  });
+}
+
+export function seatingCollectionPath(
+  appId: string,
+  ctx: EventScopedPath & { collection: SeatingCollection },
+): string {
+  return `artifacts/${appId}/users/${ctx.ownerUid}/events/${ctx.eventId}/${ctx.collection}`;
+}
+
+/** Parse a path under /events/{eventId}/{collection}/{itemId} back to its parts. */
+export function parseSeatingItemPath(
+  path: string,
+): (EventScopedPath & { collection: SeatingCollection; itemId: string }) | null {
+  if (!path || typeof path !== 'string') return null;
+  const segs = path.split('/').filter(Boolean);
+  // artifacts/{appId}/users/{ownerUid}/events/{eventId}/{collection}/{itemId}
+  // 0         1        2       3          4        5         6
+  if (segs.length < 7) return null;
+  if (segs[0] !== 'artifacts' || segs[2] !== 'users' || segs[4] !== 'events') return null;
+  // Reject foreign-app namespaces. The canonical APP_ID for this
+  // codebase is 'savetheday-production' — the rules file references
+  // it as a literal in vendorAccess and vendorViews match
+  // blocks, so anything else is a different app entirely.
+  if (segs[1] !== 'savetheday-production') return null;
+  const collection = segs[6] as SeatingCollection;
+  if (!['seating', 'tables', 'tableAssignments', 'floorDecor'].includes(collection)) {
+    return null;
+  }
+  return {
+    ownerUid: segs[3],
+    eventId: segs[5],
+    collection,
+    itemId: segs[7] ?? '',
+  };
+}
+
+/**
  * Parse a collectionGroup-style owner-scoped path (e.g. from
  * `collectionGroup('socialProofs').get()` where the doc sits at
  * `/users/{uid}/socialProofs/{proofId}` or similar two-level-deep nested).

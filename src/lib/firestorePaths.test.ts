@@ -8,6 +8,10 @@ import {
   parseOwnerUid,
   parseGuestQrToken,
   assertAssignedTaskContext,
+  seatingItemPath,
+  seatingCollectionPath,
+  parseSeatingItemPath,
+  type SeatingCollection,
 } from './firestorePaths';
 
 describe('parseEventScopedRef', () => {
@@ -198,5 +202,101 @@ describe('assertAssignedTaskContext', () => {
       expect((e as Error).message).toContain('kind');
       expect((e as Error).message).toContain('itemId');
     }
+  });
+});
+
+/* ============================================================
+ * 2026-09-12 — Hermes P13 (seating chart) path helpers
+ * ============================================================ */
+const APP = 'savetheday-production';
+const P = (rest: string) => `artifacts/${APP}/users/owner-a/events/event-1/${rest}`;
+
+describe('seatingItemPath', () => {
+  it('builds a seating meta path', () => {
+    expect(
+      seatingItemPath(APP, {
+        ownerUid: 'owner-a',
+        eventId: 'event-1',
+        collection: 'seating',
+        itemId: 'main',
+      }),
+    ).toBe(P('seating/main'));
+  });
+
+  it('builds a tables path', () => {
+    expect(
+      seatingItemPath(APP, {
+        ownerUid: 'owner-a',
+        eventId: 'event-1',
+        collection: 'tables',
+        itemId: 't1',
+      }),
+    ).toBe(P('tables/t1'));
+  });
+
+  it('builds a tableAssignments path (guestId = docId)', () => {
+    expect(
+      seatingItemPath(APP, {
+        ownerUid: 'owner-a',
+        eventId: 'event-1',
+        collection: 'tableAssignments',
+        itemId: 'guest-123',
+      }),
+    ).toBe(P('tableAssignments/guest-123'));
+  });
+
+  it('builds a floorDecor path', () => {
+    expect(
+      seatingItemPath(APP, {
+        ownerUid: 'owner-a',
+        eventId: 'event-1',
+        collection: 'floorDecor',
+        itemId: 'wall-1',
+      }),
+    ).toBe(P('floorDecor/wall-1'));
+  });
+
+  it('round-trips through parseSeatingItemPath', () => {
+    for (const collection of ['seating', 'tables', 'tableAssignments', 'floorDecor'] as SeatingCollection[]) {
+      const path = seatingItemPath(APP, {
+        ownerUid: 'owner-a', eventId: 'event-1', collection, itemId: 'abc',
+      });
+      expect(parseSeatingItemPath(path)).toEqual({
+        ownerUid: 'owner-a', eventId: 'event-1', collection, itemId: 'abc',
+      });
+    }
+  });
+});
+
+describe('seatingCollectionPath', () => {
+  it('returns the collection root without itemId', () => {
+    expect(
+      seatingCollectionPath(APP, {
+        ownerUid: 'owner-a', eventId: 'event-1', collection: 'tables',
+      }),
+    ).toBe(P('tables'));
+  });
+});
+
+describe('parseSeatingItemPath — guards', () => {
+  it('returns null on a non-seating path', () => {
+    expect(parseSeatingItemPath(P('rundown/r1'))).toBeNull();
+  });
+
+  it('returns null on a foreign-app path', () => {
+    expect(
+      parseSeatingItemPath('artifacts/other-app/users/o/events/e/tables/t1'),
+    ).toBeNull();
+  });
+
+  it('returns null on a too-short path', () => {
+    expect(parseSeatingItemPath('artifacts/x/users/o')).toBeNull();
+  });
+
+  it('returns null on a non-string input', () => {
+    // @ts-expect-error – intentionally wrong type
+    expect(parseSeatingItemPath(null)).toBeNull();
+    // @ts-expect-error – intentionally wrong type
+    expect(parseSeatingItemPath(42)).toBeNull();
   });
 });

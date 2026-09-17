@@ -1,0 +1,699 @@
+/**
+ * src/screens/CoupleSeating.jsx
+ *
+ * 2026-09-12 — Hermes P13 (seating chart MVP).
+ *
+ * Phase 1.1-1.4 owner-facing screen for the Save The Day
+ * wedding reception seating chart. Renders:
+ *
+ *   1. Preset selector — 中式 12 圍 / 西式 8 long / 自訂空板
+ *      3 buttons at top of screen. Clicking seeds the tables
+ *      collection with the chosen preset geometry.
+ *
+ *   2. Floor plan canvas — SVG-based, mobile-friendly. Renders
+ *      each table as a draggable shape (rect for 'long'/'rect',
+ *      circle for 'round'). Tap-empty = create, tap-table = edit,
+ *      long-press = delete (delete opens a confirm modal first).
+ *
+ *   3. Table editor modal — opens on tap-table or tap-create. Edits
+ *      label, capacity, tableCategory, rotation.
+ *
+ * Phase 1.5 (guest→table drag-drop), 1.6 (dietary chips), 1.7 (toast)
+ * come in P13.2. This MVP focuses on getting the schema in
+ * place + a usable empty-state editor so owners can confirm
+ * the data model is right before we invest in the polish.
+ *
+ * State store: zustand-free; we hold the in-memory table list in
+ * useState and snap it to Firestore via batch writes. The
+ * Firestore listener is the source of truth on mount + after
+ * every write returns. This mirrors how CoupleChecklist manages
+ * items.
+ *
+ * Permissions: this entire screen is owner/co-owner only. The
+ * helper drag-drop variant is a different screen (Phase 2.2).
+ */
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { seatingItemPath, seatingCollectionPath } from '../lib/firestorePaths';
+
+const APP_ID = 'savetheday-production';
+
+export function CoupleSeating({
+  ownerUid,
+  eventId,
+  onBack,
+  onOpenToast,
+}) {
+  // Live data
+  const [tables, setTables] = useState([]);
+  const [meta, setMeta] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Editor state
+  const [editingTable, setEditingTable] = useState(null);
+  // null = closed, 'new' = new table, { id, ... } = existing
+
+  const [presetsOpen, setPresetsOpen] = useState(false);
+
+  // Refs
+  const svgRef = useRef(null);
+  const metaRef = useRef(null);
+  metaRef.current = meta;
+
+  const tablesRef = useRef([]);
+  tablesRef.current = tables;
+
+  /* ---------- subscriptions ---------- */
+  useEffect(() => {
+    if (!ownerUid || !eventId) return;
+    setLoading(true);
+
+    const metaUnsub = onSnapshot(
+      doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'seating', itemId: 'main' })),
+      (snap) => {
+        if (snap.exists()) {
+          setMeta(snap.data());
+        } else {
+          setMeta({
+            style: 'custom',
+            canvasWidth: 1200,
+            canvasHeight: 800,
+            background: 'banquet',
+            decorElements: [],
+          });
+        }
+      },
+      (err) => {
+        console.error('[seating] meta listener', err);
+      },
+    );
+
+    const tablesUnsub = onSnapshot(
+      collection(db, seatingCollectionPath(APP_ID, { ownerUid, eventId, collection: 'tables' })),
+      (snap) => {
+        const rows = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+        setTables(rows);
+        setLoading(false);
+      },
+      (err) => {
+        console.error('[seating] tables listener', err);
+        setLoading(false);
+      },
+    );
+
+    return () => {
+      metaUnsub();
+      tablesUnsub();
+    };
+  }, [ownerUid, eventId]);
+
+  /* ---------- helpers ---------- */
+  const showToast = useCallback(
+    (msg) => {
+      if (typeof onOpenToast === 'function') onOpenToast(msg);
+    },
+    [onOpenToast],
+  );
+
+  /* ---------- save / delete ---------- */
+  const saveMeta = useCallback(
+    async (next) => {
+      if (!ownerUid || !eventId) return;
+      try {
+        await setDoc(
+          doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'seating', itemId: 'main' })),
+          { ...next, updatedAt: Date.now() },
+          { merge: true },
+        );
+        showToast('已儲存');
+      } catch (e) {
+        console.error('[seating] saveMeta', e);
+        showToast('儲存失敗，請重試');
+      }
+    },
+    [ownerUid, eventId, showToast],
+  );
+
+  const saveTable = useCallback(
+    async (table) => {
+      if (!ownerUid || !eventId) return;
+      const { id, ...rest } = table;
+      const tableId = id || `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      try {
+        await setDoc(
+          doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tables', itemId: tableId })),
+          {
+            label: rest.label || 'T-01',
+            shape: rest.shape || 'round',
+            capacity: rest.capacity ?? 10,
+            tableCategory: rest.tableCategory || 'friends',
+            x: rest.x ?? 200,
+            y: rest.y ?? 200,
+            rotation: rest.rotation ?? 0,
+            source: rest.source || 'manual',
+            updatedAt: Date.now(),
+          },
+        );
+        setEditingTable(null);
+        showToast(id ? '已更新' : '已新增');
+      } catch (e) {
+        console.error('[seating] saveTable', e);
+        showToast('儲存失敗，請重試');
+      }
+    },
+    [ownerUid, eventId, showToast],
+  );
+
+  const deleteTable = useCallback(
+    async (tableId) => {
+      if (!ownerUid || !eventId) return;
+      try {
+        await deleteDoc(
+          doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tables', itemId: tableId })),
+        );
+        showToast('已刪除');
+      } catch (e) {
+        console.error('[seating] deleteTable', e);
+        showToast('刪除失敗，請重試');
+      }
+    },
+    [ownerUid, eventId, showToast],
+  );
+
+  /* ---------- presets ---------- */
+  const applyPreset = useCallback(
+    async (preset) => {
+      if (!ownerUid || !eventId) return;
+      // Sanity: confirm if user already has tables
+      if (tablesRef.current.length > 0) {
+        const ok = typeof window !== 'undefined' && window.confirm(
+          '繼續會清空現有嘅枱同座位。確定要套用新 preset 嗎？',
+        );
+        if (!ok) return;
+      }
+      const batch = writeBatch(db);
+      const seed = presetTables(preset);
+
+      // Wipe existing tables
+      tablesRef.current.forEach((t) => {
+        batch.delete(
+          doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tables', itemId: t.id })),
+        );
+      });
+      seed.forEach((row) => {
+        const ref = doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tables', itemId: row.id }));
+        batch.set(ref, { ...row, source: 'preset', updatedAt: Date.now() });
+      });
+      batch.set(
+        doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'seating', itemId: 'main' })),
+        {
+          style: preset,
+          canvasWidth: preset === 'western' ? 1600 : 1200,
+          canvasHeight: preset === 'western' ? 900 : 800,
+          background: 'banquet',
+          decorElements: [],
+          updatedAt: Date.now(),
+        },
+        { merge: true },
+      );
+
+      try {
+        await batch.commit();
+        setPresetsOpen(false);
+        showToast(`已套用 ${presetLabel(preset)} preset`);
+      } catch (e) {
+        console.error('[seating] applyPreset', e);
+        showToast('套用 preset 失敗，請重試');
+      }
+    },
+    [ownerUid, eventId, showToast],
+  );
+
+  /* ---------- drag/click ---------- */
+  const onCanvasClick = useCallback(
+    (e) => {
+      // Tap on empty SVG (no table hit) creates a new table at the click point.
+      const svg = svgRef.current;
+      if (!svg) return;
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const local = pt.matrixTransform(ctm.inverse());
+      setEditingTable({
+        x: Math.max(40, Math.round(local.x)),
+        y: Math.max(40, Math.round(local.y)),
+        shape: 'round',
+        capacity: 10,
+        label: `T-${String(tablesRef.current.length + 1).padStart(2, '0')}`,
+        tableCategory: 'friends',
+        rotation: 0,
+        source: 'manual',
+      });
+    },
+    [],
+  );
+
+  /* ---------- rendering ---------- */
+  const dim = useMemo(() => {
+    const w = meta?.canvasWidth ?? 1200;
+    const h = meta?.canvasHeight ?? 800;
+    return { w, h };
+  }, [meta]);
+
+  if (!ownerUid || !eventId) {
+    return (
+      <div style={{ padding: 24 }}>
+        <p>請先選擇一個婚禮活動。</p>
+        <button onClick={onBack}>← 返回</button>
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="couple-seating" style={{ padding: 16, maxWidth: 1024, margin: '0 auto' }}>
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div>
+          <button onClick={onBack} style={btnGhost}>← 返回</button>
+          <h2 style={{ margin: '8px 0 4px', color: '#0F766E' }}>🪑 Reception 座位表</h2>
+          <p style={{ margin: 0, color: '#64748B', fontSize: 13 }}>
+            {loading ? '載入緊…' : `現有 ${tables.length} 張枱 · 風格：${presetLabel(meta?.style ?? 'custom')}`}
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setPresetsOpen(true)} style={btnSecondary}>
+            ⚙️ 套用 preset
+          </button>
+        </div>
+      </header>
+
+      <div
+        style={{
+          border: '1px solid #E2E8F0',
+          borderRadius: 12,
+          background: '#FAFAF9',
+          position: 'relative',
+          width: '100%',
+          maxWidth: dim.w,
+          aspectRatio: `${dim.w} / ${dim.h}`,
+          overflow: 'hidden',
+        }}
+      >
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${dim.w} ${dim.h}`}
+          width="100%"
+          height="100%"
+          onClick={onCanvasClick}
+          data-testid="seating-canvas"
+          style={{ display: 'block', touchAction: 'manipulation' }}
+        >
+          {/* simple banquet hall grid (decor) */}
+          <defs>
+            <pattern id="floor-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#E2E8F0" strokeWidth="0.5" />
+            </pattern>
+          </defs>
+          <rect width={dim.w} height={dim.h} fill="url(#floor-grid)" />
+
+          {/* tables */}
+          {tables.map((t) => {
+            const isRound = t.shape === 'round';
+            const w = isRound ? 80 : 160;
+            const h = isRound ? 80 : 60;
+            return (
+              <g
+                key={t.id}
+                transform={`translate(${t.x}, ${t.y}) rotate(${t.rotation ?? 0} ${w / 2} ${h / 2})`}
+                data-testid={`seating-table-${t.id}`}
+                style={{ cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingTable({ ...t });
+                }}
+              >
+                {isRound ? (
+                  <ellipse cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2} fill="#FFFFFF" stroke="#14B8A6" strokeWidth="2" />
+                ) : (
+                  <rect x="0" y="0" width={w} height={h} rx="6" fill="#FFFFFF" stroke="#14B8A6" strokeWidth="2" />
+                )}
+                <text x={w / 2} y={h / 2 - 4} fontSize="14" fontWeight="600" fill="#0F766E" textAnchor="middle">
+                  {t.label}
+                </text>
+                <text x={w / 2} y={h / 2 + 14} fontSize="11" fill="#64748B" textAnchor="middle">
+                  {t.capacity} 座位 · {t.tableCategory}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+
+        {tables.length === 0 && !loading && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+              color: '#94A3B8',
+              textAlign: 'center',
+            }}
+          >
+            <div>
+              <p style={{ marginBottom: 12 }}>空白 floor plan</p>
+              <p style={{ fontSize: 12 }}>撳空白處加枱，或者用右上「套用 preset」一鍵生成</p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <p style={{ marginTop: 8, color: '#64748B', fontSize: 11 }}>
+        撳空白 = 加新枱 · 撳枱 = 編輯 · 拖移仲未做，要用 P13.2 嘅 react-konva
+      </p>
+
+      {/* Editor modal */}
+      {editingTable && (
+        <TableEditorModal
+          initial={editingTable}
+          onSave={saveTable}
+          onCancel={() => setEditingTable(null)}
+          onDelete={editingTable.id ? () => {
+            if (typeof window !== 'undefined' && window.confirm(`刪除 ${editingTable.label}?`)) {
+              deleteTable(editingTable.id).then(() => setEditingTable(null));
+            }
+          } : null}
+        />
+      )}
+
+      {/* Preset sheet */}
+      {presetsOpen && (
+        <PresetSheet
+          onPick={(p) => applyPreset(p)}
+          onCancel={() => setPresetsOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ---------- subcomponents ---------- */
+
+function TableEditorModal({ initial, onSave, onCancel, onDelete }) {
+  const [draft, setDraft] = useState(initial);
+  useEffect(() => setDraft(initial), [initial]);
+  const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
+  return (
+    <div
+      role="dialog"
+      aria-label="編輯枱"
+      data-testid="seating-table-editor"
+      style={modalBackdrop}
+      onClick={onCancel}
+    >
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ marginTop: 0, color: '#0F766E' }}>{initial.id ? '編輯枱' : '新枱'}</h3>
+        <label style={label}>
+          標籤
+          <input
+            value={draft.label ?? ''}
+            onChange={(e) => set('label', e.target.value)}
+            data-testid="seating-table-label"
+            style={input}
+          />
+        </label>
+        <label style={label}>
+          形狀
+          <select
+            value={draft.shape}
+            onChange={(e) => set('shape', e.target.value)}
+            data-testid="seating-table-shape"
+            style={input}
+          >
+            <option value="round">圓枱（圍）</option>
+            <option value="rect">長枱（西式）</option>
+            <option value="long">超長枱（主家席）</option>
+          </select>
+        </label>
+        <label style={label}>
+          容量 (1-40)
+          <input
+            type="number"
+            min={1}
+            max={40}
+            value={draft.capacity ?? 10}
+            onChange={(e) => set('capacity', Number(e.target.value))}
+            data-testid="seating-table-capacity"
+            style={input}
+          />
+        </label>
+        <label style={label}>
+          類別
+          <select
+            value={draft.tableCategory}
+            onChange={(e) => set('tableCategory', e.target.value)}
+            data-testid="seating-table-category"
+            style={input}
+          >
+            <option value="bride_groom">主家席</option>
+            <option value="groomsmen">兄弟姊妹席</option>
+            <option value="bridesmaid">姐妹席</option>
+            <option value="elder_family">長輩席</option>
+            <option value="friends">朋友席</option>
+            <option value="kids">小朋友席</option>
+            <option value="colleagues">同事席</option>
+            <option value="ceremony">證婚席</option>
+            <option value="other">其他</option>
+          </select>
+        </label>
+        <label style={label}>
+          旋轉（0/90/180/270）
+          <input
+            type="number"
+            min={0}
+            max={270}
+            step={90}
+            value={draft.rotation ?? 0}
+            onChange={(e) => set('rotation', Number(e.target.value))}
+            style={input}
+          />
+        </label>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+          <div>
+            {onDelete && (
+              <button onClick={onDelete} style={btnDanger}>刪除</button>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={onCancel} style={btnGhost}>取消</button>
+            <button
+              onClick={() => onSave(draft)}
+              data-testid="seating-table-save"
+              style={btnPrimary}
+            >
+              💾 儲存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PresetSheet({ onPick, onCancel }) {
+  return (
+    <div role="dialog" style={modalBackdrop} onClick={onCancel}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ marginTop: 0, color: '#0F766E' }}>套用 preset</h3>
+        <p style={{ color: '#64748B', fontSize: 13 }}>一鍵生成整個 floor plan 嘅骨架</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 12 }}>
+          <PresetCard
+            title="中式 12 圍"
+            description="主家席頂位 + 12 圍圓枱環繞舞台"
+            onClick={() => onPick('chinese')}
+          />
+          <PresetCard
+            title="西式 8 long"
+            description="Head table 上方 + 8 長枱分兩行 + 中央 dance floor"
+            onClick={() => onPick('western')}
+          />
+          <PresetCard
+            title="自訂空板"
+            description="清空 + 一張空白 canvas 俾你由零開始"
+            onClick={() => onPick('custom')}
+          />
+        </div>
+        <div style={{ marginTop: 16, textAlign: 'right' }}>
+          <button onClick={onCancel} style={btnGhost}>取消</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PresetCard({ title, description, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      data-testid={`preset-${title}`}
+      style={{
+        cursor: 'pointer',
+        background: '#F0FDFA',
+        border: '1.5px solid #14B8A6',
+        borderRadius: 12,
+        padding: 12,
+        textAlign: 'left',
+        color: '#0F766E',
+      }}
+    >
+      <strong style={{ display: 'block', marginBottom: 4 }}>{title}</strong>
+      <span style={{ fontSize: 11, color: '#64748B' }}>{description}</span>
+    </button>
+  );
+}
+
+/* ---------- preset geometry ---------- */
+
+function presetTables(style) {
+  if (style === 'chinese') return chinesePreset();
+  if (style === 'western') return westernPreset();
+  return []; // custom = empty board
+}
+
+function chinesePreset() {
+  // 1 head table + 12 圍 圓枱 arranged in a fan around the stage
+  const rows = [];
+  // 主家席 (small rectangle at top)
+  rows.push({ id: 'p-c-bride', label: '主家席', shape: 'long', capacity: 12, tableCategory: 'bride_groom', x: 500, y: 80, rotation: 0 });
+  // 證婚席
+  rows.push({ id: 'p-c-ceremony', label: '證婚席', shape: 'rect', capacity: 8, tableCategory: 'ceremony', x: 540, y: 200, rotation: 0 });
+  // 12 圍 around the dance floor
+  const cx = 600, cy = 500;
+  const ring = 240;
+  for (let i = 0; i < 12; i++) {
+    const angle = (i / 12) * Math.PI * 2 - Math.PI / 2; // start from 12 o'clock
+    const x = cx + Math.cos(angle) * ring - 40;
+    const y = cy + Math.sin(angle) * ring * 0.7 - 40;
+    rows.push({
+      id: `p-c-${i + 1}`,
+      label: `第 ${i + 1} 圍`,
+      shape: 'round',
+      capacity: 10,
+      tableCategory: 'friends',
+      x: Math.round(x), y: Math.round(y), rotation: 0,
+    });
+  }
+  return rows;
+}
+
+function westernPreset() {
+  const rows = [];
+  // Head table
+  rows.push({ id: 'p-w-head', label: 'Head Table', shape: 'long', capacity: 8, tableCategory: 'bride_groom', x: 700, y: 100, rotation: 0 });
+  // Sweetheart
+  rows.push({ id: 'p-w-sweet', label: '新郎新娘', shape: 'round', capacity: 2, tableCategory: 'bride_groom', x: 780, y: 220, rotation: 0 });
+  // 8 long tables in 2 rows of 4
+  const ys = [380, 600];
+  ys.forEach((y, row) => {
+    for (let c = 0; c < 4; c++) {
+      rows.push({
+        id: `p-w-${row}-${c}`,
+        label: `T-${row * 4 + c + 1}`,
+        shape: 'rect',
+        capacity: 10,
+        tableCategory: row === 0 && c === 0 ? 'groomsmen' : 'friends',
+        x: 200 + c * 320, y, rotation: 0,
+      });
+    }
+  });
+  // Dance floor
+  rows.push({ id: 'p-w-dance', label: '舞池', shape: 'rect', capacity: 0, tableCategory: 'ceremony', x: 720, y: 400, rotation: 0 });
+  return rows;
+}
+
+function presetLabel(style) {
+  if (style === 'chinese') return '中式 12 圍';
+  if (style === 'western') return '西式 8 long';
+  return '自訂空板';
+}
+
+/* ---------- styles ---------- */
+
+const btnPrimary = {
+  padding: '8px 16px',
+  background: '#14B8A6',
+  color: '#FFFFFF',
+  border: 'none',
+  borderRadius: 8,
+  cursor: 'pointer',
+  fontWeight: 600,
+};
+
+const btnSecondary = {
+  padding: '8px 12px',
+  background: '#F0FDFA',
+  color: '#0F766E',
+  border: '1px solid #14B8A6',
+  borderRadius: 8,
+  cursor: 'pointer',
+  fontWeight: 600,
+};
+
+const btnGhost = {
+  padding: '8px 12px',
+  background: 'transparent',
+  color: '#64748B',
+  border: '1px solid #E2E8F0',
+  borderRadius: 8,
+  cursor: 'pointer',
+};
+
+const btnDanger = {
+  padding: '8px 12px',
+  background: '#DC2626',
+  color: '#FFFFFF',
+  border: 'none',
+  borderRadius: 8,
+  cursor: 'pointer',
+};
+
+const label = {
+  display: 'block',
+  marginTop: 8,
+  fontSize: 12,
+  color: '#475569',
+};
+
+const input = {
+  width: '100%',
+  marginTop: 4,
+  padding: '6px 8px',
+  border: '1px solid #CBD5E1',
+  borderRadius: 6,
+  fontSize: 14,
+};
+
+const modalBackdrop = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(15, 23, 42, 0.4)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 100,
+};
+
+const modalCard = {
+  background: '#FFFFFF',
+  borderRadius: 12,
+  padding: 20,
+  width: 360,
+  maxWidth: '95vw',
+  maxHeight: '90vh',
+  overflow: 'auto',
+  boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
+};

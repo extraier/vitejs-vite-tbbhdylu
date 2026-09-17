@@ -100,6 +100,10 @@ import { CoupleBudget } from './screens/CoupleBudget';
 import { CoupleJobBoard } from './screens/CoupleJobBoard';
 import { GuestList } from './screens/GuestList';
 import { PhotoDrop } from './screens/PhotoDrop';
+// 2026-09-12 — Hermes P13 (seating chart MVP): owner-facing
+// floor plan editor. Linked from the couple-checklist header in
+// P13.1; P13.4 will add a dedicated tab in EventsDashboard.
+import { CoupleSeating } from './screens/CoupleSeating';
 // 2026-08-13 — DiscoverDirectory converted to lazy() below.
 // 2026-08-13 — M-04 audit fix. Heavy screens are now React.lazy() so
 // they're split into separate chunks instead of bloating the main
@@ -4336,6 +4340,26 @@ export default function App() {
                         <span className="hidden sm:inline">返回總大堂</span>
                       </button>
                     )}
+                    {/* 2026-09-12 — Hermes P13 (seating chart MVP):
+                        single CTA in the global header linking
+                        to the seating chart editor. Owner-only —
+                        hidden for vendor and helper roles because
+                        they don't get the canvas editor (their
+                        drag-drop view is Phase 2.2). The button
+                        only appears after the events-dashboard
+                        has selected an event so currentEvent is
+                        already populated. */}
+                    {currentEvent && userRole === 'owner' && (
+                      <button
+                        onClick={() => setCurrentView('couple-seating')}
+                        data-testid="header-seating-cta"
+                        className="flex items-center gap-1 text-sm font-bold text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 px-2 sm:px-3 py-1.5 rounded-lg border border-teal-200 transition-colors flex-shrink-0"
+                        title="Reception 座位表"
+                        aria-label="Reception 座位表"
+                      >
+                        🪑<span className="hidden sm:inline">座位表</span>
+                      </button>
+                    )}
                     {/* 2026-08-08 — header buttons moved next to the user
                         profile icon. Order is: 🔔 商戶報價 bell → 💬 訊息收件匣
                         (owners + vendors) → UserMenu. Both bells sit tight
@@ -4862,6 +4886,22 @@ export default function App() {
                   onEditGuest={setEditingGuest}
                 />
               )}
+
+            {/* 2026-09-12 — Hermes P13 (seating chart MVP): owner
+                floor plan editor. Renders the floor plan canvas,
+                table CRUD modal, and the 3-preset selector
+                (中式 12 圍 / 西式 8 long / 自訂空板). Drag-drop
+                and guest-to-table assignment come in P13.2. */}
+            {userRole === 'owner' && currentEvent && currentView === 'couple-seating' && (
+              <CoupleSeating
+                ownerUid={dataOwnerUid}
+                eventId={currentEvent.id}
+                onBack={() => setCurrentView(
+                  currentEvent ? 'couple-checklist' : 'events-dashboard',
+                )}
+                onOpenToast={showToast}
+              />
+            )}
 
             {userRole === 'owner' && currentEvent && currentView === 'photo-drop' && (
               <PhotoDrop
