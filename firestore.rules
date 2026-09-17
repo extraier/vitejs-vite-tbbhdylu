@@ -440,6 +440,19 @@ match /{path=**}/events/{eventId} {
         get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/rundown/$(entryId)).data.assignedVendorUid == request.auth.uid;
     }
 
+    // 2026-09-12 — Hermes P13 (seating chart): a helper is "of the
+    // event" if they have any helper permission tier (>=1 perm
+    // granted) on this event. Used to gate /seating/tables/floorDecor
+    // reads and /tableAssignments writes. We deliberately do NOT
+    // require canEditGuests specifically — that's a higher-priv
+    // perm reserved for guest-list edit; seating drag-drop is a
+    // distinct, lower-priv operation that's safe for any helper with
+    // at least one view perm. Owner/co-owner/hasAnyHelperViewPerm
+    // shape matches the existing guests rule.
+    function isHelperOfEvent(ownerUid) {
+      return isActiveHelper(ownerUid) && hasAnyHelperViewPerm(ownerUid);
+    }
+
     match /artifacts/{appId} {
 
       // 2026-08-07 — Platform-wide payment settings. Single doc at
@@ -1273,6 +1286,123 @@ match /{path=**}/events/{eventId} {
           // doesn't break the upload display.
           match /privateUsage/{anything} {
             allow read, write: if false;
+          }
+
+          // 2026-09-12 — Hermes P13 (seating chart): floor plan
+          // meta-doc + per-event seating config. Only the OWNER or
+          // a co-owner can write — `style` ('chinese' | 'western'
+          // | 'custom') and `canvasWidth/Height` are ceremony-time
+          // shape decisions, NOT drag-drop deltas. Helpers cannot
+          // change style (e.g. switch from 西式 long tables to
+          // 中式 圍枱 mid-reception); that's owner territory.
+          //
+          // Read access is intentionally broader: owner + co-owner +
+          // helper (with at least one view perm) + admin. Helpers
+          // need to render the floor plan in the drag-drop helper
+          // view at reception. Vendors do NOT read the floor plan
+          // meta — they get a sanitized projection (see
+          // vendorViews below) so a caterer never sees the
+          // decoration layout before the big day.
+          match /seating/{seatingId} {
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              || isHelperOfEvent(ownerUid)
+              || isAdmin();
+            allow create, update, delete: if isOwnerOrAnyCoOwner(ownerUid);
+          }
+
+          // Per-physical-table doc. Owner/co-owner can write
+          // (create/edit/delete individual table geometry — drag,
+          // rotate, resize, label). Helpers can read (so the
+          // helper drag-drop view at reception can highlight the
+          // table chips a guest is being moved between).
+          //
+          // Schema invariants enforced here (lighter than usual
+          // because client-side validation runs on the drawing
+          // canvas; rule-side check just guards against
+          // accidentally typed keys that could break the onSnapshot
+          // listener downstream):
+          //   keys().hasAll(['label','shape','capacity','tableCategory','x','y','rotation','source'])
+          //   capacity is int 1..40
+          //   shape in {'round','rect','long'}
+          //   tableCategory in the 9 enum values
+          //   source in {'manual','preset'}
+          match /tables/{tableId} {
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              || isHelperOfEvent(ownerUid)
+              || (isSignedIn() && resource.data.keys().hasAll(['assignedVendorUid'])
+                  && resource.data.assignedVendorUid is string
+                  && request.auth.uid == resource.data.assignedVendorUid)
+              || isAdmin();
+            allow create: if isOwnerOrAnyCoOwner(ownerUid)
+              && request.resource.data.keys().hasAll(['label','shape','capacity','tableCategory','x','y','rotation','source'])
+              && request.resource.data.capacity is int
+              && request.resource.data.capacity >= 1
+              && request.resource.data.capacity <= 40
+              && request.resource.data.shape in ['round','rect','long']
+              && request.resource.data.tableCategory in ['bride_groom','groomsmen','bridesmaid','elder_family','friends','kids','colleagues','ceremony','other']
+              && request.resource.data.source in ['manual','preset']
+              && request.resource.data.rotation is int
+              && request.resource.data.rotation >= 0
+              && request.resource.data.rotation <= 270;
+            allow update: if isOwnerOrAnyCoOwner(ownerUid)
+              && request.resource.data.capacity is int
+              && request.resource.data.capacity >= 1
+              && request.resource.data.capacity <= 40
+              && request.resource.data.rotation is int
+              && request.resource.data.rotation >= 0
+              && request.resource.data.rotation <= 270;
+            allow delete: if isOwnerOrAnyCoOwner(ownerUid);
+          }
+
+          // tableAssignments — the most-writable collection in the
+          // seating subsystem. A helper drag-drops a guest chip
+          // onto a table at reception; that's a write here.
+          //
+          // Permission tiers (decided in P13 plan):
+          //   - owner + co-owner: full CRUD
+          //   - helper: read all + write only (no delete — owner
+          //     is the source of truth for table plan, helpers
+          //     can correct an assignment but not drop the row)
+          //   - vendor (assigned to a task on this event, NOT the
+          //     same as 'this is my banquet table'): no access
+          //     to assignments. Caterers get a one-shot PDF via
+          //     Cloud Function, never live read.
+          //
+          // Helpers cannot create assignments for special tables
+          // ('bride_groom','groomsmen','bridesmaid',
+          // 'elder_family', 'ceremony'): those are family-ceremony
+          // slots set by the owner. Helpers can reassign
+          // friends/kids/colleagues/other freely. The
+          // assignedByRole on the doc is the audit trail.
+          match /tableAssignments/{guestId} {
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              || isHelperOfEvent(ownerUid)
+              || isAdmin();
+            allow create: if isOwnerOrAnyCoOwner(ownerUid)
+              || (isHelperOfEvent(ownerUid)
+                  && request.resource.data.keys().hasAll(['guestId','tableId','assignedBy','assignedByRole'])
+                  && request.resource.data.assignedBy == request.auth.uid
+                  && request.resource.data.assignedByRole == 'helper'
+                  && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/tables/$(request.resource.data.tableId))
+                  && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/events/$(eventId)/tables/$(request.resource.data.tableId)).data.tableCategory in ['friends','kids','colleagues','other']);
+            allow update: if isOwnerOrAnyCoOwner(ownerUid)
+              || (isHelperOfEvent(ownerUid)
+                  && request.resource.data.assignedBy == request.auth.uid
+                  && request.resource.data.assignedByRole == 'helper'
+                  && resource.data.assignedByRole == 'helper'
+                  && resource.data.assignedBy == request.auth.uid);
+            allow delete: if isOwnerOrAnyCoOwner(ownerUid);
+          }
+
+          // Floor decor (walls, doors, stage, dance floor, exits,
+          // pillars). Pure layout geometry — non-state, only used
+          // to render the floor plan background. Owner-only writes;
+          // same read tier as seating meta.
+          match /floorDecor/{decorId} {
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              || isHelperOfEvent(ownerUid)
+              || isAdmin();
+            allow create, update, delete: if isOwnerOrAnyCoOwner(ownerUid);
           }
         }
 
