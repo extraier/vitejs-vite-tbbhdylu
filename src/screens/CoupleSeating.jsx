@@ -654,11 +654,12 @@ export function SeatingCanvas({
                 )}
                 <text
                   x={w / 2}
-                  y={h / 2 - 4}
+                  y={h / 2}
                   fontSize={isRound ? "13" : "14"}
                   fontWeight="600"
                   fill="#0F766E"
                   textAnchor="middle"
+                  dominantBaseline="central"
                 >
                   {t.label}
                 </text>
