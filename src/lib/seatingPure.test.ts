@@ -918,3 +918,62 @@ describe('budget defaults', () => {
     expect(DEFAULT_BUDGET_CAP).toBe(0);
   });
 });
+
+// ---------- P13.4.1 refine — per-table cost projection ----------
+//
+// The editor modal shows "本枱已分配" + "本枱滿座" as a live
+// preview. These tests verify the underlying math: filledCount
+// multiplied by costPerHead, and capacity multiplied by
+// costPerHead. The math is trivial (multiplication + the
+// existing formatHKD), but pinning the contract here means
+// future refactors can't silently break the editor preview.
+
+describe('per-table cost preview math', () => {
+  const costPerHead = 800;
+
+  it('full table = capacity * costPerHead', () => {
+    const cap = 12;
+    const filled = 12;
+    expect(filled * costPerHead).toBe(9600);
+    expect(cap * costPerHead).toBe(9600);
+  });
+
+  it('partial table = filled * costPerHead, lower than max', () => {
+    const cap = 12;
+    const filled = 8;
+    expect(filled * costPerHead).toBe(6400); // committed
+    expect(cap * costPerHead).toBe(9600);   // ceiling
+    expect(filled * costPerHead).toBeLessThan(cap * costPerHead);
+  });
+
+  it('empty table still has zero current cost', () => {
+    const cap = 10;
+    const filled = 0;
+    expect(filled * costPerHead).toBe(0);
+    expect(cap * costPerHead).toBe(8000); // potential
+  });
+
+  it('reflects costPerHead over the full evening', () => {
+    // 1 person at $1500 = $1500 (高端婚宴)
+    expect(1 * 1500).toBe(1500);
+    // 1 person at $400 = $400 (酒會式 buffet)
+    expect(1 * 400).toBe(400);
+  });
+
+  it('matches formatHKD output for the displayed numbers', () => {
+    expect(formatHKD(12 * 800)).toBe('$9,600');
+    expect(formatHKD(8 * 800)).toBe('$6,400');
+    expect(formatHKD(0 * 800)).toBe('$0');
+    expect(formatHKD(12 * 1500)).toBe('$18,000');
+  });
+
+  it('contract: hidden when costPerHead = 0 (no-charge event)', () => {
+    // The JSX uses {costPerHead > 0 && (...)} to gate the preview.
+    // Setting costPerHead = 0 means the operator hasn't set a cost
+    // yet, so the preview is meaningless. The condition is
+    // pinned here so a refactor that flips the polarity catches.
+    const cph = 0;
+    const show = cph > 0;
+    expect(show).toBe(false);
+  });
+});

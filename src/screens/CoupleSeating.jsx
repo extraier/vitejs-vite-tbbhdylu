@@ -631,18 +631,44 @@ export function SeatingCanvas({
                 title={noCap ? '設定預算上限' : '預算詳情'}
               >
                 💰{' '}
-                {noCap ? (
-                  <span>{formatHKD(summary.projectedCost, { short: true })}</span>
-                ) : (
+                <span>{formatHKD(summary.projectedCost, { short: true })}</span>
+                {!noCap && (
                   <>
-                    <span>{formatHKD(summary.projectedCost, { short: true })}</span>
                     <span style={{ opacity: 0.6 }}>/</span>
                     <span>{formatHKD(cfg.budgetCap, { short: true })}</span>
-                    <span style={{ opacity: 0.7, marginLeft: 4 }}>
-                      ({summary.percentUsed}%)
-                    </span>
                   </>
                 )}
+                {/* P13.4.1 refine — visual progress bar. Tiny
+                    60×6px strip that fills as you approach the
+                    cap. Width is percentUsed (already capped at
+                    100 in computeBudget), so an over-budget
+                    budget shows fully filled regardless. Empty
+                    when no cap is set. */}
+                <span
+                  data-testid="budget-progress-bar"
+                  data-percent={summary.percentUsed}
+                  style={{
+                    display: 'inline-block',
+                    width: 60,
+                    height: 6,
+                    borderRadius: 3,
+                    background: summary.overBudget
+                      ? 'rgba(220, 38, 38, 0.15)'
+                      : 'rgba(14, 165, 233, 0.15)',
+                    overflow: 'hidden',
+                    position: 'relative',
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      left: 0, top: 0, bottom: 0,
+                      width: `${summary.percentUsed}%`,
+                      background: summary.overBudget ? '#DC2626' : '#0F766E',
+                      transition: 'width 200ms ease',
+                    }}
+                  />
+                </span>
                 <span style={{ opacity: 0.5, marginLeft: 4, fontSize: 10 }}>
                   · 每人 ${cfg.costPerHead}
                 </span>
@@ -1109,6 +1135,12 @@ export function SeatingCanvas({
       {editingTable && (
         <TableEditorModal
           initial={editingTable}
+          filledCount={
+            editingTable.id
+              ? assignments.filter((a) => a.tableId === editingTable.id).length
+              : 0
+          }
+          costPerHead={meta?.costPerHead ?? DEFAULT_COST_PER_HEAD}
           onSave={saveTable}
           onCancel={() => setEditingTable(null)}
           onDelete={editingTable.id ? () => {
@@ -1184,7 +1216,14 @@ export function CoupleSeating(props) {
   return <SeatingCanvas {...props} role={props.role || 'owner'} />;
 }
 
-function TableEditorModal({ initial, onSave, onCancel, onDelete }) {
+function TableEditorModal({
+  initial,
+  filledCount = 0,
+  costPerHead = DEFAULT_COST_PER_HEAD,
+  onSave,
+  onCancel,
+  onDelete,
+}) {
   const [draft, setDraft] = useState(initial);
   useEffect(() => setDraft(initial), [initial]);
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
@@ -1263,6 +1302,51 @@ function TableEditorModal({ initial, onSave, onCancel, onDelete }) {
             style={input}
           />
         </label>
+        {/* P13.4.1 refine — per-table cost preview. Operators
+            see live budget impact of capacity changes BEFORE
+            saving. Cost scales with FILLED guests (current +
+            potential). When filledCount === draft.capacity, the
+            本枱已分配 row shows the running cost the operator is
+            committing to right now; 本枱滿座 shows the floor
+            they'd pay if everyone shows up. */}
+        {costPerHead > 0 && (
+          <div
+            data-testid="per-table-cost-preview"
+            data-current-cost={filledCount * costPerHead}
+            data-max-cost={(draft.capacity ?? 10) * costPerHead}
+            style={{
+              marginTop: 12,
+              padding: 12,
+              background: '#F0FDF4',
+              border: '1px solid #14B8A6',
+              borderRadius: 8,
+              fontSize: 12,
+              color: '#0F766E',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>💰 本枱成本</div>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              <span>
+                已分配{' '}
+                <strong data-testid="per-table-filled-count">
+                  {filledCount}
+                </strong>{' '}
+                人 ·{' '}
+                <strong data-testid="per-table-current-cost">
+                  {formatHKD(filledCount * costPerHead)}
+                </strong>
+              </span>
+              <span style={{ color: '#64748B' }}>
+                滿座{' '}
+                <strong>{draft.capacity ?? 10}</strong> 人 ·{' '}
+                <strong>
+                  {formatHKD((draft.capacity ?? 10) * costPerHead)}
+                </strong>{' '}
+                (上限)
+              </span>
+            </div>
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
           <div>
             {onDelete && (
@@ -1482,7 +1566,68 @@ function BudgetSheet({
             <span style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 4 }}>
               預算上限 (HKD) — 留 0 = 不設上限
             </span>
+            {/* P13.4.1 refine — preset cap chips. Most HK banquet
+                costs land in $50-200k. One tap sets the cap
+                instead of typing. 自訂 toggle reveals the number
+                input. The chips affect only budgetCap; costPerHead
+                stays editable above. */}
+            <div
+              data-testid="budget-cap-chips"
+              style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}
+            >
+              {[50000, 100000, 150000, 200000, 300000].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  data-testid={`budget-cap-chip-${preset / 1000}k`}
+                  onClick={() => setCap(preset)}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 12,
+                    fontWeight: 600,
+                    border: cap === preset ? '1.5px solid #0F766E' : '1px solid #CBD5E1',
+                    background: cap === preset ? '#0F766E' : 'white',
+                    color: cap === preset ? 'white' : '#475569',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {formatHKD(preset, { short: true })}
+                </button>
+              ))}
+              <button
+                type="button"
+                data-testid="budget-cap-chip-custom"
+                onClick={() => {
+                  // Reveal the number input but keep the current
+                  // value. The user can edit below.
+                  const inp = document.getElementById('budget-cap-number-input');
+                  if (inp) inp.focus();
+                }}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  border: ![50000, 100000, 150000, 200000, 300000].includes(cap) && cap > 0
+                    ? '1.5px solid #0F766E'
+                    : '1px solid #CBD5E1',
+                  background:
+                    ![50000, 100000, 150000, 200000, 300000].includes(cap) && cap > 0
+                      ? '#0F766E'
+                      : 'white',
+                  color:
+                    ![50000, 100000, 150000, 200000, 300000].includes(cap) && cap > 0
+                      ? 'white'
+                      : '#475569',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                }}
+              >
+                自訂
+              </button>
+            </div>
             <input
+              id="budget-cap-number-input"
               type="number"
               min="0"
               step="1000"
