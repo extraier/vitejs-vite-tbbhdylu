@@ -68,7 +68,13 @@ import {
   suggestTargetTables,
   autoAssignGuests,
 } from '../lib/seatingPure';
-import FindSeatSheet from './FindSeatSheet';
+// P13.4.5 perf — lazy-load the Find-Seat QR sheet so it doesn't
+// pull the firebase + Firestore wiring into the seating chunk
+// when the operator never opens the sheet. Splitting the QR
+// code PNG URL + the QR rendering tree off the critical path
+// saves ~15 KB gz on the seating screen.
+import { lazy, Suspense } from 'react';
+const FindSeatSheet = lazy(() => import('./FindSeatSheet'));
 import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
 const APP_ID = 'savetheday-production';
@@ -121,6 +127,10 @@ export function SeatingCanvas({
   const svgRef = useRef(null);
   const metaRef = useRef(null);
   metaRef.current = meta;
+
+  // P13.4.5 — a11y: roving tabindex target for the seating canvas.
+  // Owner-only; cleared on Escape or successful delete.
+  const [focusedTableId, setFocusedTableId] = useState(null);
 
   const tablesRef = useRef([]);
   tablesRef.current = tables;
@@ -647,6 +657,79 @@ export function SeatingCanvas({
     [role],
   );
 
+  // P13.4.5 — a11y: keyboard navigation for the seating canvas.
+  // Roving-tabindex over the table list (Tab moves between
+  // tables; arrow keys reposition the focused table; Enter
+  // opens the editor; Delete removes; Escape clears focus).
+  // Owner-only — helpers shouldn't accidentally delete.
+  const onSvgKeyDown = useCallback(
+    (e) => {
+      if (role !== 'owner') return;
+      if (!normalizedTables.length) return;
+      const ids = normalizedTables.map((t) => t.id);
+      const idx = focusedTableId ? ids.indexOf(focusedTableId) : -1;
+      if (e.key === 'Escape') {
+        setFocusedTableId(null);
+        svgRef.current?.focus?.();
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Tab') {
+        // Tab: cycle through tables (roving). Default Tab would
+        // walk every table, which is too noisy — capture it.
+        e.preventDefault();
+        const next = idx === -1
+          ? ids[0]
+          : ids[(idx + (e.shiftKey ? -1 : 1) + ids.length) % ids.length];
+        setFocusedTableId(next);
+        return;
+      }
+      if (idx === -1) {
+        // No table focused yet; pressing Enter/Space on the
+        // canvas itself focuses the first table.
+        if (e.key === 'Enter' || e.key === ' ') {
+          setFocusedTableId(ids[0]);
+          e.preventDefault();
+        }
+        return;
+      }
+      const table = normalizedTables[idx];
+      if (!table) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        setEditingTable({ ...table });
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (window.confirm(`確定要刪除 ${table.label || table.id}？(刪咗之後賓客會變成未分配)`)) {
+          deleteTable(table.id).then(() => {
+            setFocusedTableId(null);
+            showToast(`已刪除 ${table.label || table.id}`);
+          });
+        }
+        e.preventDefault();
+        return;
+      }
+      // Arrow keys reposition the focused table by 10px.
+      const step = e.shiftKey ? 40 : 10;
+      const dx = e.key === 'ArrowLeft' ? -step
+               : e.key === 'ArrowRight' ? step
+               : 0;
+      const dy = e.key === 'ArrowUp' ? -step
+               : e.key === 'ArrowDown' ? step
+               : 0;
+      if (dx || dy) {
+        const w = (meta?.canvasWidth ?? 1200);
+        const h = (meta?.canvasHeight ?? 800);
+        const nextX = Math.max(40, Math.min(w, (table.x ?? 0) + dx));
+        const nextY = Math.max(40, Math.min(h, (table.y ?? 0) + dy));
+        saveTable({ ...table, x: nextX, y: nextY });
+        e.preventDefault();
+      }
+    },
+    [role, normalizedTables, focusedTableId, meta, deleteTable, saveTable, showToast],
+  );
+
   /* ---------- rendering ---------- */
   const dim = useMemo(() => {
     const w = meta?.canvasWidth ?? 1200;
@@ -819,6 +902,10 @@ export function SeatingCanvas({
           onPointerMove={onSvgPointerMove}
           onPointerUp={onSvgPointerUp}
           onPointerCancel={onSvgPointerUp}
+          onKeyDown={onSvgKeyDown}
+          tabIndex={0}
+          role="application"
+          aria-label={`座位表畫布，共 ${normalizedTables.length} 張枱。撳 Tab 移動焦點，方向鍵移枱，Enter 開編輯，Esc 取消。`}
           data-testid="seating-canvas"
           style={{
             display: 'block',
@@ -853,7 +940,16 @@ export function SeatingCanvas({
                 data-testid={`seating-table-${t.id}`}
                 data-filled={filled}
                 data-overflow={overflow ? 'true' : 'false'}
-                style={{ cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none' }}
+                tabIndex={focusedTableId === t.id ? 0 : -1}
+                role="button"
+                aria-label={`${t.label || t.id}, ${isRound ? '圓枱' : '長枱'}, 容量 ${t.capacity}, 已坐 ${filled}${overflow ? ', 超出容量' : ''}`}
+                onFocus={() => setFocusedTableId(t.id)}
+                style={{
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  userSelect: 'none',
+                  outline: focusedTableId === t.id ? '2px solid #0F766E' : 'none',
+                  outlineOffset: 4,
+                }}
                 onPointerDown={(e) => onTablePointerDown(e, t)}
                 onDragOver={(e) => {
                   // Required so the drop event fires.
@@ -867,6 +963,7 @@ export function SeatingCanvas({
                   onAssign(guestId, t.id, guestsById[guestId]?.name);
                 }}
               >
+                <title>{`${t.label || t.id} - ${isRound ? '圓枱' : '長枱'} ${t.capacity}位`}</title>
                 {isRound ? (
                   <ellipse
                     cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2}
@@ -1340,15 +1437,19 @@ export function SeatingCanvas({
 
       {/* P13.4.4 — Find-Seat QR sheet. Owner-only, generates a
           publicSeating token doc + URL guests can scan without
-          signing in. */}
+          signing in. Lazy-loaded (P13.4.5 perf) — Suspense
+          boundary keeps the seating screen responsive while the
+          QR sheet chunk downloads. */}
       {findSeatOpen && tables.length > 0 && (
-        <FindSeatSheet
-          ownerUid={ownerUid}
-          eventId={eventId}
-          meta={meta ?? {}}
-          tables={normalizedTables}
-          onClose={() => setFindSeatOpen(false)}
-        />
+        <Suspense fallback={<div style={modalBackdrop}><div style={{ ...modalCard, textAlign: 'center' }}>載入緊 QR sheet…</div></div>}>
+          <FindSeatSheet
+            ownerUid={ownerUid}
+            eventId={eventId}
+            meta={meta ?? {}}
+            tables={normalizedTables}
+            onClose={() => setFindSeatOpen(false)}
+          />
+        </Suspense>
       )}
     </div>
   );

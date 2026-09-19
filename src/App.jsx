@@ -203,7 +203,14 @@ import { EventSettingsModal } from './components/modals/EventSettingsModal';
 // owner with a token, and the Firestore rule only needs that
 // token (no user). Render it before the auth gate so guests
 // can scan the QR without signing in.
-import FindSeatPage from './screens/FindSeatPage';
+//
+// P13.4.5 perf — lazy-load via React.lazy + Suspense so the
+// App.jsx critical path (auth flow, role switcher, dashboard)
+// doesn't pull the SVG rendering tree + Firestore read code
+// for an extremely rare branch (only guests scanning a QR ever
+// hit this code). The chunk is ~6 KB gz and is fetched only
+// when the URL has ?find-seat=...
+const FindSeatPage = lazy(() => import('./screens/FindSeatPage'));
 
 export default function App() {
   // Auth
@@ -4081,9 +4088,28 @@ export default function App() {
   // the QR and immediately see the seating chart without having
   // to sign in. The actual token verification happens inside
   // FindSeatPage against the publicSeating Firestore collection.
+  //
+  // P13.4.5 perf — Suspense wrapper around the lazy-loaded
+  // module. While the FindSeatPage chunk is fetched, render a
+  // full-page "載入緊…" placeholder so the screen doesn't
+  // flash empty / show stale content.
   if (typeof window !== 'undefined'
       && new URLSearchParams(window.location.search).has('find-seat')) {
-    return <FindSeatPage />;
+    return (
+      <Suspense fallback={
+        <div style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif',
+          color: '#64748B',
+          background: '#FAFAF9',
+        }}>載入緊座位表…</div>
+      }>
+        <FindSeatPage />
+      </Suspense>
+    );
   }
 
   // ---- Render ----
