@@ -977,3 +977,251 @@ describe('per-table cost preview math', () => {
     expect(show).toBe(false);
   });
 });
+
+// ---------- P13.4.2: Auto-layout optimizer ----------
+import {
+  suggestTargetTables,
+  autoAssignGuests,
+} from './seatingPure';
+
+describe('suggestTargetTables', () => {
+  const tables = [
+    { id: 'T-A', label: 'T-A', shape: 'round', capacity: 10, tableCategory: 'friends', x: 0, y: 0, rotation: 0 },
+    { id: 'T-B', label: 'T-B', shape: 'round', capacity: 10, tableCategory: 'friends', x: 0, y: 0, rotation: 0 },
+    { id: 'T-C', label: 'T-C', shape: 'round', capacity: 10, tableCategory: 'groomsmen', x: 0, y: 0, rotation: 0 },
+    { id: 'T-D', label: 'T-D', shape: 'round', capacity: 10, tableCategory: 'friends', x: 0, y: 0, rotation: 0 },
+    { id: 'dance', label: '舞池', shape: 'rect', capacity: 0, tableCategory: 'ceremony', x: 0, y: 0, rotation: 0 },
+  ];
+  // T-A: 3 filled (7 remaining), T-B: 7 filled (3 remaining), T-C: 5 filled, T-D: 9 filled (1 remaining)
+  const assignments = [
+    { guestId: 'g1', tableId: 'T-A', assignedAt: 1 },
+    { guestId: 'g2', tableId: 'T-A', assignedAt: 1 },
+    { guestId: 'g3', tableId: 'T-A', assignedAt: 1 },
+    { guestId: 'g4', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g5', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g6', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g7', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g8', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g9', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g10', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g10b', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g10c', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g10d', tableId: 'T-B', assignedAt: 1 },
+    { guestId: 'g11', tableId: 'T-C', assignedAt: 1 },
+    { guestId: 'g12', tableId: 'T-C', assignedAt: 1 },
+    { guestId: 'g13', tableId: 'T-C', assignedAt: 1 },
+    { guestId: 'g14', tableId: 'T-C', assignedAt: 1 },
+    { guestId: 'g15', tableId: 'T-C', assignedAt: 1 },
+    { guestId: 'g16', tableId: 'T-D', assignedAt: 1 },
+    { guestId: 'g17', tableId: 'T-D', assignedAt: 1 },
+    { guestId: 'g18', tableId: 'T-D', assignedAt: 1 },
+    { guestId: 'g19', tableId: 'T-D', assignedAt: 1 },
+    { guestId: 'g20', tableId: 'T-D', assignedAt: 1 },
+    { guestId: 'g21', tableId: 'T-D', assignedAt: 1 },
+    { guestId: 'g22', tableId: 'T-D', assignedAt: 1 },
+    { guestId: 'g23', tableId: 'T-D', assignedAt: 1 },
+    { guestId: 'g24', tableId: 'T-D', assignedAt: 1 },
+  ];
+
+  it('excludes full tables (T-B is full)', () => {
+    const out = suggestTargetTables(tables, assignments);
+    expect(out.find((s) => s.table.id === 'T-B')).toBeUndefined();
+  });
+  it('excludes tables with capacity=0 (dance floor)', () => {
+    const out = suggestTargetTables(tables, assignments);
+    expect(out.find((s) => s.table.id === 'dance')).toBeUndefined();
+  });
+  it('ranks tightest-first by default (T-D with 1 remaining wins)', () => {
+    const out = suggestTargetTables(tables, assignments);
+    expect(out[0].table.id).toBe('T-D');
+    expect(out[0].remaining).toBe(1);
+  });
+  it('ranks loosest-first with prefer=loosest (T-A with 7 remaining wins)', () => {
+    const out = suggestTargetTables(tables, assignments, { prefer: 'loosest' });
+    expect(out[0].table.id).toBe('T-A');
+    expect(out[0].remaining).toBe(7);
+  });
+  it('honors category match (groomsmen goes to T-C first, despite more remaining on T-A)', () => {
+    const out = suggestTargetTables(tables, assignments, { category: 'groomsmen' });
+    expect(out[0].table.id).toBe('T-C');
+    expect(out[0].reasons.categoryMatch).toBe(true);
+  });
+  it('excludes mismatched-category tables when category is set (P13.4.2 — fixed-slot guard)', () => {
+    // Auto-layout protects fixed-slot categories (bride_groom,
+    // ceremony, elder_family) from being overflow targets.
+    // Same-category tables stay as candidates; mismatched
+    // tables are excluded entirely (not just downranked).
+    const out = suggestTargetTables(tables, assignments, {
+      category: 'groomsmen',
+      excludeTableIds: ['T-A', 'T-B', 'T-D'],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].table.id).toBe('T-C');
+  });
+  it('honors category score in ranking (only T-C is groomsmen)', () => {
+    // Note: suggestTargetTables does NOT auto-exclude
+    // mismatched tables; it ranks same-category first. The
+    // auto-exclusion lives in autoAssignGuests (the
+    // fixed-slot guard for protected categories).
+    const out = suggestTargetTables(tables, assignments, { category: 'groomsmen' });
+    expect(out[0].table.id).toBe('T-C');           // category-matched first
+    expect(out[0].reasons.categoryMatch).toBe(true);
+    // The same-category table is always first.
+  });
+  it('honors excludeTableIds', () => {
+    const out = suggestTargetTables(tables, assignments, {
+      excludeTableIds: ['T-D'],
+    });
+    expect(out.find((s) => s.table.id === 'T-D')).toBeUndefined();
+  });
+  it('returns empty array when no table has room', () => {
+    const allFull = tables
+      .filter((t) => t.capacity > 0)
+      .map((t) => ({ ...t, tableCategory: 'friends' }));
+    // Fill each table to capacity (10 each × 4 = 40 assignments).
+    const fullAssignments = [];
+    const tableIds = allFull.map((t) => t.id);
+    for (let i = 0; i < tableIds.length * 10; i++) {
+      fullAssignments.push({
+        guestId: `g${i}`, tableId: tableIds[i % tableIds.length], assignedAt: 1,
+      });
+    }
+    const out = suggestTargetTables(allFull, fullAssignments, { category: 'friends' });
+    expect(out).toHaveLength(0);
+  });
+});
+
+describe('autoAssignGuests', () => {
+  const tables = [
+    { id: 'T-A', label: 'T-A', shape: 'round', capacity: 10, tableCategory: 'friends', x: 0, y: 0, rotation: 0 },
+    { id: 'T-B', label: 'T-B', shape: 'round', capacity: 10, tableCategory: 'friends', x: 0, y: 0, rotation: 0 },
+    { id: 'T-C', label: 'T-C', shape: 'round', capacity: 10, tableCategory: 'groomsmen', x: 0, y: 0, rotation: 0 },
+  ];
+
+  it('places guests into the only table with room', () => {
+    const out = autoAssignGuests(
+      tables,
+      [],
+      [
+        { id: 'g1', name: 'Alice', category: 'friends' },
+        { id: 'g2', name: 'Bob', category: 'friends' },
+      ],
+    );
+    expect(out.newAssignments).toHaveLength(2);
+    expect(out.remainingOrphans).toHaveLength(0);
+    expect(out.stats.placed).toBe(2);
+  });
+
+  it('returns orphans when not all guests fit', () => {
+    const out = autoAssignGuests(
+      tables,
+      [],
+      Array.from({ length: 25 }, (_, i) => ({
+        id: `g${i}`, name: `Guest ${i}`, category: 'friends',
+      })),
+    );
+    expect(out.newAssignments).toHaveLength(20); // 2×10
+    expect(out.remainingOrphans).toHaveLength(5);
+    expect(out.stats.placed).toBe(20);
+    expect(out.stats.orphan).toBe(5);
+  });
+
+  it('never mutates the input assignments array', () => {
+    const input = [];
+    const out = autoAssignGuests(
+      tables,
+      input,
+      [{ id: 'g1', name: 'Alice', category: 'friends' }],
+    );
+    expect(input).toHaveLength(0); // unchanged
+    expect(out.newAssignments).toHaveLength(1);
+  });
+
+  it('honors category best-match (friends stay in friends tables)', () => {
+    const fullA = Array.from({ length: 10 }, (_, i) => ({
+      guestId: `f${i}`, tableId: 'T-A', assignedAt: 1,
+    }));
+    const out = autoAssignGuests(
+      tables,
+      fullA,
+      [
+        { id: 'g1', name: 'Alice', category: 'friends' },
+      ],
+    );
+    expect(out.newAssignments[0].tableId).toBe('T-B');
+  });
+
+  it('handles empty guests array gracefully', () => {
+    const out = autoAssignGuests(tables, [], []);
+    expect(out.newAssignments).toHaveLength(0);
+    expect(out.remainingOrphans).toHaveLength(0);
+    expect(out.stats.placed).toBe(0);
+  });
+
+  it('keeps same groupKey guests on the same table when possible', () => {
+    const out = autoAssignGuests(
+      tables,
+      [],
+      [
+        { id: 'h1', name: 'Husband', category: 'friends', groupKey: 'couple-1' },
+        { id: 'w1', name: 'Wife', category: 'friends', groupKey: 'couple-1' },
+        { id: 'h2', name: 'Husband', category: 'friends', groupKey: 'couple-2' },
+        { id: 'w2', name: 'Wife', category: 'friends', groupKey: 'couple-2' },
+      ],
+    );
+    expect(out.newAssignments).toHaveLength(4);
+    expect(out.newAssignments[0].tableId).toBe(out.newAssignments[1].tableId);
+    expect(out.newAssignments[2].tableId).toBe(out.newAssignments[3].tableId);
+  });
+
+  it('split couple across tables if not enough room in one', () => {
+    const nineInA = Array.from({ length: 9 }, (_, i) => ({
+      guestId: `f${i}`, tableId: 'T-A', assignedAt: 1,
+    }));
+    const out = autoAssignGuests(
+      tables,
+      nineInA,
+      [
+        { id: 'h1', category: 'friends', groupKey: 'couple-1' },
+        { id: 'w1', category: 'friends', groupKey: 'couple-1' },
+      ],
+    );
+    // T-A has 1 remaining, T-B is empty. Husband should go to T-A,
+    // wife should go to T-B (couple split due to space).
+    expect(out.newAssignments[0].tableId).toBe('T-A');
+    expect(out.newAssignments[1].tableId).toBe('T-B');
+  });
+
+  it('prefers tightest remaining per default', () => {
+    // T-A has 9 filled (1 remaining), T-B is empty (10 remaining).
+    // One new friends guest should land in T-A (tightest).
+    const nineInA = Array.from({ length: 9 }, (_, i) => ({
+      guestId: `f${i}`, tableId: 'T-A', assignedAt: 1,
+    }));
+    const out = autoAssignGuests(
+      tables,
+      nineInA,
+      [{ id: 'g1', category: 'friends' }],
+    );
+    expect(out.newAssignments[0].tableId).toBe('T-A');
+  });
+
+  it('groomsmen guest prefers T-C (its category)', () => {
+    const out = autoAssignGuests(
+      tables,
+      [],
+      [{ id: 'g1', category: 'groomsmen' }],
+    );
+    expect(out.newAssignments[0].tableId).toBe('T-C');
+  });
+
+  it('returns guests with missing ids as orphans', () => {
+    const out = autoAssignGuests(
+      tables,
+      [],
+      [{ id: '', name: 'NoID' }, { id: 'g1', name: 'OK' }],
+    );
+    expect(out.remainingOrphans.some((o) => o.name === 'NoID')).toBe(true);
+    expect(out.newAssignments.find((a) => a.guestId === 'g1')).toBeTruthy();
+  });
+});

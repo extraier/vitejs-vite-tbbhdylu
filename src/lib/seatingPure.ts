@@ -338,6 +338,274 @@ export function formatHKD(n: number, opts: { short?: boolean } = {}): string {
   return `$${n.toLocaleString('en-HK')}`;
 }
 
+// ---------- auto-layout ----------
+
+/**
+ * 2026-09-18 — P13.4.2: Auto-layout optimizer.
+ *
+ * Two pure helpers:
+ *
+ * 1) suggestTargetTables — given the current tables+assignments
+ *    state, return the best-fit tables for an "I want to add N
+ *    guests" query. Used both for inline suggestions next to an
+ *    unassigned guest AND as the candidate picker for the
+ *    batch "auto-assign" flow.
+ *
+ * 2) autoAssignGuests — greedy bin-packing of unassigned guests
+ *    into the best-fit tables. Never mutates the input array;
+ *    returns a new assignments array + the orphans that didn't
+ *    fit anywhere.
+ *
+ * The "best-fit" rule honors category match first (never put a
+ * groomsmen in a friends table), then prefers the table that
+ * ends up "tightest" so we don't waste a 10-seat table on 2
+ * guests when a 6-seat half-full table is right there.
+ */
+
+/** Options for suggestTargetTables and autoAssignGuests. */
+export interface AutoAssignOptions {
+  /** If set, prefer tables whose tableCategory equals this. */
+  category?: TableCategory;
+  /** Tables to skip (e.g. already excluded by the operator). */
+  excludeTableIds?: ReadonlyArray<string>;
+  /** Fill small gaps first ('tightest') or leave them open ('loosest').
+   * Default: 'tightest' — operators running the auto-assigner
+   * want to minimize orphans, not maximize empty seats. */
+  prefer?: 'tightest' | 'loosest';
+}
+
+/** A single candidate returned by suggestTargetTables. */
+export interface ScoredTable {
+  table: SeatingTable;
+  filled: number;
+  remaining: number;
+  /** Lower = better candidate. Same-category tables rank above
+      mismatched. Same category ranking: tightest remaining first
+      (or loosest, per opts.prefer). */
+  score: number;
+  /** Why this table got the score it did (for UI surfacing). */
+  reasons: {
+    categoryMatch: boolean;
+    capacityFull: boolean;
+  };
+}
+
+/**
+ * Suggest candidate tables for an upcoming assignment. Excludes
+ * full tables, tables the operator excluded, and tables with
+ * capacity=0 (dance floor, decoration). Surviving tables are
+ * ranked by score:
+ *
+ *   category-mismatch:  +100 penalty (or skip category-less guests)
+ *   capacity-full:      excluded
+ *   prefer='tightest':  score = remaining (smallest remaining wins)
+ *   prefer='loosest':   score = -remaining (most remaining wins)
+ *
+ * Returns an empty array if no candidate has room.
+ */
+export function suggestTargetTables(
+  tables: ReadonlyArray<SeatingTable>,
+  assignments: ReadonlyArray<TableAssignment>,
+  opts: AutoAssignOptions = {},
+): ScoredTable[] {
+  const { category, excludeTableIds = [], prefer = 'tightest' } = opts;
+  const excluded = new Set(excludeTableIds);
+
+  // Count filled seats per table (same algorithm as occupancy()).
+  const filled: Record<string, number> = {};
+  for (const t of tables) {
+    if (t.capacity <= 0) continue; // skip dance floor etc.
+    if (excluded.has(t.id)) continue; // skip operator-excluded
+    filled[t.id] = 0;
+  }
+  for (const a of assignments) {
+    if (filled[a.tableId] === undefined) continue;
+    filled[a.tableId] += 1;
+  }
+
+  const candidates: ScoredTable[] = [];
+  for (const t of tables) {
+    if (filled[t.id] === undefined) continue;
+    const f = filled[t.id];
+    const remaining = t.capacity - f;
+    if (remaining <= 0) continue; // full — skip
+    const categoryMatch = !category || t.tableCategory === category;
+    let score: number;
+    if (!categoryMatch) {
+      score = 100 + (prefer === 'tightest' ? remaining : -remaining);
+    } else {
+      score = prefer === 'tightest' ? remaining : -remaining;
+    }
+    candidates.push({
+      table: t,
+      filled: f,
+      remaining,
+      score,
+      reasons: { categoryMatch, capacityFull: false },
+    });
+  }
+  candidates.sort((a, b) => a.score - b.score);
+  return candidates;
+}
+
+/** A guest waiting to be placed (no current tableId). */
+export interface UnassignedGuest {
+  id: string;
+  name?: string;
+  category?: TableCategory;
+  /** Group-key for keeping couples/families together. Two guests
+   *  with the same groupKey are assigned to the same table when
+   *  possible (couples policy). Optional. */
+  groupKey?: string;
+}
+
+export interface AutoAssignResult {
+  /** New assignments to write. Empty if there were no orphans. */
+  newAssignments: TableAssignment[];
+  /** Guests that couldn't fit anywhere (orphan list). */
+  remainingOrphans: UnassignedGuest[];
+  /** Top-level count for the success toast. */
+  stats: {
+    placed: number;
+    orphan: number;
+    skipped: number; // guests with no valid table
+  };
+}
+
+/**
+ * Greedy bin-pack unassigned guests into existing tables. The
+ * algorithm is O(G × T) where G is the number of orphans and T
+ * is the number of tables. Wedding banquets are small (G < 200,
+ * T < 30) so this is fine to run synchronously.
+ *
+ * Algorithm:
+ *   1. For each guest (sorted by groupKey so couples stay together):
+ *      a. Compute candidate tables via suggestTargetTables filtered
+ *         by the guest's category.
+ *      b. If category-less, prefer same-table-for-group: try the
+ *         table where the group already has a member (if any
+ *         candidate).
+ *      c. Otherwise pick the candidate ranked #1.
+ *      d. If no candidate has room, add the guest to remainingOrphans.
+ *   2. Append all chosen assignments to the input (immutable copy).
+ *   3. Skip guests with both invalid category + no candidates.
+ */
+export function autoAssignGuests(
+  tables: ReadonlyArray<SeatingTable>,
+  assignments: ReadonlyArray<TableAssignment>,
+  guests: ReadonlyArray<UnassignedGuest>,
+  opts: AutoAssignOptions = {},
+): AutoAssignResult {
+  // Sort guests so same-group guests are adjacent. Couples policy
+  // (groupKey) is "assign all to the same table if possible".
+  const sortedGuests = [...guests].sort((a, b) => {
+    const ag = a.groupKey ?? '';
+    const bg = b.groupKey ?? '';
+    if (ag !== bg) return ag < bg ? -1 : 1;
+    return (a.name ?? '').localeCompare(b.name ?? '');
+  });
+
+  // Start from a shallow copy so we never mutate caller state.
+  const next: TableAssignment[] = [...assignments];
+  const orphans: UnassignedGuest[] = [];
+  let placed = 0;
+
+  // Per-group target table to keep couples together.
+  const groupTarget: Record<string, string> = {};
+
+  // Recompute filled as we go (incremental O(1) update per write).
+  const filled: Record<string, number> = {};
+  for (const t of tables) {
+    if (t.capacity <= 0) continue;
+    filled[t.id] = 0;
+  }
+  for (const a of next) {
+    if (filled[a.tableId] === undefined) continue;
+    filled[a.tableId] += 1;
+  }
+
+  // Pre-compute full set so we can mark them once and skip fast.
+  const skipId = new Set(opts.excludeTableIds ?? []);
+
+  for (const g of sortedGuests) {
+    // Skip guests with no id (caller should always provide one).
+    if (!g.id) {
+      orphans.push(g);
+      continue;
+    }
+
+    // Couple-policy: keep groups together by targeting the same
+    // table as the prior group member when possible.
+    let preferredId: string | undefined;
+    const priorTarget = g.groupKey ? groupTarget[g.groupKey] : undefined;
+    if (priorTarget) {
+      const t = tables.find((tt) => tt.id === priorTarget);
+      if (t && t.capacity > filled[t.id] && !skipId.has(t.id)) {
+        preferredId = t.id;
+      }
+    }
+
+    // Compute fresh candidates (table fills change as we go).
+    // Note: when a category is specified (the common case —
+    // friend → friends, groomsmen → groomsmen), we filter out
+    // mismatched tables entirely. This protects fixed-slot
+    // categories (bride_groom, ceremony, elder_family) and
+    // other special-purpose tables from being overflow targets.
+    // Without this, after friends tables fill, the auto-assigner
+    // would spill into groomsmen or 主家席.
+    const candidates = suggestTargetTables(
+      tables,
+      next,
+      {
+        category: g.category,
+        excludeTableIds: [
+          ...(opts.excludeTableIds ?? []),
+          ...(g.category
+            ? tables
+                .filter((tt) => tt.tableCategory !== g.category)
+                .map((tt) => tt.id)
+            : []),
+        ],
+        prefer: opts.prefer,
+      },
+    );
+
+    let pickId: string | undefined = preferredId;
+    if (!pickId) {
+      const top = candidates[0];
+      if (!top) {
+        // No table has room — this guest is an orphan.
+        orphans.push(g);
+        continue;
+      }
+      pickId = top.table.id;
+    }
+
+    // Commit.
+    next.push({
+      guestId: g.id,
+      tableId: pickId,
+      guestName: g.name,
+      assignedAt: 0, // overwritten by caller when written
+      assignedByRole: 'owner',
+    });
+    filled[pickId] += 1;
+    if (g.groupKey) groupTarget[g.groupKey] = pickId;
+    placed += 1;
+  }
+
+  // Strip the freshly-added ones from the input (they were only
+  // emitted for the loop's bookkeeping). The caller wants ONLY the
+  // new assignments, not the original list.
+  const newAssignments = next.slice(assignments.length);
+
+  return {
+    newAssignments,
+    remainingOrphans: orphans,
+    stats: { placed, orphan: orphans.length, skipped: 0 },
+  };
+}
+
 // ---------- fit validation ----------
 
 export interface GuestTableFit {
@@ -843,4 +1111,6 @@ export default {
   computeBudget,
   projectBudgetDelta,
   formatHKD,
+  suggestTargetTables,
+  autoAssignGuests,
 };

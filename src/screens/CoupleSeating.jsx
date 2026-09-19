@@ -65,6 +65,8 @@ import {
   computeBudget,
   projectBudgetDelta,
   formatHKD,
+  suggestTargetTables,
+  autoAssignGuests,
 } from '../lib/seatingPure';
 import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
@@ -107,6 +109,9 @@ export function SeatingCanvas({
   const [presetsOpen, setPresetsOpen] = useState(false);
   // P13.4.1 — budget sheet (modal for setting costPerHead + budgetCap).
   const [budgetSheetOpen, setBudgetSheetOpen] = useState(false);
+  // P13.4.2 — auto-assign sheet (modal for batch auto-placement
+  // of unassigned guests into existing tables).
+  const [autoAssignOpen, setAutoAssignOpen] = useState(false);
 
   // Refs
   const svgRef = useRef(null);
@@ -409,6 +414,71 @@ export function SeatingCanvas({
     [ownerUid, eventId, showToast],
   );
 
+  // P13.4.2 — batch auto-assign. Runs the pure helper to plan a
+  // greedy bin-pack, then writes each new assignment via the
+  // same setDoc path as saveAssignment. The plan is computed
+  // from the current tables+assignments snapshot (refs, so
+  // always-fresh without re-rendering).
+  const autoAssignAll = useCallback(async () => {
+    if (!ownerUid || !eventId) return;
+    // Build the unassigned guest list.
+    const assignedIds = new Set(assignmentsRef.current.map((a) => a.guestId));
+    const unassigned = guests
+      .filter((g) => g.id && !assignedIds.has(g.id))
+      .map((g) => ({
+        id: g.id,
+        name: g.name,
+        // No guest.category table category is implied yet — leave
+        // undefined so the helper falls back to "any table" for
+        // guests without an explicit category.
+        category: undefined,
+        // Couples/family grouping: use partnerId when present so
+        // couples always get the same table when one has room.
+        groupKey: g.partnerId
+          ? `couple-${[g.id, g.partnerId].sort().join('-')}`
+          : undefined,
+      }));
+    // Plan with the pure helper.
+    const plan = autoAssignGuests(
+      tablesRef.current,
+      assignmentsRef.current,
+      unassigned,
+      { prefer: 'tightest' },
+    );
+    if (plan.newAssignments.length === 0) {
+      showToast('冇位擺，全部都係孤兒');
+      return;
+    }
+    // Write each new assignment.
+    let ok = 0;
+    let fail = 0;
+    for (const a of plan.newAssignments) {
+      const docId = buildAssignmentDocId(a.guestId);
+      try {
+        await setDoc(
+          doc(db, seatingItemPath(APP_ID, {
+            ownerUid, eventId, collection: 'tableAssignments', itemId: docId,
+          })),
+          emptyAssignment(a.guestId, a.tableId),
+        );
+        ok += 1;
+      } catch (e) {
+        console.error('[seating] auto-assign write', e);
+        fail += 1;
+      }
+    }
+    // Bust scanner cache + close the sheet.
+    invalidateScannerTablesCache(ownerUid, eventId);
+    setAutoAssignOpen(false);
+    if (plan.remainingOrphans.length > 0) {
+      showToast(
+        `已擺 ${ok} 位 · 仲有 ${plan.remainingOrphans.length} 位孤兒 (加多張枱或調大現有枱)`,
+      );
+    } else {
+      showToast(`已擺晒 ${ok} 位賓客 🎉`);
+    }
+  }, [ownerUid, eventId, guests, showToast]);
+
   const unassignGuest = useCallback(
     async (guestId) => {
       if (!ownerUid || !eventId) return;
@@ -677,12 +747,32 @@ export function SeatingCanvas({
           })()}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          {/* Owner-only chrome (preset selector). Helper live-edit
-              hides this — helpers can move/reassign only. */}
+          {/* Owner-only chrome (preset selector + auto-assigner).
+              Helper live-edit hides both — helpers can move/
+              reassign only. */}
           {role === 'owner' && (
-            <button onClick={() => setPresetsOpen(true)} style={btnSecondary}>
-              ⚙️ 套用 preset
-            </button>
+            <>
+              <button
+                onClick={() => setAutoAssignOpen(true)}
+                data-testid="auto-assign-btn"
+                disabled={tables.length === 0}
+                title={
+                  tables.length === 0
+                    ? '需要先套用 preset 或者新增枱先可以用自動排位'
+                    : '將未分配嘅賓客自動擺入仍有空位嘅枱'
+                }
+                style={{
+                  ...btnSecondary,
+                  opacity: tables.length === 0 ? 0.5 : 1,
+                  cursor: tables.length === 0 ? 'not-allowed' : 'pointer',
+                }}
+              >
+                🎯 自動排位
+              </button>
+              <button onClick={() => setPresetsOpen(true)} style={btnSecondary}>
+                ⚙️ 套用 preset
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -1196,6 +1286,36 @@ export function SeatingCanvas({
           onCancel={() => setBudgetSheetOpen(false)}
         />
       )}
+
+      {/* P13.4.2 — Auto-assign sheet. Owner-only batch assistant. */}
+      {autoAssignOpen && (() => {
+        const assignedIds = new Set(assignments.map((a) => a.guestId));
+        const unassigned = guests
+          .filter((g) => g.id && !assignedIds.has(g.id))
+          .map((g) => ({
+            id: g.id,
+            name: g.name,
+            category: undefined,
+            groupKey: g.partnerId
+              ? `couple-${[g.id, g.partnerId].sort().join('-')}`
+              : undefined,
+          }));
+        return (
+          <AutoAssignSheet
+            unassigned={unassigned}
+            tables={normalizedTables}
+            assignments={assignments}
+            guestsById={guestsById}
+            onPick={(g, t) => {
+              saveAssignment(g.id, t.id, g.name).then((r) => {
+                if (r.ok) setAutoAssignOpen(false);
+              });
+            }}
+            onPickAll={autoAssignAll}
+            onCancel={() => setAutoAssignOpen(false)}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -1678,6 +1798,174 @@ function BudgetSheet({
           >
             💾 儲存
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// P13.4.2 — Auto-assign sheet. Shows unassigned guests
+// (guests - assignments) along with the candidate table(s) for
+// each. Owner taps "一鍵擺晒" to run autoAssignGuests against
+// the current state. New assignments are written via the same
+// path the drag-drop uses.
+function AutoAssignSheet({
+  unassigned,
+  tables,
+  assignments,
+  guestsById,
+  onPick,
+  onPickAll,
+  onCancel,
+}) {
+  const totalCapacity = tables.reduce(
+    (sum, t) => sum + (t.capacity > 0 ? t.capacity - (occupancy(
+      tables, assignments, guestsById,
+    )[t.id]?.filled ?? 0) : 0),
+    0,
+  );
+  const overviews = unassigned.map((u) => {
+    const candidates = suggestTargetTables(tables, assignments, {
+      category: u.category,
+      prefer: 'tightest',
+    });
+    return { guest: u, candidates: candidates.slice(0, 3) };
+  });
+  const orphansAfterFit = unassigned.length - Math.min(unassigned.length, totalCapacity);
+  const hasOrphansPending = overviews.some((o) => o.candidates.length === 0);
+  return (
+    <div role="dialog" style={modalBackdrop} onClick={onCancel}>
+      <div
+        style={{ ...modalCard, maxWidth: 640, maxHeight: '80vh', overflowY: 'auto' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={{ marginTop: 0, color: '#0F766E' }}>🎯 自動排位</h3>
+        <p style={{ color: '#64748B', fontSize: 13 }}>
+          將 <strong>{unassigned.length}</strong> 位未分配嘅賓客自動擺入仍有空位嘅枱。
+          {' '}
+          目前總共仲有 <strong>{totalCapacity}</strong> 個空位。
+          {orphansAfterFit > 0 && (
+            <span style={{ color: '#DC2626' }}>
+              {' '}如果全部賓客都嚟，仍會有 <strong>{orphansAfterFit}</strong> 位孤兒。
+            </span>
+          )}
+        </p>
+
+        {unassigned.length === 0 ? (
+          <div
+            data-testid="auto-assign-empty"
+            style={{
+              padding: 24,
+              textAlign: 'center',
+              color: '#94A3B8',
+              background: '#F8FAFC',
+              borderRadius: 8,
+              margin: '16px 0',
+            }}
+          >
+            全部賓客都已分配 🎉
+          </div>
+        ) : (
+          <div
+            data-testid="auto-assign-list"
+            style={{ marginTop: 12, display: 'grid', gap: 8 }}
+          >
+            {overviews.map(({ guest: g, candidates }) => (
+              <div
+                key={g.id}
+                data-testid={`auto-assign-row-${g.id}`}
+                style={{
+                  padding: 8,
+                  border: '1px solid #E2E8F0',
+                  borderRadius: 6,
+                  background: candidates.length === 0 ? '#FEF2F2' : 'white',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>
+                    <strong>{g.name || `賓客 ${g.id}`}</strong>
+                    {g.category && (
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          fontSize: 10,
+                          padding: '0 4px',
+                          background: '#E0F2FE',
+                          color: '#0369A1',
+                          borderRadius: 3,
+                        }}
+                      >
+                        {g.category}
+                      </span>
+                    )}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#64748B' }}>
+                    {candidates.length === 0
+                      ? '❌ 冇適合嘅枱'
+                      : `${candidates.length} 張候選`}
+                  </span>
+                </div>
+                {candidates.length > 0 && (
+                  <ul
+                    style={{
+                      margin: '4px 0 0 0',
+                      paddingLeft: 16,
+                      fontSize: 12,
+                      color: '#475569',
+                    }}
+                  >
+                    {candidates.map((c) => (
+                      <li key={c.table.id}>
+                        {c.table.label} · 仲有{' '}
+                        <strong style={{ color: c.remaining <= 2 ? '#EA580C' : '#0F766E' }}>
+                          {c.remaining}
+                        </strong>{' '}
+                        位{' '}
+                        {c.reasons.categoryMatch ? '' : '⚠️ 類別唔啱'}
+                        <button
+                          type="button"
+                          data-testid={`auto-assign-pick-${g.id}-${c.table.id}`}
+                          onClick={() => onPick(g, c.table)}
+                          style={{
+                            marginLeft: 8,
+                            fontSize: 11,
+                            padding: '2px 6px',
+                            border: '1px solid #14B8A6',
+                            background: 'white',
+                            color: '#0F766E',
+                            borderRadius: 3,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          擺呢張
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onCancel} style={btnGhost}>取消</button>
+          {unassigned.length > 0 && (
+            <button
+              onClick={onPickAll}
+              data-testid="auto-assign-pick-all"
+              disabled={totalCapacity <= 0}
+              style={{
+                ...btnPrimary,
+                opacity: totalCapacity <= 0 ? 0.5 : 1,
+                cursor: totalCapacity <= 0 ? 'not-allowed' : 'pointer',
+              }}
+            >
+              🚀 一鍵擺晒 {hasOrphansPending && orphansAfterFit > 0
+                ? `(${orphansAfterFit} 位孤兒)`
+                : ''}
+            </button>
+          )}
         </div>
       </div>
     </div>
