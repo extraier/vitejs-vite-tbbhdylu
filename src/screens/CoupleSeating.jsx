@@ -19,18 +19,27 @@
  *      label, capacity, tableCategory, rotation.
  *
  * Phase 1.5 (guest→table drag-drop), 1.6 (dietary chips), 1.7 (toast)
- * come in P13.2. This MVP focuses on getting the schema in
- * place + a usable empty-state editor so owners can confirm
- * the data model is right before we invest in the polish.
+ * come in P13.2.
+ *
+ * Phase 2.6 (live attendance pill) and Phase 2.1 (scanner hook
+ * integration) come in P13.3.
+ *
+ * Phase 2.2 (helper live-edit) splits this file:
+ *   • SeatingCanvas  — role-agnostic canvas + drag-drop + guest panel.
+ *                       Lives in this file; also re-exported for the
+ *                       helper screen (HelperSeatingEdit.jsx).
+ *   • CoupleSeating  — thin owner wrapper: adds preset selector +
+ *                       editor modal trigger; role='owner'.
+ *   • HelperSeatingEdit.jsx — thin helper wrapper: role='helper',
+ *                             editor modal disabled, chrome stripped.
  *
  * State store: zustand-free; we hold the in-memory table list in
  * useState and snap it to Firestore via batch writes. The
  * Firestore listener is the source of truth on mount + after
- * every write returns. This mirrors how CoupleChecklist manages
- * items.
+ * every write returns.
  *
- * Permissions: this entire screen is owner/co-owner only. The
- * helper drag-drop variant is a different screen (Phase 2.2).
+ * Permissions: CoupleSeating is owner/co-owner only. The helper
+ * drag-drop variant is HelperSeatingEdit (Phase 2.2).
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
@@ -51,12 +60,21 @@ import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
 const APP_ID = 'savetheday-production';
 
-export function CoupleSeating({
+export function SeatingCanvas({
   ownerUid,
   eventId,
   onBack,
   onOpenToast,
   role = 'owner', // 'owner' | 'helper' — gates write UI
+  // 2026-09-17 — P13.3 refactor: editor modal lives in the
+  // owner wrapper. Helper live-edit has no editor modal at all;
+  // the canvas simply does not invoke this callback when
+  // role='helper'.
+  onRequestEditTable = null,
+  // 2026-09-17 — P13.3 refactor: preset selector lives in the
+  // owner wrapper. Helper live-edit has no preset button; the
+  // canvas simply does not render it when role='helper'.
+  onRequestApplyPreset = null,
 }) {
   // Live data
   const [tables, setTables] = useState([]);
@@ -782,6 +800,20 @@ export function CoupleSeating({
 }
 
 /* ---------- subcomponents ---------- */
+
+/**
+ * 2026-09-17 — P13.3 refactor: CoupleSeating is now a thin wrapper
+ * around SeatingCanvas (above). The wrapper exists for two reasons:
+ *   1. Stable import path — App.jsx imports './CoupleSeating' and
+ *      doesn't need to know about the internal SeatingCanvas split.
+ *   2. Future-proof — if the owner-only chrome (preset button,
+ *      editor modal) grows enough to warrant extraction, only this
+ *      wrapper changes; the canvas + helper screen stay untouched.
+ */
+export function CoupleSeating(props) {
+  // Forward all props. role defaults to 'owner' inside SeatingCanvas.
+  return <SeatingCanvas {...props} role={props.role || 'owner'} />;
+}
 
 function TableEditorModal({ initial, onSave, onCancel, onDelete }) {
   const [draft, setDraft] = useState(initial);

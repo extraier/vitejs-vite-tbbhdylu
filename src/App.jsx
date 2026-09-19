@@ -110,6 +110,7 @@ import { PhotoDrop } from './screens/PhotoDrop';
 // floor plan editor. Linked from the couple-checklist header in
 // P13.1; P13.4 will add a dedicated tab in EventsDashboard.
 import { CoupleSeating } from './screens/CoupleSeating';
+import { HelperSeatingEdit } from './screens/HelperSeatingEdit';
 // 2026-08-13 — DiscoverDirectory converted to lazy() below.
 // 2026-08-13 — M-04 audit fix. Heavy screens are now React.lazy() so
 // they're split into separate chunks instead of bloating the main
@@ -4994,19 +4995,21 @@ export default function App() {
                 />
               )}
 
-            {/* 2026-09-17 — P13.3 Phase 2.2: helper live-edit seating
-                screen. Reuses CoupleSeating with role='helper' so
-                the chrome (preset button, editor modal, table drag)
-                is hidden. Helpers can still drag guest chips into
-                helper-writable tables. Rule-level category scope
-                enforced in saveAssignment + firestore.rules. */}
+            {/* 2026-09-17 — P13.3 Phase 2.2 (refactored 2026-09-18):
+                helper live-edit seating screen. Imports the
+                role-aware canvas from HelperSeatingEdit, which is
+                a thin wrapper around the shared SeatingCanvas with
+                role='helper'. The chrome (preset button, editor
+                modal, table drag, new-table click) is hidden.
+                Helpers can still drag guest chips into helper-
+                writable tables. Rule-level category scope enforced
+                in saveAssignment + firestore.rules. */}
             {userRole === 'helper' && currentView === 'seating-edit' && helperActiveAssignment && (
-              <CoupleSeating
+              <HelperSeatingEdit
                 ownerUid={helperActiveAssignment.ownerUid || helperActiveAssignment.event?.ownerUid}
                 eventId={helperActiveAssignment.eventId || helperActiveAssignment.event?.id}
                 onBack={() => setCurrentView('helper-dashboard')}
                 onOpenToast={showToast}
-                role="helper"
               />
             )}
 
