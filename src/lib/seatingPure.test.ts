@@ -3,6 +3,9 @@ import {
   // constants
   SEATING_TABLE_CATEGORIES,
   HELPER_WRITABLE_TABLE_CATEGORIES,
+  FIXED_SLOT_CATEGORIES,
+  CHINESE_ROUND_CAPACITY_OPTIONS,
+  CHINESE_ROUND_COUNT_OPTIONS,
   TABLE_SHAPES,
   // types
   // (exported for ts inference; not directly referenced in tests)
@@ -634,3 +637,155 @@ describe('P13.3 — scanner hook + live badge helpers', () => {
     });
   });
 });
+
+// ---------- P13.4.3: 中式 preset refinements ----------
+import {
+  chineseNumber,
+  chinesePreset,
+  fixedSlotBadge,
+} from './seatingPure';
+
+describe('chineseNumber', () => {
+  it('returns traditional Chinese numerals for 1..10', () => {
+    expect(chineseNumber(1)).toBe('一');
+    expect(chineseNumber(2)).toBe('二');
+    expect(chineseNumber(3)).toBe('三');
+    expect(chineseNumber(4)).toBe('四');
+    expect(chineseNumber(5)).toBe('五');
+    expect(chineseNumber(6)).toBe('六');
+    expect(chineseNumber(7)).toBe('七');
+    expect(chineseNumber(8)).toBe('八');
+    expect(chineseNumber(9)).toBe('九');
+    expect(chineseNumber(10)).toBe('十');
+  });
+  it('handles 11..19 as 十 + digit', () => {
+    expect(chineseNumber(11)).toBe('十一');
+    expect(chineseNumber(15)).toBe('十五');
+    expect(chineseNumber(19)).toBe('十九');
+  });
+  it('handles 20..99 as X + 十 + Y', () => {
+    expect(chineseNumber(20)).toBe('二十');
+    expect(chineseNumber(21)).toBe('二十一');
+    expect(chineseNumber(30)).toBe('三十');
+    expect(chineseNumber(99)).toBe('九十九');
+  });
+  it('falls back to arabic for n >= 100', () => {
+    expect(chineseNumber(100)).toBe('100');
+    expect(chineseNumber(150)).toBe('150');
+  });
+});
+
+describe('chinesePreset', () => {
+  it('returns 14 tables by default (1 head + 1 ceremony + 12 圍)', () => {
+    const out = chinesePreset();
+    expect(out).toHaveLength(14);
+    expect(out[0].label).toBe('主家席');
+    expect(out[0].tableCategory).toBe('bride_groom');
+    expect(out[1].label).toBe('證婚席');
+    expect(out[1].tableCategory).toBe('ceremony');
+  });
+  it('uses default capacity 10 for 圍', () => {
+    const out = chinesePreset();
+    const rounds = out.slice(2);
+    expect(rounds).toHaveLength(12);
+    expect(rounds[0].capacity).toBe(10);
+    expect(rounds[0].shape).toBe('round');
+    expect(rounds[0].tableCategory).toBe('friends');
+  });
+  it('respects roundCapacity option', () => {
+    expect(chinesePreset({ roundCapacity: 8 })[2].capacity).toBe(8);
+    expect(chinesePreset({ roundCapacity: 12 })[2].capacity).toBe(12);
+  });
+  it('respects roundCount option', () => {
+    expect(chinesePreset({ roundCount: 8 })).toHaveLength(10); // 2 + 8
+    expect(chinesePreset({ roundCount: 15 })).toHaveLength(17); // 2 + 15
+    expect(chinesePreset({ roundCount: 20 })).toHaveLength(22); // 2 + 20
+  });
+  it('labels 圍 with traditional Chinese numerals', () => {
+    const out = chinesePreset({ roundCount: 12 });
+    expect(out[2].label).toBe('第一圍');
+    expect(out[3].label).toBe('第二圍');
+    expect(out[12].label).toBe('第十一圍');
+    expect(out[13].label).toBe('第十二圍');
+  });
+  it('places 圍 on a ring around the central dance floor', () => {
+    const out = chinesePreset({ roundCount: 8 });
+    const cx = 600, cy = 500;
+    const ring = 240;
+    // First 圍 at 12 o'clock (angle = -PI/2)
+    const angle0 = -Math.PI / 2;
+    const x0 = Math.round(cx + Math.cos(angle0) * ring - 40);
+    const y0 = Math.round(cy + Math.sin(angle0) * ring * 0.7 - 40);
+    expect(out[2].x).toBe(x0);
+    expect(out[2].y).toBe(y0);
+  });
+  it('all preset tables have source=preset', () => {
+    const out = chinesePreset();
+    expect(out.every((t) => t.source === 'preset')).toBe(true);
+  });
+  it('every table has a unique id', () => {
+    const out = chinesePreset({ roundCount: 20 });
+    const ids = new Set(out.map((t) => t.id));
+    expect(ids.size).toBe(out.length);
+  });
+});
+
+describe('fixedSlotBadge', () => {
+  it('returns badge for fixed-slot categories', () => {
+    expect(fixedSlotBadge('bride_groom')).toEqual({
+      text: '主家', color: '#9D174D', bg: '#FCE7F3',
+    });
+    expect(fixedSlotBadge('ceremony')).toEqual({
+      text: '證婚', color: '#92400E', bg: '#FEF3C7',
+    });
+    expect(fixedSlotBadge('groomsmen')).toEqual({
+      text: '兄弟', color: '#1E3A8A', bg: '#DBEAFE',
+    });
+    expect(fixedSlotBadge('bridesmaid')).toEqual({
+      text: '姐妹', color: '#9D174D', bg: '#FCE7F3',
+    });
+    expect(fixedSlotBadge('elder_family')).toEqual({
+      text: '長輩', color: '#7C2D12', bg: '#FED7AA',
+    });
+  });
+  it('returns null for non-fixed-slot categories', () => {
+    expect(fixedSlotBadge('friends')).toBeNull();
+    expect(fixedSlotBadge('kids')).toBeNull();
+    expect(fixedSlotBadge('colleagues')).toBeNull();
+    expect(fixedSlotBadge('other')).toBeNull();
+  });
+});
+
+describe('FIXED_SLOT_CATEGORIES', () => {
+  it('includes the 5 fixed-slot categories', () => {
+    expect(FIXED_SLOT_CATEGORIES.has('bride_groom')).toBe(true);
+    expect(FIXED_SLOT_CATEGORIES.has('ceremony')).toBe(true);
+    expect(FIXED_SLOT_CATEGORIES.has('groomsmen')).toBe(true);
+    expect(FIXED_SLOT_CATEGORIES.has('bridesmaid')).toBe(true);
+    expect(FIXED_SLOT_CATEGORIES.has('elder_family')).toBe(true);
+  });
+  it('excludes the helper-writable categories', () => {
+    expect(FIXED_SLOT_CATEGORIES.has('friends')).toBe(false);
+    expect(FIXED_SLOT_CATEGORIES.has('kids')).toBe(false);
+    expect(FIXED_SLOT_CATEGORIES.has('colleagues')).toBe(false);
+    expect(FIXED_SLOT_CATEGORIES.has('other')).toBe(false);
+  });
+  it('disjoint with HELPER_WRITABLE_TABLE_CATEGORIES', () => {
+    for (const cat of HELPER_WRITABLE_TABLE_CATEGORIES) {
+      expect(FIXED_SLOT_CATEGORIES.has(cat)).toBe(false);
+    }
+  });
+});
+
+describe('CHINESE_ROUND_CAPACITY_OPTIONS', () => {
+  it('lists 8/10/12', () => {
+    expect(CHINESE_ROUND_CAPACITY_OPTIONS).toEqual([8, 10, 12]);
+  });
+});
+
+describe('CHINESE_ROUND_COUNT_OPTIONS', () => {
+  it('lists standard 圍數 options', () => {
+    expect(CHINESE_ROUND_COUNT_OPTIONS).toEqual([8, 10, 12, 15, 18, 20]);
+  });
+});
+

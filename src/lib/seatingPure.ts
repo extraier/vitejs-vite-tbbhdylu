@@ -546,9 +546,150 @@ export function categorizeErrors(
   return buckets;
 }
 
+/**
+ * 2026-09-18 — P13.4.3: 中式 preset refinements.
+ *
+ * Standard 圍枱 sizes in HK wedding banquets (10-12 people per
+ * 圍 is most common, 8 for tighter family-style). Operators can
+ * pick a size when applying the preset.
+ */
+export const CHINESE_ROUND_CAPACITY_OPTIONS = [8, 10, 12] as const;
+export type ChineseRoundCapacity = (typeof CHINESE_ROUND_CAPACITY_OPTIONS)[number];
+
+/**
+ * Standard 圍數 (number of 圍) for HK wedding banquets. 10-15 is
+ * typical (100-180 guests at 10/圍, 80-120 at 12/圍).
+ */
+export const CHINESE_ROUND_COUNT_OPTIONS = [8, 10, 12, 15, 18, 20] as const;
+export type ChineseRoundCount = (typeof CHINESE_ROUND_COUNT_OPTIONS)[number];
+
+export interface ChinesePresetOptions {
+  /** Capacity per 圍枱 (default 10). */
+  roundCapacity?: ChineseRoundCapacity;
+  /** Number of 圍 to lay out (default 12). */
+  roundCount?: ChineseRoundCount;
+}
+
+/**
+ * Categories considered "fixed slots" — visually distinct on the
+ * canvas, not writable by helpers. 主家席 = bride_groom, 證婚席
+ * = ceremony, 兄弟 = groomsmen, 姐妹 = bridesmaid, 長輩 =
+ * elder_family. Used by the canvas to draw a dashed border +
+ * "主家" / "證婚" / "兄弟" / "姐妹" / "長輩" badge.
+ */
+export const FIXED_SLOT_CATEGORIES = new Set<TableCategory>([
+  'bride_groom',
+  'ceremony',
+  'groomsmen',
+  'bridesmaid',
+  'elder_family',
+]);
+
+export interface FixedSlotBadge {
+  text: string; // 2-3 char zh-HK label
+  color: string; // text color
+  bg: string;   // background color
+}
+
+const FIXED_SLOT_BADGES: Record<TableCategory, FixedSlotBadge> = {
+  bride_groom:  { text: '主家', color: '#9D174D', bg: '#FCE7F3' }, // pink
+  ceremony:     { text: '證婚', color: '#92400E', bg: '#FEF3C7' }, // amber
+  groomsmen:    { text: '兄弟', color: '#1E3A8A', bg: '#DBEAFE' }, // blue
+  bridesmaid:   { text: '姐妹', color: '#9D174D', bg: '#FCE7F3' }, // pink
+  elder_family: { text: '長輩', color: '#7C2D12', bg: '#FED7AA' }, // orange
+  friends:      { text: '',     color: '',        bg: '' },
+  kids:         { text: '',     color: '',        bg: '' },
+  colleagues:   { text: '',     color: '',        bg: '' },
+  other:        { text: '',     color: '',        bg: '' },
+};
+
+/**
+ * Look up the fixed-slot badge for a category. Returns null if
+ * the category is NOT a fixed slot.
+ */
+export function fixedSlotBadge(category: TableCategory): FixedSlotBadge | null {
+  if (!FIXED_SLOT_CATEGORIES.has(category)) return null;
+  return FIXED_SLOT_BADGES[category];
+}
+
+/**
+ * Build the Chinese preset (中式 banquet). Generates a 主家席 at
+ * the top, a 證婚席 below it, then a ring of N 圍 around a
+ * central dance floor (or just blank space if N is small).
+ *
+ * The returned tables all have source='preset' and are safe to
+ * bulk-write via batch.set().
+ */
+export function chinesePreset(opts: ChinesePresetOptions = {}): SeatingTable[] {
+  const roundCapacity = opts.roundCapacity ?? 10;
+  const roundCount = opts.roundCount ?? 12;
+  const rows: SeatingTable[] = [];
+  // 主家席 (small long rect at top — bride + groom + parents)
+  rows.push({
+    id: 'p-c-bride',
+    label: '主家席',
+    shape: 'long',
+    capacity: 12,
+    tableCategory: 'bride_groom',
+    x: 500, y: 80, rotation: 0,
+    source: 'preset',
+  });
+  // 證婚席 (smaller rect below — MC + witnesses + ring bearer)
+  rows.push({
+    id: 'p-c-ceremony',
+    label: '證婚席',
+    shape: 'rect',
+    capacity: 8,
+    tableCategory: 'ceremony',
+    x: 540, y: 200, rotation: 0,
+    source: 'preset',
+  });
+  // N 圍 around the dance floor. cx=600, cy=500. ring=240
+  // horizontal, 0.7 vertical squash so it fits a wide canvas.
+  const cx = 600, cy = 500;
+  const ring = 240;
+  for (let i = 0; i < roundCount; i++) {
+    const angle = (i / roundCount) * Math.PI * 2 - Math.PI / 2;
+    const x = cx + Math.cos(angle) * ring - 40;
+    const y = cy + Math.sin(angle) * ring * 0.7 - 40;
+    rows.push({
+      id: `p-c-${i + 1}`,
+      label: `第${chineseNumber(i + 1)}圍`,
+      shape: 'round',
+      capacity: roundCapacity,
+      tableCategory: 'friends',
+      x: Math.round(x),
+      y: Math.round(y),
+      rotation: 0,
+      source: 'preset',
+    });
+  }
+  return rows;
+}
+
+/**
+ * Convert 1..20 to traditional Chinese numerals (一, 二, 三 …
+ * 二十) for 圍枱 labels. Operators see "第三圍" not "第 3 圍".
+ */
+export function chineseNumber(n: number): string {
+  const digits = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+  if (n < 10) return digits[n];
+  if (n === 10) return '十';
+  if (n < 20) return '十' + digits[n - 10];
+  if (n < 100) {
+    const tens = Math.floor(n / 10);
+    const ones = n % 10;
+    return digits[tens] + '十' + (ones ? digits[ones] : '');
+  }
+  return String(n); // fall back to arabic for n >= 100
+}
+
 export default {
   SEATING_TABLE_CATEGORIES,
   HELPER_WRITABLE_TABLE_CATEGORIES,
+  FIXED_SLOT_CATEGORIES,
+  CHINESE_ROUND_CAPACITY_OPTIONS,
+  CHINESE_ROUND_COUNT_OPTIONS,
   TABLE_SHAPES,
   normalizeTable,
   emptyAssignment,
@@ -565,4 +706,7 @@ export default {
   tableLabelForGuest,
   formatLivePill,
   categorizeErrors,
+  chineseNumber,
+  chinesePreset,
+  fixedSlotBadge,
 };

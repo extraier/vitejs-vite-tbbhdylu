@@ -55,6 +55,11 @@ import {
   buildAssignmentDocId,
   liveSeatingBadges,
   formatLivePill,
+  chinesePreset as chinesePresetFn,
+  CHINESE_ROUND_CAPACITY_OPTIONS,
+  CHINESE_ROUND_COUNT_OPTIONS,
+  fixedSlotBadge,
+  FIXED_SLOT_CATEGORIES,
 } from '../lib/seatingPure';
 import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
@@ -275,8 +280,15 @@ export function SeatingCanvas({
   );
 
   /* ---------- presets ---------- */
+  // P13.4.3 — preset options state. Defaults match the prior
+  // behaviour (12 圍 at 10 each) so an operator who taps "套用"
+  // without touching anything gets exactly what they used to get.
+  const [presetOpts, setPresetOpts] = useState({
+    roundCapacity: 10,
+    roundCount: 12,
+  });
   const applyPreset = useCallback(
-    async (preset) => {
+    async (preset, opts = presetOpts) => {
       if (!ownerUid || !eventId) return;
       // Sanity: confirm if user already has tables
       if (tablesRef.current.length > 0) {
@@ -286,7 +298,9 @@ export function SeatingCanvas({
         if (!ok) return;
       }
       const batch = writeBatch(db);
-      const seed = presetTables(preset);
+      // P13.4.3 — Chinese preset now takes options; western stays
+      // unchanged. presetTables() picks the right builder.
+      const seed = presetTables(preset, opts);
 
       // Wipe existing tables
       tablesRef.current.forEach((t) => {
@@ -315,7 +329,7 @@ export function SeatingCanvas({
         await batch.commit();
         invalidateScannerTablesCache(ownerUid, eventId);
         setPresetsOpen(false);
-        showToast(`已套用 ${presetLabel(preset)} preset`);
+        showToast(`已套用 ${presetLabel(preset, opts)} preset`);
       } catch (e) {
         console.error('[seating] applyPreset', e);
         showToast('套用 preset 失敗，請重試');
@@ -832,6 +846,87 @@ export function SeatingCanvas({
                     </div>
                   </foreignObject>
                 )}
+                {/* P13.4.3 — Fixed-slot badge (主家/證婚/兄弟/姐妹/
+                    長輩). Renders centered at the top of the table
+                    body so it's always visible without colliding
+                    with the live-pill (top-left), dietary chip
+                    (top-right outside), or label (centered). Hidden
+                    when the live-pill is shown to avoid top-edge
+                    collision on round 80×80 tables where the arc
+                    narrows quickly above the equator. */}
+                {(() => {
+                  const badge = fixedSlotBadge(t.tableCategory);
+                  if (!badge) return null;
+                  const showAboveLivePill = !(livePill && liveBadge && liveBadge.checkedIn > 0);
+                  if (!showAboveLivePill) {
+                    // Render alongside the label instead.
+                    return (
+                      <foreignObject
+                        x={(w - 36) / 2}
+                        y={h / 2 + (isRound ? 8 : 14)}
+                        width="36"
+                        height="14"
+                      >
+                        <div
+                          xmlns="http://www.w3.org/1999/xhtml"
+                          data-testid={`fixed-slot-badge-${t.id}`}
+                          data-fixed-slot={t.tableCategory}
+                          style={{
+                            background: badge.bg,
+                            border: 'none',
+                            borderRadius: 4,
+                            padding: '0 3px',
+                            fontSize: 9,
+                            lineHeight: '14px',
+                            color: badge.color,
+                            textAlign: 'center',
+                            fontWeight: 700,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            boxSizing: 'border-box',
+                            width: '100%',
+                            height: '100%',
+                          }}
+                        >
+                          {badge.text}
+                        </div>
+                      </foreignObject>
+                    );
+                  }
+                  // No live-pill: render at top-center inside the table.
+                  return (
+                    <foreignObject
+                      x={(w - 36) / 2}
+                      y={4}
+                      width="36"
+                      height="14"
+                    >
+                      <div
+                        xmlns="http://www.w3.org/1999/xhtml"
+                        data-testid={`fixed-slot-badge-${t.id}`}
+                        data-fixed-slot={t.tableCategory}
+                        style={{
+                          background: badge.bg,
+                          border: 'none',
+                          borderRadius: 4,
+                          padding: '0 3px',
+                          fontSize: 9,
+                          lineHeight: '14px',
+                          color: badge.color,
+                          textAlign: 'center',
+                          fontWeight: 700,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          boxSizing: 'border-box',
+                          width: '100%',
+                          height: '100%',
+                        }}
+                      >
+                        {badge.text}
+                      </div>
+                    </foreignObject>
+                  );
+                })()}
                 {/* Live attendance pill (P13.3, repositioned 2026-09-18
                     to option D — top-left inside the table body,
                     mirroring the dietary chip's top-right placement).
@@ -950,6 +1045,9 @@ export function SeatingCanvas({
         <PresetSheet
           onPick={(p) => applyPreset(p)}
           onCancel={() => setPresetsOpen(false)}
+          roundCapacity={presetOpts.roundCapacity}
+          roundCount={presetOpts.roundCount}
+          onOptsChange={(patch) => setPresetOpts((o) => ({ ...o, ...patch }))}
         />
       )}
     </div>
@@ -1073,7 +1171,7 @@ function TableEditorModal({ initial, onSave, onCancel, onDelete }) {
   );
 }
 
-function PresetSheet({ onPick, onCancel }) {
+function PresetSheet({ onPick, onCancel, roundCapacity, roundCount, onOptsChange }) {
   return (
     <div role="dialog" style={modalBackdrop} onClick={onCancel}>
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
@@ -1081,8 +1179,8 @@ function PresetSheet({ onPick, onCancel }) {
         <p style={{ color: '#64748B', fontSize: 13 }}>一鍵生成整個 floor plan 嘅骨架</p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 12 }}>
           <PresetCard
-            title="中式 12 圍"
-            description="主家席頂位 + 12 圍圓枱環繞舞台"
+            title="中式 N 圍"
+            description={`主家席頂位 + ${roundCount} 圍圓枱環繞舞台（${roundCount} 人/圍）`}
             onClick={() => onPick('chinese')}
           />
           <PresetCard
@@ -1096,10 +1194,98 @@ function PresetSheet({ onPick, onCancel }) {
             onClick={() => onPick('custom')}
           />
         </div>
+        {/* P13.4.3 — Chinese preset options. Stepper for 圍 capacity
+            (8/10/12) and 圍 count (8/10/12/15/18/20). Operators can
+            preview the exact label "中式 15 圍 · 12人/圍" as they
+            pick. The "自訂空板" card ignores these (always empty). */}
+        <div
+          data-testid="chinese-preset-options"
+          style={{
+            marginTop: 20,
+            padding: 12,
+            background: '#FAFAF9',
+            border: '1px solid #E2E8F0',
+            borderRadius: 8,
+          }}
+        >
+          <div style={{ fontSize: 12, color: '#475569', marginBottom: 8, fontWeight: 600 }}>
+            中式 preset 設定
+          </div>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            <StepperField
+              label="每圍人數"
+              value={roundCapacity}
+              options={CHINESE_ROUND_CAPACITY_OPTIONS}
+              onChange={(v) => onOptsChange({ roundCapacity: v })}
+              testid="round-capacity-stepper"
+            />
+            <StepperField
+              label="圍數"
+              value={roundCount}
+              options={CHINESE_ROUND_COUNT_OPTIONS}
+              onChange={(v) => onOptsChange({ roundCount: v })}
+              testid="round-count-stepper"
+            />
+            <span
+              data-testid="preset-preview-label"
+              style={{ fontSize: 12, color: '#0F766E', fontWeight: 600, marginLeft: 'auto' }}
+            >
+              中式 {roundCount} 圍 · {roundCapacity}人/圍
+            </span>
+          </div>
+        </div>
         <div style={{ marginTop: 16, textAlign: 'right' }}>
           <button onClick={onCancel} style={btnGhost}>取消</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function StepperField({ label, value, options, onChange, testid }) {
+  const idx = options.indexOf(value);
+  const dec = () => {
+    if (idx > 0) onChange(options[idx - 1]);
+  };
+  const inc = () => {
+    if (idx < options.length - 1) onChange(options[idx + 1]);
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{ fontSize: 12, color: '#64748B' }}>{label}</span>
+      <button
+        type="button"
+        onClick={dec}
+        disabled={idx <= 0}
+        data-testid={`${testid}-dec`}
+        style={{
+          width: 24, height: 24, borderRadius: 4,
+          border: '1px solid #CBD5E1', background: 'white',
+          cursor: idx <= 0 ? 'not-allowed' : 'pointer',
+          color: '#475569', fontSize: 14, lineHeight: '20px',
+          padding: 0,
+        }}
+      >−</button>
+      <span
+        data-testid={testid}
+        style={{
+          minWidth: 36, textAlign: 'center', fontWeight: 700,
+          color: '#0F766E', fontSize: 14,
+        }}
+      >{value}</span>
+      <button
+        type="button"
+        onClick={inc}
+        disabled={idx >= options.length - 1}
+        data-testid={`${testid}-inc`}
+        style={{
+          width: 24, height: 24, borderRadius: 4,
+          border: '1px solid #CBD5E1', background: 'white',
+          cursor: idx >= options.length - 1 ? 'not-allowed' : 'pointer',
+          color: '#475569', fontSize: 14, lineHeight: '20px',
+          padding: 0,
+        }}
+      >+</button>
     </div>
   );
 }
@@ -1127,65 +1313,18 @@ function PresetCard({ title, description, onClick }) {
 
 /* ---------- preset geometry ---------- */
 
-function presetTables(style) {
-  if (style === 'chinese') return chinesePreset();
+function presetTables(style, opts = {}) {
+  if (style === 'chinese') return chinesePresetFn(opts);
   if (style === 'western') return westernPreset();
   return []; // custom = empty board
 }
 
-function chinesePreset() {
-  // 1 head table + 12 圍 圓枱 arranged in a fan around the stage
-  const rows = [];
-  // 主家席 (small rectangle at top)
-  rows.push({ id: 'p-c-bride', label: '主家席', shape: 'long', capacity: 12, tableCategory: 'bride_groom', x: 500, y: 80, rotation: 0 });
-  // 證婚席
-  rows.push({ id: 'p-c-ceremony', label: '證婚席', shape: 'rect', capacity: 8, tableCategory: 'ceremony', x: 540, y: 200, rotation: 0 });
-  // 12 圍 around the dance floor
-  const cx = 600, cy = 500;
-  const ring = 240;
-  for (let i = 0; i < 12; i++) {
-    const angle = (i / 12) * Math.PI * 2 - Math.PI / 2; // start from 12 o'clock
-    const x = cx + Math.cos(angle) * ring - 40;
-    const y = cy + Math.sin(angle) * ring * 0.7 - 40;
-    rows.push({
-      id: `p-c-${i + 1}`,
-      label: `第 ${i + 1} 圍`,
-      shape: 'round',
-      capacity: 10,
-      tableCategory: 'friends',
-      x: Math.round(x), y: Math.round(y), rotation: 0,
-    });
+function presetLabel(style, opts = {}) {
+  if (style === 'chinese') {
+    const cap = opts.roundCapacity ?? 10;
+    const cnt = opts.roundCount ?? 12;
+    return `中式 ${cnt} 圍 · ${cap}人/圍`;
   }
-  return rows;
-}
-
-function westernPreset() {
-  const rows = [];
-  // Head table
-  rows.push({ id: 'p-w-head', label: 'Head Table', shape: 'long', capacity: 8, tableCategory: 'bride_groom', x: 700, y: 100, rotation: 0 });
-  // Sweetheart
-  rows.push({ id: 'p-w-sweet', label: '新郎新娘', shape: 'round', capacity: 2, tableCategory: 'bride_groom', x: 780, y: 220, rotation: 0 });
-  // 8 long tables in 2 rows of 4
-  const ys = [380, 600];
-  ys.forEach((y, row) => {
-    for (let c = 0; c < 4; c++) {
-      rows.push({
-        id: `p-w-${row}-${c}`,
-        label: `T-${row * 4 + c + 1}`,
-        shape: 'rect',
-        capacity: 10,
-        tableCategory: row === 0 && c === 0 ? 'groomsmen' : 'friends',
-        x: 200 + c * 320, y, rotation: 0,
-      });
-    }
-  });
-  // Dance floor
-  rows.push({ id: 'p-w-dance', label: '舞池', shape: 'rect', capacity: 0, tableCategory: 'ceremony', x: 720, y: 400, rotation: 0 });
-  return rows;
-}
-
-function presetLabel(style) {
-  if (style === 'chinese') return '中式 12 圍';
   if (style === 'western') return '西式 8 long';
   return '自訂空板';
 }
