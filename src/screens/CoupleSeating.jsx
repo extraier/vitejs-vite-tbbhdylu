@@ -680,10 +680,15 @@ export function SeatingCanvas({
                     </div>
                   </foreignObject>
                 )}
-                {/* Live attendance pill (P13.3) — only renders when at
-                    least one checked-in guest exists for this table. */}
+                {/* Live attendance pill (P13.3, repositioned 2026-09-18
+                    to option D — top-left inside the table body,
+                    mirroring the dietary chip's top-right placement).
+                    Only renders when at least one checked-in guest
+                    exists for this table. The 4px inset keeps the
+                    pill clear of the table body's stroke and, on
+                    round tables, just inside the upper-left arc. */}
                 {livePill && liveBadge && liveBadge.checkedIn > 0 && (
-                  <foreignObject x={w - 64} y={h + 4} width="60" height="20">
+                  <foreignObject x={4} y={4} width="56" height="20">
                     <div
                       xmlns="http://www.w3.org/1999/xhtml"
                       data-testid={`live-pill-${t.id}`}
