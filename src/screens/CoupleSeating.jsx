@@ -654,92 +654,146 @@ export function SeatingCanvas({
                 )}
                 <text
                   x={w / 2}
-                  y={h / 2 - (isRound ? 6 : 4)}
-                  fontSize="14"
+                  y={h / 2 - (isRound ? 14 : 4)}
+                  fontSize={isRound ? "12" : "14"}
                   fontWeight="600"
                   fill="#0F766E"
                   textAnchor="middle"
                 >
                   {t.label}
                 </text>
-                {/* Count + category badge (P13.3 follow-up 2026-09-18:
-                    was a raw <text> line; refactored to a centered
-                    foreignObject pill so it stays legible on round
-                    tables (where the previous text got visually
-                    cluttered with the ellipse curve) and overflow
-                    tables get an explicit red-tinted pill. Width
-                    grows with the text up to ~120px; sits below the
-                    label, above the bottom edge. */}
+                {/* Two-pill stack: count + category (P13.3 v3,
+                    2026-09-18). User feedback after v2 shipped:
+                    drop the category when overflowing was the
+                    wrong call — operators want to see the category
+                    at a glance even on round tables. Split into two
+                    stacked pills:
+                      Row 1: "X/Y 座位" (count)
+                      Row 2: "category" (smaller, secondary color)
+                    On round 80×80 we use 14px-tall pills with 2px
+                    gap, label moves up; on long tables the existing
+                    20px pills stack normally. Both pills are still
+                    capped by table width and use the same char-width
+                    estimator as v2. Overflow state (filled > capacity)
+                    makes the count pill flip to red. */}
                 {(() => {
-                  // Cap pill width by the table shape so we never
-                  // overflow the table body. Round tables (80×80
-                  // typical) get ~60px max because the ellipse
-                  // narrows quickly above and below the equator;
-                  // long tables get full label room.
+                  const countLabel = `${filled}/${t.capacity} 座位`;
+                  const catLabel = t.tableCategory;
+                  // Char-width estimator (PingFang TC at 10px):
+                  // CJK=10, Latin/digit=5.5, punct=3, padding 12.
+                  const estW = (s) => {
+                    let w = 12;
+                    for (const ch of s) {
+                      const code = ch.charCodeAt(0);
+                      if (code >= 0x4E00 && code <= 0x9FFF) w += 10;
+                      else if (/[A-Za-z0-9]/.test(ch)) w += 5.5;
+                      else w += 3;
+                    }
+                    return w;
+                  };
+                  const pillH = isRound ? 14 : 20;
+                  const pillGap = isRound ? 2 : 4;
+                  const fontPx = isRound ? 9 : 10;
+                  // Round tables get a tighter cap because the
+                  // ellipse narrows above/below the equator; long
+                  // tables can use nearly full label room.
                   const pillMaxW = isRound
                     ? Math.min(60, w - 16)
                     : Math.min(140, w - 16);
-                  // CJK char widths at 10px PingFang TC: CJK≈10,
-                  // Latin/digit≈5.5, space/slash/dot≈3, padding 12.
-                  let estW = 12;
-                  for (const ch of label) {
-                    const code = ch.charCodeAt(0);
-                    if (code >= 0x4E00 && code <= 0x9FFF) {
-                      estW += 10;
-                    } else if (/[A-Za-z0-9]/.test(ch)) {
-                      estW += 5.5;
-                    } else {
-                      estW += 3;
-                    }
-                  }
-                  const pillW = Math.min(pillMaxW, Math.ceil(estW / 4) * 4);
-                  // Decide what to render. On round tables when the
-                  // category wouldn't fit, drop it and just show
-                  // the count — operators can read the category from
-                  // the editor or the preset.
-                  let shown = label;
-                  if (pillW < estW && isRound && label.includes(' · ')) {
-                    shown = label.split(' · ')[0]; // "X/Y 座位"
-                  }
-                  // Center horizontally inside the table's local
-                  // coordinate space (the <g> is already translated
-                  // to (t.x, t.y); we use the local w/h).
-                  const pillX = (w - pillW) / 2;
-                  const pillY = isRound ? h / 2 + 6 : h / 2 + 8;
+                  // Width per pill: round UP to nearest 4px so
+                  // the border renders crisp at any zoom.
+                  const countEstW = estW(countLabel);
+                  const countW = Math.min(pillMaxW, Math.ceil(countEstW / 4) * 4);
+                  // Category pill: keep the same cap; it shouldn't
+                  // ever be wider than the count pill in practice,
+                  // but if a category name is enormous we still
+                  // cap it.
+                  const catEstW = estW(catLabel);
+                  const catW = Math.min(pillMaxW, Math.ceil(catEstW / 4) * 4);
+                  // Vertical stack: top of count pill is just below
+                  // the label, gap, then category.
+                  const countY = isRound ? h / 2 - 2 : h / 2 + 4;
+                  const catY = countY + pillH + pillGap;
+                  // Centering: each pill horizontally centered.
+                  const countX = (w - countW) / 2;
+                  const catX = (w - catW) / 2;
                   return (
-                    <foreignObject
-                      x={pillX}
-                      y={pillY}
-                      width={pillW}
-                      height="20"
-                    >
-                      <div
-                        xmlns="http://www.w3.org/1999/xhtml"
-                        data-testid={`table-count-pill-${t.id}`}
-                        data-filled={filled}
-                        data-capacity={t.capacity}
-                        title={`已分配 ${filled}/${t.capacity} 座位 · ${t.tableCategory}`}
-                        style={{
-                          background: overflow ? '#FEF2F2' : '#F1F5F9',
-                          border: overflow ? '1px solid #DC2626' : '1px solid #CBD5E1',
-                          borderRadius: 10,
-                          padding: '0 6px',
-                          fontSize: 10,
-                          lineHeight: '18px',
-                          color: overflow ? '#991B1B' : '#475569',
-                          textAlign: 'center',
-                          fontWeight: 600,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          boxSizing: 'border-box',
-                          width: '100%',
-                          height: '100%',
-                        }}
+                    <>
+                      {/* Count pill (row 1) */}
+                      <foreignObject
+                        x={countX}
+                        y={countY}
+                        width={countW}
+                        height={pillH}
                       >
-                        {shown}
-                      </div>
-                    </foreignObject>
+                        <div
+                          xmlns="http://www.w3.org/1999/xhtml"
+                          data-testid={`table-count-pill-${t.id}`}
+                          data-filled={filled}
+                          data-capacity={t.capacity}
+                          title={`已分配 ${filled}/${t.capacity} 座位`}
+                          style={{
+                            background: overflow ? '#FEF2F2' : '#F1F5F9',
+                            border: overflow
+                              ? '1px solid #DC2626'
+                              : '1px solid #CBD5E1',
+                            borderRadius: 8,
+                            padding: '0 5px',
+                            fontSize: fontPx,
+                            lineHeight: `${pillH - 2}px`,
+                            color: overflow ? '#991B1B' : '#475569',
+                            textAlign: 'center',
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            boxSizing: 'border-box',
+                            width: '100%',
+                            height: '100%',
+                          }}
+                        >
+                          {countLabel}
+                        </div>
+                      </foreignObject>
+                      {/* Category pill (row 2) — always rendered,
+                          even if it duplicates the table label or
+                          is empty. Uses a quieter palette (lighter
+                          background, no border) so it doesn't
+                          compete with the count for attention. */}
+                      <foreignObject
+                        x={catX}
+                        y={catY}
+                        width={catW}
+                        height={pillH}
+                      >
+                        <div
+                          xmlns="http://www.w3.org/1999/xhtml"
+                          data-testid={`table-category-pill-${t.id}`}
+                          data-category={t.tableCategory}
+                          title={`分類：${t.tableCategory}`}
+                          style={{
+                            background: overflow ? '#FEF2F2' : '#FFFFFF',
+                            border: '1px solid #E2E8F0',
+                            borderRadius: 8,
+                            padding: '0 5px',
+                            fontSize: fontPx,
+                            lineHeight: `${pillH - 2}px`,
+                            color: overflow ? '#991B1B' : '#64748B',
+                            textAlign: 'center',
+                            fontWeight: 500,
+                            fontStyle: 'italic',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            boxSizing: 'border-box',
+                            width: '100%',
+                            height: '100%',
+                          }}
+                        >
+                          {catLabel}
+                        </div>
+                      </foreignObject>
+                    </>
                   );
                 })()}
                 {/* Dietary chip (P13.2) */}
