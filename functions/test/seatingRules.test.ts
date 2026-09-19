@@ -657,3 +657,122 @@ describe('cross-owner isolation (P13)', () => {
     );
   });
 });
+
+/* ============================ Helper category-scope (P13.2) ============================ */
+
+describe('helper category-scope enforcement (P13.2)', () => {
+  // P13.2 lets helpers do live seating edits — but ONLY for tables in
+  // the lower-tier categories (friends / kids / colleagues / other).
+  // Family tables (bride_groom / elder_family / groomsmen / bridesmaid)
+  // and the ceremony table are owner-only. This validates the rule.
+  //
+  // To test this we need to seed a `tables/{id}` doc with the
+  // target category FIRST, then attempt the assignment write as the
+  // helper. The rule reads from the existing table doc.
+
+  it.skipIf(skipEmulator)('helper CAN write assignment for a friends table', async () => {
+    // seed table category=friends
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tables/friends-t`,
+      ).set({
+        label: 'T-F', shape: 'round', capacity: 8,
+        tableCategory: 'friends', x: 0, y: 0, rotation: 0,
+        source: 'manual',
+      });
+    });
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertSucceeds(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tableAssignments/guest-x`,
+      ).set({
+        guestId: 'guest-x', tableId: 'friends-t', assignedAt: 1700000000000,
+        assignedBy: HELPER_A, assignedByRole: 'helper',
+      }),
+    );
+  });
+
+  it.skipIf(skipEmulator)('helper CAN write assignment for a kids table', async () => {
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tables/kids-t`,
+      ).set({
+        label: 'T-K', shape: 'round', capacity: 6,
+        tableCategory: 'kids', x: 0, y: 0, rotation: 0,
+        source: 'manual',
+      });
+    });
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertSucceeds(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tableAssignments/guest-y`,
+      ).set({
+        guestId: 'guest-y', tableId: 'kids-t', assignedAt: 1700000000000,
+        assignedBy: HELPER_A, assignedByRole: 'helper',
+      }),
+    );
+  });
+
+  it.skipIf(skipEmulator)('helper CANNOT write assignment for an elder_family table', async () => {
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tables/elder-t`,
+      ).set({
+        label: 'T-E', shape: 'round', capacity: 8,
+        tableCategory: 'elder_family', x: 0, y: 0, rotation: 0,
+        source: 'manual',
+      });
+    });
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertFails(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tableAssignments/guest-z`,
+      ).set({
+        guestId: 'guest-z', tableId: 'elder-t', assignedAt: 1700000000000,
+        assignedBy: HELPER_A, assignedByRole: 'helper',
+      }),
+    );
+  });
+
+  it.skipIf(skipEmulator)('helper CANNOT write assignment for a bride_groom table', async () => {
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tables/bg-t`,
+      ).set({
+        label: 'T-BG', shape: 'round', capacity: 2,
+        tableCategory: 'bride_groom', x: 0, y: 0, rotation: 0,
+        source: 'manual',
+      });
+    });
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertFails(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tableAssignments/guest-bg`,
+      ).set({
+        guestId: 'guest-bg', tableId: 'bg-t', assignedAt: 1700000000000,
+        assignedBy: HELPER_A, assignedByRole: 'helper',
+      }),
+    );
+  });
+
+  it.skipIf(skipEmulator)('helper CANNOT write assignment for a ceremony table', async () => {
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tables/cer-t`,
+      ).set({
+        label: 'T-Cer', shape: 'rect', capacity: 4,
+        tableCategory: 'ceremony', x: 0, y: 0, rotation: 0,
+        source: 'manual',
+      });
+    });
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertFails(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/tableAssignments/guest-cer`,
+      ).set({
+        guestId: 'guest-cer', tableId: 'cer-t', assignedAt: 1700000000000,
+        assignedBy: HELPER_A, assignedByRole: 'helper',
+      }),
+    );
+  });
+});
