@@ -88,8 +88,6 @@ export interface TableAssignment {
   assignedAt: number; // Date.now() at write time
   assignedBy?: string; // uid (owner / co-owner / helper)
   assignedByRole?: 'owner' | 'coOwner' | 'helper';
-  /** Optional — when set, marks this as a check-in stamp vs a planning write. */
-  isCheckIn?: boolean;
 }
 
 export interface GuestLite {

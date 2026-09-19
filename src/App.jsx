@@ -55,6 +55,10 @@ import { uploadPhotoToNas } from './lib/uploadToNas';
 import { recordTaskStatusUpdate } from './lib/taskUpdates';
 import { tableLabelForGuest } from './lib/seatingPure';
 import {
+  getCachedTables,
+  setCachedTables,
+} from './lib/scannerTablesCache';
+import {
   openInquiry,
   subscribeToInquiries,
   markInquiryRead,
@@ -3589,11 +3593,19 @@ export default function App() {
       if (tSnap.exists()) {
         const a = tSnap.data();
         // Resolve to the table's human label — fall back to tableId.
-        const tablesSnap = await getDocs(
-          collection(db, 'artifacts', appId, 'users', ownerUid, 'events', eventId, 'tables'),
-        );
-        const tablesList = [];
-        tablesSnap.forEach((d) => tablesList.push({ id: d.id, ...d.data() }));
+        // Use the in-memory cache (5min TTL) to avoid reading /tables
+        // on every scan. Couples with invalidateScannerTablesCache()
+        // from CoupleSeating drag-write, so a table rename/move is
+        // visible to the next scan.
+        let tablesList = getCachedTables(ownerUid, eventId);
+        if (!tablesList) {
+          const tablesSnap = await getDocs(
+            collection(db, 'artifacts', appId, 'users', ownerUid, 'events', eventId, 'tables'),
+          );
+          tablesList = [];
+          tablesSnap.forEach((d) => tablesList.push({ id: d.id, ...d.data() }));
+          setCachedTables(ownerUid, eventId, tablesList);
+        }
         tableLabel = tableLabelForGuest(guestRow.id, [a], tablesList);
       }
     } catch (err) {

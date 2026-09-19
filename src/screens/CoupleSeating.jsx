@@ -47,6 +47,7 @@ import {
   liveSeatingBadges,
   formatLivePill,
 } from '../lib/seatingPure';
+import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
 const APP_ID = 'savetheday-production';
 
@@ -225,6 +226,9 @@ export function CoupleSeating({
             updatedAt: Date.now(),
           },
         );
+        // P13.3 follow-up: bust the scanner tables cache so the
+        // next scan reads the fresh label/category.
+        invalidateScannerTablesCache(ownerUid, eventId);
         setEditingTable(null);
         showToast(id ? '已更新' : '已新增');
       } catch (e) {
@@ -242,6 +246,7 @@ export function CoupleSeating({
         await deleteDoc(
           doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tables', itemId: tableId })),
         );
+        invalidateScannerTablesCache(ownerUid, eventId);
         showToast('已刪除');
       } catch (e) {
         console.error('[seating] deleteTable', e);
@@ -290,6 +295,7 @@ export function CoupleSeating({
 
       try {
         await batch.commit();
+        invalidateScannerTablesCache(ownerUid, eventId);
         setPresetsOpen(false);
         showToast(`已套用 ${presetLabel(preset)} preset`);
       } catch (e) {
@@ -449,6 +455,10 @@ export function CoupleSeating({
         const newY = Math.max(0, s.originY + dy);
         // Optimistic local update — write through Firestore immediately.
         // The single-doc listener will reconcile any race.
+        // P13.3 follow-up: dragging a table doesn't change its label
+        // or category, so we do NOT invalidate the scanner cache here
+        // (would defeat the cache purpose on every pan). The next
+        // saveTable / deleteTable / applyPreset will invalidate.
         setDoc(
           doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tables', itemId: s.tableId })),
           { ...table, x: newX, y: newY, updatedAt: Date.now() },
