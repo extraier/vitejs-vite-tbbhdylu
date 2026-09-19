@@ -36,6 +36,15 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { seatingItemPath, seatingCollectionPath } from '../lib/firestorePaths';
+import {
+  normalizeTable,
+  occupancy,
+  dietaryAllergens,
+  guestTableFit,
+  emptyAssignment,
+  validateAssignment,
+  buildAssignmentDocId,
+} from '../lib/seatingPure';
 
 const APP_ID = 'savetheday-production';
 
@@ -50,6 +59,13 @@ export function CoupleSeating({
   const [meta, setMeta] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // P13.2 additions — assignments + guests (for drag-drop panel)
+  const [assignments, setAssignments] = useState([]);
+  const [guests, setGuests] = useState([]);
+
+  // Drag state — { tableId, startX, startY, originX, originY, moved }
+  const [dragState, setDragState] = useState(null);
+
   // Editor state
   const [editingTable, setEditingTable] = useState(null);
   // null = closed, 'new' = new table, { id, ... } = existing
@@ -63,6 +79,10 @@ export function CoupleSeating({
 
   const tablesRef = useRef([]);
   tablesRef.current = tables;
+  const assignmentsRef = useRef([]);
+  assignmentsRef.current = assignments;
+  const guestsRef = useRef([]);
+  guestsRef.current = guests;
 
   /* ---------- subscriptions ---------- */
   useEffect(() => {
@@ -103,9 +123,38 @@ export function CoupleSeating({
       },
     );
 
+    // P13.2 — assignments: /events/{eventId}/tableAssignments/{guestId}
+    const assignmentsUnsub = onSnapshot(
+      collection(db, seatingCollectionPath(APP_ID, { ownerUid, eventId, collection: 'tableAssignments' })),
+      (snap) => {
+        const rows = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+        setAssignments(rows);
+      },
+      (err) => {
+        console.error('[seating] assignments listener', err);
+      },
+    );
+
+    // P13.2 — guests: /events/{eventId}/guests/{guestId} (sparse fields,
+    // but we at least grab name + side + dietary tags).
+    const guestsUnsub = onSnapshot(
+      collection(db, seatingCollectionPath(APP_ID, { ownerUid, eventId, collection: 'guests' })),
+      (snap) => {
+        const rows = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+        setGuests(rows);
+      },
+      (err) => {
+        console.error('[seating] guests listener', err);
+      },
+    );
+
     return () => {
       metaUnsub();
       tablesUnsub();
+      assignmentsUnsub();
+      guestsUnsub();
     };
   }, [ownerUid, eventId]);
 
@@ -231,10 +280,155 @@ export function CoupleSeating({
     [ownerUid, eventId, showToast],
   );
 
+  /* ---------- P13.2: assignment CRUD ---------- */
+  const saveAssignment = useCallback(
+    async (guestId, tableId, guestName) => {
+      if (!ownerUid || !eventId) return { ok: false };
+      const validation = validateAssignment(
+        guestId,
+        tableId,
+        tablesRef.current,
+        assignmentsRef.current,
+      );
+      if (!validation.ok) {
+        showToast('無法分配此賓客到此枱');
+        return { ok: false };
+      }
+      const docId = buildAssignmentDocId(guestId);
+      try {
+        await setDoc(
+          doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tableAssignments', itemId: docId })),
+          emptyAssignment(guestId, tableId),
+        );
+        showToast(`已加 ${guestName || '賓客'} → ${tableId}`);
+        return { ok: true };
+      } catch (e) {
+        console.error('[seating] saveAssignment', e);
+        showToast('分配失敗，請重試');
+        return { ok: false };
+      }
+    },
+    [ownerUid, eventId, showToast],
+  );
+
+  const unassignGuest = useCallback(
+    async (guestId) => {
+      if (!ownerUid || !eventId) return;
+      const docId = buildAssignmentDocId(guestId);
+      try {
+        await deleteDoc(
+          doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tableAssignments', itemId: docId })),
+        );
+        showToast('已取消座位');
+      } catch (e) {
+        console.error('[seating] unassignGuest', e);
+        showToast('取消失敗，請重試');
+      }
+    },
+    [ownerUid, eventId, showToast],
+  );
+
+  /* ---------- occupancy memo (for dietary chip + filled badge) ---------- */
+  const normalizedTables = useMemo(
+    () => tables.map((t) => normalizeTable(t, t.id)).filter(Boolean),
+    [tables],
+  );
+  const guestsById = useMemo(() => {
+    const m = {};
+    for (const g of guests) {
+      m[g.id] = {
+        id: g.id,
+        name: g.name || '(無名)',
+        side: g.side,
+        relation: g.relation,
+        isChild: g.isChild,
+        allergies: g.allergies,
+        allergyTags: g.allergyTags,
+      };
+    }
+    return m;
+  }, [guests]);
+  const occ = useMemo(
+    () => occupancy(normalizedTables, assignments, guestsById),
+    [normalizedTables, assignments, guestsById],
+  );
+
+  /* ---------- P13.2: SVG-native drag (no react-konva) ---------- */
+  const onTablePointerDown = useCallback((e, table) => {
+    // Capture pointer so we get move/up even outside the table.
+    e.stopPropagation();
+    e.preventDefault();
+    const svg = svgRef.current;
+    if (!svg) return;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const svgPt = pt.matrixTransform(ctm.inverse());
+    setDragState({
+      tableId: table.id,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      originX: table.x,
+      originY: table.y,
+      pointerX: svgPt.x,
+      pointerY: svgPt.y,
+      moved: false,
+    });
+  }, []);
+
+  const onSvgPointerMove = useCallback(
+    (e) => {
+      setDragState((s) => {
+        if (!s) return null;
+        const svg = svgRef.current;
+        if (!svg) return s;
+        const ctm = svg.getScreenCTM();
+        if (!ctm) return s;
+        const pt = svg.createSVGPoint();
+        pt.x = e.clientX;
+        pt.y = e.clientY;
+        const svgPt = pt.matrixTransform(ctm.inverse());
+        // Translate pointer delta into table-local delta
+        const dx = svgPt.x - s.pointerX;
+        const dy = svgPt.y - s.pointerY;
+        const moved = s.moved || Math.hypot(e.clientX - s.startClientX, e.clientY - s.startClientY) > 4;
+        const table = tablesRef.current.find((t) => t.id === s.tableId);
+        if (!table) return null;
+        const newX = Math.max(0, s.originX + dx);
+        const newY = Math.max(0, s.originY + dy);
+        // Optimistic local update — write through Firestore immediately.
+        // The single-doc listener will reconcile any race.
+        setDoc(
+          doc(db, seatingItemPath(APP_ID, { ownerUid, eventId, collection: 'tables', itemId: s.tableId })),
+          { ...table, x: newX, y: newY, updatedAt: Date.now() },
+        ).catch((err) => console.error('[seating] drag update', err));
+        return { ...s, moved };
+      });
+    },
+    [ownerUid, eventId],
+  );
+
+  const onSvgPointerUp = useCallback((e) => {
+    setDragState((s) => {
+      if (!s) return null;
+      // If pointer moved <4px, treat as a click — open the editor modal.
+      const wasClick = !s.moved && Math.hypot(e.clientX - s.startClientX, e.clientY - s.startClientY) <= 4;
+      if (wasClick) {
+        const table = tablesRef.current.find((t) => t.id === s.tableId);
+        if (table) setEditingTable({ ...table });
+      }
+      return null;
+    });
+  }, []);
+
   /* ---------- drag/click ---------- */
   const onCanvasClick = useCallback(
     (e) => {
       // Tap on empty SVG (no table hit) creates a new table at the click point.
+      // Suppressed during drag-release.
+      if (dragState && dragState.moved) return;
       const svg = svgRef.current;
       if (!svg) return;
       const pt = svg.createSVGPoint();
@@ -308,8 +502,15 @@ export function CoupleSeating({
           width="100%"
           height="100%"
           onClick={onCanvasClick}
+          onPointerMove={onSvgPointerMove}
+          onPointerUp={onSvgPointerUp}
+          onPointerCancel={onSvgPointerUp}
           data-testid="seating-canvas"
-          style={{ display: 'block', touchAction: 'manipulation' }}
+          style={{
+            display: 'block',
+            touchAction: 'none', // P13.2: allow our pointer events to drive drag, not the browser's scroll
+            cursor: dragState ? 'grabbing' : 'default',
+          }}
         >
           {/* simple banquet hall grid (decor) */}
           <defs>
@@ -320,34 +521,80 @@ export function CoupleSeating({
           <rect width={dim.w} height={dim.h} fill="url(#floor-grid)" />
 
           {/* tables */}
-          {tables.map((t) => {
+          {normalizedTables.map((t) => {
             const isRound = t.shape === 'round';
             const w = isRound ? 80 : 160;
             const h = isRound ? 80 : 60;
+            const o = occ[t.id];
+            const filled = o ? o.filled : 0;
+            const overflow = o && o.overflow > 0;
+            const isDragging = dragState && dragState.tableId === t.id && dragState.moved;
             return (
               <g
                 key={t.id}
                 transform={`translate(${t.x}, ${t.y}) rotate(${t.rotation ?? 0} ${w / 2} ${h / 2})`}
                 data-testid={`seating-table-${t.id}`}
-                style={{ cursor: 'pointer' }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditingTable({ ...t });
+                data-filled={filled}
+                data-overflow={overflow ? 'true' : 'false'}
+                style={{ cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none' }}
+                onPointerDown={(e) => onTablePointerDown(e, t)}
+                onDragOver={(e) => {
+                  // Required so the drop event fires.
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const guestId = e.dataTransfer.getData('text/guestId');
+                  if (!guestId) return;
+                  onAssign(guestId, t.id, guestsById[guestId]?.name);
                 }}
               >
                 {isRound ? (
-                  <ellipse cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2} fill="#FFFFFF" stroke="#14B8A6" strokeWidth="2" />
+                  <ellipse
+                    cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2}
+                    fill={overflow ? '#FEE2E2' : '#FFFFFF'}
+                    stroke={overflow ? '#DC2626' : '#14B8A6'}
+                    strokeWidth="2"
+                  />
                 ) : (
-                  <rect x="0" y="0" width={w} height={h} rx="6" fill="#FFFFFF" stroke="#14B8A6" strokeWidth="2" />
+                  <rect
+                    x="0" y="0" width={w} height={h} rx="6"
+                    fill={overflow ? '#FEE2E2' : '#FFFFFF'}
+                    stroke={overflow ? '#DC2626' : '#14B8A6'}
+                    strokeWidth="2"
+                  />
                 )}
                 <text x={w / 2} y={h / 2 - 4} fontSize="14" fontWeight="600" fill="#0F766E" textAnchor="middle">
                   {t.label}
                 </text>
                 <text x={w / 2} y={h / 2 + 14} fontSize="11" fill="#64748B" textAnchor="middle">
-                  {t.capacity} 座位 · {t.tableCategory}
+                  {filled}/{t.capacity} 座位 · {t.tableCategory}
                 </text>
+                {/* Dietary chip (P13.2) */}
+                {o && Object.keys(o.dietary).length > 0 && (
+                  <foreignObject x={w - 8} y={-8} width="56" height="20">
+                    <div
+                      xmlns="http://www.w3.org/1999/xhtml"
+                      data-testid={`dietary-chip-${t.id}`}
+                      style={{
+                        background: '#FEF3C7',
+                        border: '1px solid #F59E0B',
+                        borderRadius: 8,
+                        padding: '0 4px',
+                        fontSize: 10,
+                        lineHeight: '18px',
+                        color: '#92400E',
+                        textAlign: 'center',
+                        fontWeight: 600,
+                      }}
+                    >
+                      ⚠ {Object.keys(o.dietary).length}
+                    </div>
+                  </foreignObject>
+                )}
               </g>
-            );
+              );
           })}
         </svg>
 
@@ -372,8 +619,33 @@ export function CoupleSeating({
         )}
       </div>
 
+      <GuestPanel
+        guests={guests}
+        assignments={assignments}
+        normalizedTables={normalizedTables}
+        occ={occ}
+        onAssign={saveAssignment}
+        onUnassign={unassignGuest}
+        onSuggest={(guestId) => {
+          const g = guestsById[guestId];
+          if (!g) return;
+          const sorted = normalizedTables
+            .map((t) => {
+              const fit = guestTableFit(g, t, assignments);
+              return { table: t, fit };
+            })
+            .filter((row) => row.fit.fits)
+            .sort((a, b) => a.table.capacity - b.table.capacity);
+          if (sorted.length === 0) {
+            showToast('冇適合嘅枱，建議你加多張枱或者調容量');
+            return;
+          }
+          saveAssignment(guestId, sorted[0].table.id, g.name);
+        }}
+      />
+
       <p style={{ marginTop: 8, color: '#64748B', fontSize: 11 }}>
-        撳空白 = 加新枱 · 撳枱 = 編輯 · 拖移仲未做，要用 P13.2 嘅 react-konva
+        撳空白 = 加新枱 · 撳枱 = 編輯 · 拖枱 = 搬位 · 拖賓客到枱 = 分配座位
       </p>
 
       {/* Editor modal */}
@@ -697,3 +969,192 @@ const modalCard = {
   overflow: 'auto',
   boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
 };
+
+/* ---------- P13.2: GuestPanel ---------- */
+
+function GuestPanel({
+  guests,
+  assignments,
+  normalizedTables,
+  occ,
+  onAssign,
+  onUnassign,
+  onSuggest,
+}) {
+  const [query, setQuery] = useState('');
+  const [showOnlyUnassigned, setShowOnlyUnassigned] = useState(true);
+
+  const guestsById = useMemo(() => {
+    const m = {};
+    for (const g of guests) m[g.id] = g;
+    return m;
+  }, [guests]);
+
+  const assignedGuestIds = useMemo(
+    () => new Set(assignments.map((a) => a.guestId)),
+    [assignments],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return guests
+      .filter((g) => {
+        if (showOnlyUnassigned && assignedGuestIds.has(g.id)) return false;
+        if (!q) return true;
+        return String(g.name || '').toLowerCase().includes(q);
+      })
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-HK'));
+  }, [guests, query, showOnlyUnassigned, assignedGuestIds]);
+
+  const handleDragStart = (e, guestId) => {
+    try {
+      e.dataTransfer.setData('text/guestId', guestId);
+      e.dataTransfer.effectAllowed = 'move';
+    } catch (_) {
+      // some browsers (older Safari) throw on setData; safe to ignore
+    }
+  };
+
+  return (
+    <div
+      data-testid="seating-guest-panel"
+      style={{
+        marginTop: 16,
+        background: '#FFFFFF',
+        border: '1px solid #E2E8F0',
+        borderRadius: 12,
+        padding: 12,
+      }}
+    >
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+        <strong style={{ color: '#0F766E', fontSize: 14 }}>👥 賓客名單</strong>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜尋賓客…"
+          data-testid="guest-search"
+          style={{
+            flex: 1,
+            border: '1px solid #CBD5E1',
+            borderRadius: 6,
+            padding: '4px 8px',
+            fontSize: 13,
+          }}
+        />
+        <label style={{ fontSize: 12, color: '#475569', display: 'flex', gap: 4, alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={showOnlyUnassigned}
+            onChange={(e) => setShowOnlyUnassigned(e.target.checked)}
+            data-testid="only-unassigned"
+          />
+          只顯示未分配
+        </label>
+      </div>
+
+      {filtered.length === 0 && (
+        <p style={{ color: '#94A3B8', fontSize: 12, margin: 0 }}>
+          {guests.length === 0 ? '尚未有賓客 — 喺「賓客名單」加入先' : '冇符合嘅賓客'}
+        </p>
+      )}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {filtered.map((g) => {
+          const allergens = dietaryAllergens(g);
+          return (
+            <div
+              key={g.id}
+              draggable
+              onDragStart={(e) => handleDragStart(e, g.id)}
+              data-testid={`guest-chip-${g.id}`}
+              data-allergens={allergens.join(',')}
+              data-side={g.side || ''}
+              title={allergens.length > 0 ? `過敏: ${allergens.join(', ')}` : g.name}
+              style={{
+                background: allergens.length > 0 ? '#FEF3C7' : '#F1F5F9',
+                border: `1px solid ${allergens.length > 0 ? '#F59E0B' : '#CBD5E1'}`,
+                borderRadius: 999,
+                padding: '4px 10px',
+                fontSize: 12,
+                color: '#0F172A',
+                cursor: 'grab',
+                userSelect: 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+            >
+              <span>{g.name || '(無名)'}</span>
+              {allergens.length > 0 && <span aria-label="過敏">⚠</span>}
+              <button
+                type="button"
+                onClick={() => onSuggest(g.id)}
+                data-testid={`suggest-for-${g.id}`}
+                style={{
+                  marginLeft: 4,
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  color: '#0F766E',
+                  padding: 0,
+                  fontSize: 12,
+                }}
+                aria-label={`自動建議枱給 ${g.name}`}
+                title="自動建議合適嘅枱"
+              >
+                🎯
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* assigned list (only when toggled off) */}
+      {!showOnlyUnassigned && assignments.length > 0 && (
+        <div style={{ marginTop: 12, borderTop: '1px dashed #E2E8F0', paddingTop: 8 }}>
+          <p style={{ fontSize: 11, color: '#64748B', margin: 0 }}>已分配 ({assignments.length})</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+            {assignments.map((a) => {
+              const g = guestsById[a.guestId];
+              const t = normalizedTables.find((x) => x.id === a.tableId);
+              return (
+                <span
+                  key={a.guestId}
+                  style={{
+                    background: '#ECFDF5',
+                    border: '1px solid #6EE7B7',
+                    borderRadius: 999,
+                    padding: '2px 8px',
+                    fontSize: 11,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  {g?.name || a.guestId} · {t?.label || a.tableId}
+                  <button
+                    type="button"
+                    onClick={() => onUnassign(a.guestId)}
+                    aria-label={`取消分配 ${g?.name || a.guestId}`}
+                    style={{
+                      marginLeft: 4,
+                      border: 'none',
+                      background: 'transparent',
+                      cursor: 'pointer',
+                      color: '#B91C1C',
+                      padding: 0,
+                      fontSize: 11,
+                    }}
+                  >
+                    ✕
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
