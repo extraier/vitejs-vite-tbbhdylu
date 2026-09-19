@@ -652,12 +652,69 @@ export function SeatingCanvas({
                     strokeWidth="2"
                   />
                 )}
-                <text x={w / 2} y={h / 2 - 4} fontSize="14" fontWeight="600" fill="#0F766E" textAnchor="middle">
+                <text
+                  x={w / 2}
+                  y={h / 2 - (isRound ? 6 : 4)}
+                  fontSize="14"
+                  fontWeight="600"
+                  fill="#0F766E"
+                  textAnchor="middle"
+                >
                   {t.label}
                 </text>
-                <text x={w / 2} y={h / 2 + 14} fontSize="11" fill="#64748B" textAnchor="middle">
-                  {filled}/{t.capacity} 座位 · {t.tableCategory}
-                </text>
+                {/* Count + category badge (P13.3 follow-up 2026-09-18:
+                    was a raw <text> line; refactored to a centered
+                    foreignObject pill so it stays legible on round
+                    tables (where the previous text got visually
+                    cluttered with the ellipse curve) and overflow
+                    tables get an explicit red-tinted pill. Width
+                    grows with the text up to ~120px; sits below the
+                    label, above the bottom edge. */}
+                {(() => {
+                  const label = `${filled}/${t.capacity} 座位 · ${t.tableCategory}`;
+                  // Approx 7px per zh-HK char @ 10px font + 12px padding
+                  const pillW = Math.min(120, Math.max(56, label.length * 7 + 12));
+                  // Center horizontally inside the table's local
+                  // coordinate space (the <g> is already translated
+                  // to (t.x, t.y); we use the local w/h).
+                  const pillX = (w - pillW) / 2;
+                  const pillY = isRound ? h / 2 + 4 : h / 2 + 8;
+                  return (
+                    <foreignObject
+                      x={pillX}
+                      y={pillY}
+                      width={pillW}
+                      height="20"
+                    >
+                      <div
+                        xmlns="http://www.w3.org/1999/xhtml"
+                        data-testid={`table-count-pill-${t.id}`}
+                        data-filled={filled}
+                        data-capacity={t.capacity}
+                        title={`已分配 ${filled}/${t.capacity} 座位 · ${t.tableCategory}`}
+                        style={{
+                          background: overflow ? '#FEF2F2' : '#F1F5F9',
+                          border: overflow ? '1px solid #DC2626' : '1px solid #CBD5E1',
+                          borderRadius: 10,
+                          padding: '0 6px',
+                          fontSize: 10,
+                          lineHeight: '18px',
+                          color: overflow ? '#991B1B' : '#475569',
+                          textAlign: 'center',
+                          fontWeight: 600,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          boxSizing: 'border-box',
+                          width: '100%',
+                          height: '100%',
+                        }}
+                      >
+                        {label}
+                      </div>
+                    </foreignObject>
+                  );
+                })()}
                 {/* Dietary chip (P13.2) */}
                 {o && Object.keys(o.dietary).length > 0 && (
                   <foreignObject x={w - 8} y={-8} width="56" height="20">
