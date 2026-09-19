@@ -60,6 +60,11 @@ import {
   CHINESE_ROUND_COUNT_OPTIONS,
   fixedSlotBadge,
   FIXED_SLOT_CATEGORIES,
+  DEFAULT_COST_PER_HEAD,
+  DEFAULT_BUDGET_CAP,
+  computeBudget,
+  projectBudgetDelta,
+  formatHKD,
 } from '../lib/seatingPure';
 import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
@@ -100,6 +105,8 @@ export function SeatingCanvas({
   // null = closed, 'new' = new table, { id, ... } = existing
 
   const [presetsOpen, setPresetsOpen] = useState(false);
+  // P13.4.1 — budget sheet (modal for setting costPerHead + budgetCap).
+  const [budgetSheetOpen, setBudgetSheetOpen] = useState(false);
 
   // Refs
   const svgRef = useRef(null);
@@ -253,7 +260,28 @@ export function SeatingCanvas({
         // next scan reads the fresh label/category.
         invalidateScannerTablesCache(ownerUid, eventId);
         setEditingTable(null);
-        showToast(id ? '已更新' : '已新增');
+        // P13.4.1 — Budget toast on capacity change. Operators see
+        // "T-03 加位至 12 人 = 預算 +$0; 總預算 $144k of $150k" when
+        // they bump a table's capacity. delta is 0 for capacity
+        // changes (cost scales with guests not seats); we still
+        // show the projected total so the operator has the number
+        // in front of them.
+        if (id && typeof rest.capacity === 'number') {
+          const cfg = {
+            costPerHead: meta?.costPerHead ?? DEFAULT_COST_PER_HEAD,
+            budgetCap: meta?.budgetCap ?? DEFAULT_BUDGET_CAP,
+          };
+          const projection = projectBudgetDelta(
+            tables, assignments, tableId, rest.capacity, cfg,
+          );
+          const cap = cfg.budgetCap;
+          const msg = cap > 0
+            ? `${rest.label || '枱'} 加位至 ${rest.capacity} 人 · 總預估 ${formatHKD(projection.newProjectedCost, { short: true })} / ${formatHKD(cap, { short: true })}`
+            : `${rest.label || '枱'} 加位至 ${rest.capacity} 人 · 總預估 ${formatHKD(projection.newProjectedCost, { short: true })}`;
+          showToast(msg);
+        } else {
+          showToast(id ? '已更新' : '已新增');
+        }
       } catch (e) {
         console.error('[seating] saveTable', e);
         showToast('儲存失敗，請重試');
@@ -570,6 +598,57 @@ export function SeatingCanvas({
           <p style={{ margin: 0, color: '#64748B', fontSize: 13 }}>
             {loading ? '載入緊…' : `現有 ${tables.length} 張枱 · 風格：${presetLabel(meta?.style ?? 'custom')}`}
           </p>
+          {/* P13.4.1 — Budget pill. Shows projected cost vs cap
+              (or "no cap" if budgetCap=0). Owner-only chrome. */}
+          {role === 'owner' && (() => {
+            const cfg = {
+              costPerHead: meta?.costPerHead ?? DEFAULT_COST_PER_HEAD,
+              budgetCap: meta?.budgetCap ?? DEFAULT_BUDGET_CAP,
+            };
+            const summary = computeBudget(tables, assignments, cfg);
+            const noCap = cfg.budgetCap <= 0;
+            return (
+              <div
+                data-testid="budget-pill"
+                data-over-budget={summary.overBudget}
+                onClick={() => setBudgetSheetOpen(true)}
+                style={{
+                  marginTop: 8,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '4px 10px',
+                  borderRadius: 8,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  background: summary.overBudget ? '#FEF2F2' : '#F0FDF4',
+                  border: summary.overBudget
+                    ? '1px solid #DC2626'
+                    : '1px solid #14B8A6',
+                  color: summary.overBudget ? '#991B1B' : '#065F46',
+                }}
+                title={noCap ? '設定預算上限' : '預算詳情'}
+              >
+                💰{' '}
+                {noCap ? (
+                  <span>{formatHKD(summary.projectedCost, { short: true })}</span>
+                ) : (
+                  <>
+                    <span>{formatHKD(summary.projectedCost, { short: true })}</span>
+                    <span style={{ opacity: 0.6 }}>/</span>
+                    <span>{formatHKD(cfg.budgetCap, { short: true })}</span>
+                    <span style={{ opacity: 0.7, marginLeft: 4 }}>
+                      ({summary.percentUsed}%)
+                    </span>
+                  </>
+                )}
+                <span style={{ opacity: 0.5, marginLeft: 4, fontSize: 10 }}>
+                  · 每人 ${cfg.costPerHead}
+                </span>
+              </div>
+            );
+          })()}
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {/* Owner-only chrome (preset selector). Helper live-edit
@@ -1050,6 +1129,41 @@ export function SeatingCanvas({
           onOptsChange={(patch) => setPresetOpts((o) => ({ ...o, ...patch }))}
         />
       )}
+
+      {/* P13.4.1 — Budget sheet. Owner-only. Tap the budget pill
+          in the header to open. Persists costPerHead + budgetCap
+          to the seating meta doc. */}
+      {budgetSheetOpen && (
+        <BudgetSheet
+          costPerHead={meta?.costPerHead ?? DEFAULT_COST_PER_HEAD}
+          budgetCap={meta?.budgetCap ?? DEFAULT_BUDGET_CAP}
+          summary={computeBudget(tables, assignments, {
+            costPerHead: meta?.costPerHead ?? DEFAULT_COST_PER_HEAD,
+            budgetCap: meta?.budgetCap ?? DEFAULT_BUDGET_CAP,
+          })}
+          onSave={async ({ costPerHead: cph, budgetCap: cap }) => {
+            try {
+              await setDoc(
+                doc(db, seatingItemPath(APP_ID, {
+                  ownerUid, eventId, collection: 'seating', itemId: 'main',
+                })),
+                { costPerHead: cph, budgetCap: cap, updatedAt: Date.now() },
+                { merge: true },
+              );
+              setBudgetSheetOpen(false);
+              showToast(
+                cap > 0
+                  ? `已設定預算上限 ${formatHKD(cap, { short: true })} · 每人 ${formatHKD(cph)}`
+                  : `已設定每人成本 ${formatHKD(cph)} (不設上限)`,
+              );
+            } catch (e) {
+              console.error('[seating] saveBudget', e);
+              showToast('儲存失敗，請重試');
+            }
+          }}
+          onCancel={() => setBudgetSheetOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1308,6 +1422,120 @@ function PresetCard({ title, description, onClick }) {
       <strong style={{ display: 'block', marginBottom: 4 }}>{title}</strong>
       <span style={{ fontSize: 11, color: '#64748B' }}>{description}</span>
     </button>
+  );
+}
+
+// P13.4.1 — Budget config sheet. Lets the owner set costPerHead
+// and budgetCap. Persists to the seating meta doc.
+function BudgetSheet({
+  costPerHead,
+  budgetCap,
+  summary,
+  onSave,
+  onCancel,
+}) {
+  const [cph, setCph] = useState(costPerHead);
+  const [cap, setCap] = useState(budgetCap);
+  const live = computeBudget(
+    // tables/assignments are computed inside summary; we re-use
+    // summary here. The form doesn't actually mutate them; it
+    // just lets the operator see live numbers as they type.
+    // We pass empty arrays because we just want the math against
+    // cph/cap — the actual cost comes from the existing data and
+    // is shown via the `summary` prop.
+    [], [], { costPerHead: cph, budgetCap: cap },
+  );
+  const save = () => onSave({ costPerHead: cph, budgetCap: cap });
+  return (
+    <div role="dialog" style={modalBackdrop} onClick={onCancel}>
+      <div
+        style={{ ...modalCard, maxWidth: 480 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 style={{ marginTop: 0, color: '#0F766E' }}>💰 預算設定</h3>
+        <p style={{ color: '#64748B', fontSize: 13 }}>
+          設定每位賓客成本同預算上限。已分配嘅賓客數 × 成本 = 預估支出。
+        </p>
+        <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
+          <label style={{ display: 'block' }}>
+            <span style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 4 }}>
+              每人成本 (HKD)
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="50"
+              data-testid="budget-cph-input"
+              value={cph}
+              onChange={(e) => setCph(Math.max(0, Number(e.target.value) || 0))}
+              style={{
+                width: '100%', padding: '8px 10px', fontSize: 14,
+                border: '1px solid #CBD5E1', borderRadius: 6,
+                boxSizing: 'border-box',
+              }}
+            />
+            <span style={{ fontSize: 11, color: '#94A3B8' }}>
+              預設 $800 (HK 中式婚宴標準)
+            </span>
+          </label>
+          <label style={{ display: 'block' }}>
+            <span style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 4 }}>
+              預算上限 (HKD) — 留 0 = 不設上限
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="1000"
+              data-testid="budget-cap-input"
+              value={cap}
+              onChange={(e) => setCap(Math.max(0, Number(e.target.value) || 0))}
+              style={{
+                width: '100%', padding: '8px 10px', fontSize: 14,
+                border: '1px solid #CBD5E1', borderRadius: 6,
+                boxSizing: 'border-box',
+              }}
+            />
+          </label>
+          <div
+            data-testid="budget-summary"
+            style={{
+              padding: 12,
+              background: live.overBudget ? '#FEF2F2' : '#F0FDF4',
+              border: '1px solid ' + (live.overBudget ? '#DC2626' : '#14B8A6'),
+              borderRadius: 8,
+              fontSize: 13,
+            }}
+          >
+            <div>
+              <strong>已分配 {summary.totalFilled} 人</strong>
+              <span style={{ color: '#64748B' }}>
+                {' '}/ {summary.totalCapacity} 位
+              </span>
+            </div>
+            <div style={{ marginTop: 4 }}>
+              預估支出:{' '}
+              <strong>{formatHKD(summary.projectedCost)}</strong>
+            </div>
+            {cap > 0 && (
+              <div style={{ marginTop: 4, color: live.overBudget ? '#991B1B' : '#065F46' }}>
+                {live.overBudget ? '⚠️ 超支' : '✓ 在預算內'} · 餘額{' '}
+                {formatHKD(Math.abs(live.remaining))} ({100 - live.percentUsed}%)
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onCancel} style={btnGhost}>取消</button>
+          <button
+            onClick={save}
+            data-testid="budget-save"
+            style={btnPrimary}
+          >
+            💾 儲存
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -789,3 +789,132 @@ describe('CHINESE_ROUND_COUNT_OPTIONS', () => {
   });
 });
 
+
+// ---------- P13.4.1: Budget optimizer ----------
+import {
+  DEFAULT_COST_PER_HEAD,
+  DEFAULT_BUDGET_CAP,
+  computeBudget,
+  projectBudgetDelta,
+  formatHKD,
+} from './seatingPure';
+
+describe('computeBudget', () => {
+  const tables = [
+    { id: 'T1', label: 'T-01', shape: 'round', capacity: 10, tableCategory: 'friends', x: 0, y: 0, rotation: 0 },
+    { id: 'T2', label: 'T-02', shape: 'round', capacity: 10, tableCategory: 'friends', x: 0, y: 0, rotation: 0 },
+    { id: 'dance', label: '舞池', shape: 'rect', capacity: 0, tableCategory: 'ceremony', x: 0, y: 0, rotation: 0 },
+  ];
+  const assignments = Array.from({ length: 13 }, (_, i) => ({
+    guestId: `g${i}`,
+    tableId: i < 7 ? 'T1' : 'T2',
+    assignedAt: 1700000000000,
+  }));
+  const cfg = { costPerHead: 800, budgetCap: 0 };
+
+  it('returns totalFilled = sum of filled seats', () => {
+    expect(computeBudget(tables, assignments, cfg).totalFilled).toBe(13);
+  });
+  it('returns totalCapacity = sum of capacity (excluding capacity=0)', () => {
+    expect(computeBudget(tables, assignments, cfg).totalCapacity).toBe(20);
+  });
+  it('returns projectedCost = totalFilled * costPerHead', () => {
+    expect(computeBudget(tables, assignments, cfg).projectedCost).toBe(13 * 800);
+  });
+  it('skips tables with capacity=0 (dance floor etc.)', () => {
+    const cfg100 = { costPerHead: 800, budgetCap: 10000 };
+    const { remaining } = computeBudget(tables, assignments, cfg100);
+    // 13 * 800 = 10400, over 10000 budget by 400
+    expect(remaining).toBe(-400);
+  });
+  it('returns remaining = 0 and percentUsed = 0 when budgetCap=0', () => {
+    const out = computeBudget(tables, assignments, cfg);
+    expect(out.remaining).toBe(0);
+    expect(out.percentUsed).toBe(0);
+  });
+  it('flags overBudget when projected > budgetCap', () => {
+    const cfg100 = { costPerHead: 800, budgetCap: 10000 };
+    expect(computeBudget(tables, assignments, cfg100).overBudget).toBe(true);
+  });
+  it('does not flag overBudget when projected < budgetCap', () => {
+    const cfg100k = { costPerHead: 800, budgetCap: 100000 };
+    expect(computeBudget(tables, assignments, cfg100k).overBudget).toBe(false);
+  });
+  it('returns percentUsed = round(projected/cap * 100), capped at 100', () => {
+    const cfg100 = { costPerHead: 800, budgetCap: 10000 };
+    // 10400/10000 = 104%, capped at 100
+    expect(computeBudget(tables, assignments, cfg100).percentUsed).toBe(100);
+  });
+  it('handles empty assignments', () => {
+    const out = computeBudget(tables, [], cfg);
+    expect(out.totalFilled).toBe(0);
+    expect(out.projectedCost).toBe(0);
+    expect(out.totalCapacity).toBe(20);
+  });
+  it('ignores orphan assignments (assignment to deleted table)', () => {
+    const orphans = [{ guestId: 'g-orphan', tableId: 'T-deleted', assignedAt: 1 }];
+    const out = computeBudget(tables, orphans, cfg);
+    expect(out.totalFilled).toBe(0);
+  });
+});
+
+describe('projectBudgetDelta', () => {
+  const tables = [
+    { id: 'T1', label: 'T-01', shape: 'round', capacity: 10, tableCategory: 'friends', x: 0, y: 0, rotation: 0 },
+  ];
+  const assignments = Array.from({ length: 10 }, (_, i) => ({
+    guestId: `g${i}`,
+    tableId: 'T1',
+    assignedAt: 1700000000000,
+  }));
+  const cfg = { costPerHead: 800, budgetCap: 0 };
+
+  it('returns delta = 0 for capacity changes (cost scales with guests, not seats)', () => {
+    const out = projectBudgetDelta(tables, assignments, 'T1', 12, cfg);
+    expect(out.delta).toBe(0);
+    expect(out.newProjectedCost).toBe(8000);
+  });
+  it('flags overCapacityAfter when newCapacity < filled', () => {
+    const out = projectBudgetDelta(tables, assignments, 'T1', 8, cfg);
+    expect(out.overCapacityAfter).toBe(true);
+  });
+  it('does not flag overCapacityAfter when newCapacity >= filled', () => {
+    const out = projectBudgetDelta(tables, assignments, 'T1', 10, cfg);
+    expect(out.overCapacityAfter).toBe(false);
+    const out2 = projectBudgetDelta(tables, assignments, 'T1', 12, cfg);
+    expect(out2.overCapacityAfter).toBe(false);
+  });
+  it('returns newRemaining from current budget config', () => {
+    const cfg50 = { costPerHead: 800, budgetCap: 5000 };
+    const out = projectBudgetDelta(tables, assignments, 'T1', 12, cfg50);
+    // 10 * 800 = 8000, over 5000 budget by 3000
+    expect(out.newRemaining).toBe(-3000);
+  });
+});
+
+describe('formatHKD', () => {
+  it('formats small amounts with locale separator', () => {
+    expect(formatHKD(800)).toBe('$800');
+    expect(formatHKD(1234)).toBe('$1,234');
+  });
+  it('formats large amounts with locale separator', () => {
+    expect(formatHKD(150000)).toBe('$150,000');
+  });
+  it('formats short mode with k suffix and one decimal', () => {
+    expect(formatHKD(150000, { short: true })).toBe('$150k');
+    expect(formatHKD(14800, { short: true })).toBe("$14.8k");
+    expect(formatHKD(144000, { short: true })).toBe('$144k');
+  });
+  it('keeps short mode small amounts as plain dollars', () => {
+    expect(formatHKD(800, { short: true })).toBe('$800');
+  });
+});
+
+describe('budget defaults', () => {
+  it('default costPerHead is 800 HKD', () => {
+    expect(DEFAULT_COST_PER_HEAD).toBe(800);
+  });
+  it('default budgetCap is 0 (no cap)', () => {
+    expect(DEFAULT_BUDGET_CAP).toBe(0);
+  });
+});

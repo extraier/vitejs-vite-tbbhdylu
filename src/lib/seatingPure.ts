@@ -209,6 +209,135 @@ export function occupancy(
   return out;
 }
 
+// ---------- budget ----------
+
+/**
+ * 2026-09-18 — P13.4.1: Budget optimizer.
+ *
+ * Default per-head cost for a HK wedding banquet in HKD. Operators
+ * can override via the seating meta doc (`/events/{eventId}/seating/main`
+ * → `costPerHead`). Default budget cap of 0 means "no cap" (operators
+ * haven't set one yet).
+ */
+export const DEFAULT_COST_PER_HEAD = 800;
+export const DEFAULT_BUDGET_CAP = 0;
+
+export interface BudgetConfig {
+  /** Cost per person in HKD. */
+  costPerHead: number;
+  /** Total budget cap in HKD. 0 = no cap. */
+  budgetCap: number;
+}
+
+export interface BudgetSummary {
+  totalFilled: number;
+  totalCapacity: number;
+  projectedCost: number;
+  /** budgetCap - projectedCost. Negative when over budget. 0 when no cap. */
+  remaining: number;
+  /** projectedCost > budgetCap && budgetCap > 0 */
+  overBudget: boolean;
+  /** Percentage 0..100 of budget used. 0 when no cap. */
+  percentUsed: number;
+}
+
+/**
+ * Compute the current budget summary from filled seats across all
+ * tables. Unfilled seats are not counted (the operator only pays
+ * for guests who actually show up, modulo the contract — operators
+ * can dial costPerHead to whatever the contract calls "per pax").
+ *
+ * Tables with capacity=0 (dance floor, decoration) are excluded.
+ */
+export function computeBudget(
+  tables: ReadonlyArray<SeatingTable>,
+  assignments: ReadonlyArray<TableAssignment>,
+  cfg: BudgetConfig,
+): BudgetSummary {
+  const filledByTable: Record<string, number> = {};
+  for (const t of tables) {
+    if (t.capacity <= 0) continue; // skip non-tables
+    filledByTable[t.id] = 0;
+  }
+  for (const a of assignments) {
+    if (filledByTable[a.tableId] === undefined) continue; // orphan assignment
+    filledByTable[a.tableId] += 1;
+  }
+  let totalFilled = 0;
+  let totalCapacity = 0;
+  for (const t of tables) {
+    if (t.capacity <= 0) continue;
+    totalFilled += filledByTable[t.id] ?? 0;
+    totalCapacity += t.capacity;
+  }
+  const projectedCost = totalFilled * cfg.costPerHead;
+  const remaining = cfg.budgetCap > 0 ? cfg.budgetCap - projectedCost : 0;
+  const overBudget = cfg.budgetCap > 0 && projectedCost > cfg.budgetCap;
+  const percentUsed = cfg.budgetCap > 0
+    ? Math.min(100, Math.round((projectedCost / cfg.budgetCap) * 100))
+    : 0;
+  return {
+    totalFilled,
+    totalCapacity,
+    projectedCost,
+    remaining,
+    overBudget,
+    percentUsed,
+  };
+}
+
+/**
+ * Project the budget delta when one table's capacity changes. Used
+ * for the "T-03 加位至 12 人 = 預算 +$800" toast / live preview.
+ *
+ * If `newCapacity` is HIGHER than current, the delta is 0 (cost
+ * scales with filled guests, not capacity — the budget only grows
+ * when the operator adds new guests, not when they add empty
+ * seats). This matches typical banquet contracts where you pay
+ * per-pax confirmed.
+ *
+ * If `newCapacity` is LOWER than current and filled > newCapacity,
+ * the function flags `overCapacityAfter` so the UI can warn.
+ */
+export function projectBudgetDelta(
+  tables: ReadonlyArray<SeatingTable>,
+  assignments: ReadonlyArray<TableAssignment>,
+  tableId: string,
+  newCapacity: number,
+  cfg: BudgetConfig,
+): {
+  delta: number;          // 0 for capacity changes; reserved for future
+  newProjectedCost: number;
+  newRemaining: number;
+  overCapacityAfter: boolean; // true if filled > newCapacity
+} {
+  // For now, capacity changes don't directly affect cost (only
+  // adding guests does). Return the current cost + flag the
+  // over-capacity case.
+  const current = computeBudget(tables, assignments, cfg);
+  const filledHere = assignments.filter((a) => a.tableId === tableId).length;
+  const overCapacityAfter = filledHere > newCapacity;
+  return {
+    delta: 0,
+    newProjectedCost: current.projectedCost,
+    newRemaining: current.remaining,
+    overCapacityAfter,
+  };
+}
+
+/**
+ * Format a HKD amount for display. Uses thin-space thousands
+ * separator (e.g. "$144k" or "$144,800") and trims trailing zeros.
+ */
+export function formatHKD(n: number, opts: { short?: boolean } = {}): string {
+  if (opts.short && n >= 1000) {
+    const k = n / 1000;
+    if (k >= 100) return `$${Math.round(k)}k`;
+    return `$${k.toFixed(1).replace(/\.0$/, '')}k`;
+  }
+  return `$${n.toLocaleString('en-HK')}`;
+}
+
 // ---------- fit validation ----------
 
 export interface GuestTableFit {
@@ -709,4 +838,9 @@ export default {
   chineseNumber,
   chinesePreset,
   fixedSlotBadge,
+  DEFAULT_COST_PER_HEAD,
+  DEFAULT_BUDGET_CAP,
+  computeBudget,
+  projectBudgetDelta,
+  formatHKD,
 };
