@@ -408,3 +408,229 @@ describe('validateAssignment', () => {
     expect(out.wouldOverflow).toBe(false);
   });
 });
+
+// ============================ P13.3 helpers ============================
+
+import {
+  liveSeatingBadges,
+  findAssignmentForGuest,
+  tableLabelForGuest,
+  formatLivePill,
+  categorizeErrors,
+} from './seatingPure';
+
+describe('P13.3 — scanner hook + live badge helpers', () => {
+  describe('liveSeatingBadges', () => {
+    const tables = [
+      t({ id: 'A', capacity: 8, tableCategory: 'friends' }),
+      t({ id: 'B', capacity: 10, tableCategory: 'friends' }),
+    ];
+    const guests = {
+      g1: { id: 'g1', name: 'Alice', side: 'bride' },
+      g2: { id: 'g2', name: 'Bob', side: 'groom' },
+      g3: { id: 'g3', name: 'Carol', side: 'both' },
+    };
+    const assignments = [
+      { guestId: 'g1', tableId: 'A' },
+      { guestId: 'g2', tableId: 'A' },
+      { guestId: 'g3', tableId: 'B' },
+    ];
+
+    it('returns one badge per table', () => {
+      const badges = liveSeatingBadges(tables, assignments, guests, []);
+      expect(badges).toHaveLength(2);
+    });
+
+    it('reports checkedIn from checkIns array', () => {
+      const checkIns = [
+        { guestId: 'g1', tableId: 'A' },
+        { guestId: 'g2', tableId: 'A' },
+      ];
+      const badges = liveSeatingBadges(tables, assignments, guests, checkIns);
+      const aBadge = badges.find((b) => b.tableId === 'A');
+      expect(aBadge.checkedIn).toBe(2);
+      const bBadge = badges.find((b) => b.tableId === 'B');
+      expect(bBadge.checkedIn).toBe(0);
+    });
+
+    it('buckets unmatched checkIns under __unmatched__', () => {
+      const checkIns = [{ guestId: 'gX', tableId: null }];
+      const badges = liveSeatingBadges(tables, assignments, guests, checkIns);
+      const um = badges.find((b) => b.tableId === '__unmatched__');
+      expect(um).toBeDefined();
+      expect(um.checkedIn).toBe(1);
+    });
+
+    it('handles missing checkIns arg gracefully', () => {
+      const badges = liveSeatingBadges(tables, assignments, guests);
+      expect(badges.every((b) => b.checkedIn === 0)).toBe(true);
+    });
+
+    it('handles non-array checkIns arg gracefully', () => {
+      const badges = liveSeatingBadges(tables, assignments, guests, null);
+      expect(badges).toHaveLength(2);
+    });
+
+    it('flags overflow on tables with over-assignment', () => {
+      const overflowAssignments = [
+        { guestId: 'g1', tableId: 'A' },
+        { guestId: 'g2', tableId: 'A' },
+        { guestId: 'g3', tableId: 'A' },
+      ]; // 3 guests but tables has A with capacity 8 — actually fine
+      // Let's force overflow with a small table
+      const smallTables = [t({ id: 'A', capacity: 2, tableCategory: 'friends' })];
+      const badges = liveSeatingBadges(
+        smallTables,
+        overflowAssignments,
+        guests,
+        [],
+      );
+      expect(badges[0].overflow).toBe(1);
+    });
+  });
+
+  describe('findAssignmentForGuest', () => {
+    const assignments = [
+      { guestId: 'g1', tableId: 'A' },
+      { guestId: 'g2', tableId: 'B' },
+    ];
+
+    it('finds the matching assignment', () => {
+      expect(findAssignmentForGuest('g1', assignments)).toEqual({
+        guestId: 'g1',
+        tableId: 'A',
+      });
+    });
+
+    it('returns null for unassigned guest', () => {
+      expect(findAssignmentForGuest('gX', assignments)).toBeNull();
+    });
+
+    it('returns null for empty guestId', () => {
+      expect(findAssignmentForGuest('', assignments)).toBeNull();
+      expect(findAssignmentForGuest(null, assignments)).toBeNull();
+    });
+
+    it('returns null for non-array assignments', () => {
+      expect(findAssignmentForGuest('g1', null)).toBeNull();
+      expect(findAssignmentForGuest('g1', undefined)).toBeNull();
+    });
+
+    it('skips malformed assignments gracefully', () => {
+      const dirty = [null, { guestId: 'g1', tableId: 'A' }, undefined];
+      expect(findAssignmentForGuest('g1', dirty)).toEqual({
+        guestId: 'g1',
+        tableId: 'A',
+      });
+    });
+
+    it('returns first match when there are dupes (defensive)', () => {
+      const dupes = [
+        { guestId: 'g1', tableId: 'A' },
+        { guestId: 'g1', tableId: 'B' },
+      ];
+      expect(findAssignmentForGuest('g1', dupes).tableId).toBe('A');
+    });
+  });
+
+  describe('tableLabelForGuest', () => {
+    const tables = [t({ id: 'A', label: 'T-01', capacity: 8 })];
+    const assignments = [{ guestId: 'g1', tableId: 'A' }];
+
+    it('resolves table label', () => {
+      expect(tableLabelForGuest('g1', assignments, tables)).toBe('T-01');
+    });
+
+    it('returns null for unassigned guest', () => {
+      expect(tableLabelForGuest('gX', assignments, tables)).toBeNull();
+    });
+
+    it('falls back to tableId when table was deleted', () => {
+      expect(tableLabelForGuest('g1', assignments, [])).toBe('A');
+    });
+
+    it('falls back to tableId when table has no label', () => {
+      const noLabel = [{ id: 'A', capacity: 8 }];
+      expect(tableLabelForGuest('g1', assignments, noLabel)).toBe('A');
+    });
+
+    it('accepts assignment row with tableId field (not just id)', () => {
+      const altTables = [{ tableId: 'A', label: 'T-Alt', capacity: 8 }];
+      expect(tableLabelForGuest('g1', assignments, altTables)).toBe('T-Alt');
+    });
+  });
+
+  describe('formatLivePill', () => {
+    it('formats 3-segment pill text', () => {
+      expect(formatLivePill({ checkedIn: 7, filled: 8, capacity: 12 })).toBe(
+        '7/8/12',
+      );
+    });
+
+    it('returns null for empty badge', () => {
+      expect(formatLivePill(null)).toBeNull();
+      expect(formatLivePill({})).toBeNull();
+    });
+
+    it('returns null for zero capacity', () => {
+      expect(formatLivePill({ checkedIn: 1, filled: 1, capacity: 0 })).toBeNull();
+    });
+
+    it('returns null for __unmatched__ sentinel', () => {
+      expect(
+        formatLivePill({ tableId: '__unmatched__', capacity: 0 }),
+      ).toBeNull();
+    });
+
+    it('works with all zeros', () => {
+      expect(formatLivePill({ capacity: 8 })).toBe('0/0/8');
+    });
+  });
+
+  describe('categorizeErrors', () => {
+    it('buckets errors by reason', () => {
+      const errors = [
+        { guestId: 'g1', reason: 'overflow' },
+        { guestId: 'g2', reason: 'invalidTable' },
+        { guestId: 'g3', reason: 'overflow' },
+        { guestId: 'g4', reason: 'duplicate' },
+      ];
+      const out = categorizeErrors(errors);
+      expect(out.overflow).toHaveLength(2);
+      expect(out.invalidTable).toHaveLength(1);
+      expect(out.duplicate).toHaveLength(1);
+      expect(out.unknown).toHaveLength(0);
+    });
+
+    it('puts unknown reasons in unknown bucket', () => {
+      const errors = [
+        { guestId: 'g1', reason: 'mystery' },
+        { guestId: 'g2', reason: null },
+      ];
+      const out = categorizeErrors(errors);
+      expect(out.unknown).toHaveLength(2);
+    });
+
+    it('handles empty/null input', () => {
+      expect(categorizeErrors([])).toEqual({
+        overflow: [],
+        invalidTable: [],
+        duplicate: [],
+        unknown: [],
+      });
+      expect(categorizeErrors(null)).toEqual({
+        overflow: [],
+        invalidTable: [],
+        duplicate: [],
+        unknown: [],
+      });
+    });
+
+    it('skips null entries', () => {
+      const errors = [null, { guestId: 'g1', reason: 'overflow' }, null];
+      const out = categorizeErrors(errors);
+      expect(out.overflow).toHaveLength(1);
+      expect(out.unknown).toHaveLength(0);
+    });
+  });
+});

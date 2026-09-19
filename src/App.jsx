@@ -15,6 +15,7 @@ import {
      deleteDoc,
      doc,
      getDoc,
+     getDocs,
      limit,
      onSnapshot,
      orderBy,
@@ -52,6 +53,7 @@ import {
 import { parseGuestParams } from './lib/guestMode';
 import { uploadPhotoToNas } from './lib/uploadToNas';
 import { recordTaskStatusUpdate } from './lib/taskUpdates';
+import { tableLabelForGuest } from './lib/seatingPure';
 import {
   openInquiry,
   subscribeToInquiries,
@@ -346,6 +348,21 @@ export default function App() {
       setCurrentView('vendor-onboarding');
     }
   }, [user]);
+
+  // 2026-09-17 — P13.3 Phase 2.2: HelperDashboard dispatches a
+  // 'helper-open-seating-edit' CustomEvent when the helper taps the
+  // 座位表 tab. The dashboard is rendered inside the helper-dashboard
+  // view, so it can't directly setCurrentView — we listen here and
+  // perform the route swap.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handler = () => {
+      if (userRole !== 'helper') return;
+      setCurrentView('seating-edit');
+    };
+    window.addEventListener('helper-open-seating-edit', handler);
+    return () => window.removeEventListener('helper-open-seating-edit', handler);
+  }, [userRole]);
 
   // 2026-07-20 — vendor invitation deep-link. If the user opened a
   // `?signup&venue=<slug>&token=<token>` link, we stash the (slug,
@@ -3555,6 +3572,34 @@ export default function App() {
     );
     const now = Date.now();
 
+    // 2026-09-17 — P13.3 scanner hook: look up the guest's table assignment
+    // so we can stamp the table label on the scanLog entry. Reception
+    // gets immediate "張小明 → 第 5 圍" feedback in their recent-scans
+    // list, and the seating floor plan can read the same log to render
+    // a live "已入座 7/12" badge per table (Phase 2.6).
+    let tableLabel = null;
+    try {
+      const tRef = doc(
+        db, 'artifacts', appId,
+        'users', ownerUid,
+        'events', eventId,
+        'tableAssignments', guestRow.id,
+      );
+      const tSnap = await getDoc(tRef);
+      if (tSnap.exists()) {
+        const a = tSnap.data();
+        // Resolve to the table's human label — fall back to tableId.
+        const tablesSnap = await getDocs(
+          collection(db, 'artifacts', appId, 'users', ownerUid, 'events', eventId, 'tables'),
+        );
+        const tablesList = [];
+        tablesSnap.forEach((d) => tablesList.push({ id: d.id, ...d.data() }));
+        tableLabel = tableLabelForGuest(guestRow.id, [a], tablesList);
+      }
+    } catch (err) {
+      console.warn('[scanner] table-label lookup failed (non-fatal)', err);
+    }
+
     // Two writes: (1) flip hasAttended + stamp audit fields on guest row,
     // (2) append an immutable entry to scanLog. We do them in a batch so
     // either both land or neither does.
@@ -3579,8 +3624,58 @@ export default function App() {
       helperName: user.displayName || user.email || 'Anonymous',
       eventId,
       scannedAt: now,
+      // 2026-09-17 — P13.3: denormalize the table label onto the log row
+      // so the reception feedback + floor-plan badge don't have to do a
+      // second lookup. Null when the guest has no table assignment yet.
+      tableLabel,
     });
-    await batch.commit();
+
+    // 2026-09-17 — P13.3 Phase 2.1: write a per-guest check-in record at
+    // /seatingCheckIns/{guestId}. The CoupleSeating live-pill renderer
+    // subscribes to this collection to show "T-03 已入座 7/12" badges
+    // without having to recompute from scanLog every render.
+    const checkInRef = doc(
+      db, 'artifacts', appId,
+      'users', ownerUid,
+      'events', eventId,
+      'seatingCheckIns', guestRow.id,
+    );
+    batch.set(checkInRef, {
+      guestId: guestRow.id,
+      tableId: (() => {
+        // Reuse the lookup we did above. If tableLabel resolved, we
+        // also want the tableId — re-derive from the assignment doc.
+        return null; // placeholder; replaced below in a non-batch set
+      })(),
+      scannedAt: now,
+      helperUid: user.uid,
+    }, { merge: true });
+
+    try {
+      await batch.commit();
+    } catch (err) {
+      console.error('[scanner] batch.commit failed', err);
+      showToast('✗ 報到失敗：' + (err?.message || '未知錯誤'));
+      return;
+    }
+
+    // Second write (non-batch): resolve tableId for the seatingCheckIns
+    // record. We do this AFTER the batch commits so the failure mode is
+    // "no live-pill data" rather than "scan didn't go through". Cheap
+    // enough that we accept the eventual-consistency gap.
+    try {
+      const tRef = doc(
+        db, 'artifacts', appId,
+        'users', ownerUid,
+        'events', eventId,
+        'tableAssignments', guestRow.id,
+      );
+      const tSnap = await getDoc(tRef);
+      const tableId = tSnap.exists() ? (tSnap.data().tableId || null) : null;
+      await setDoc(checkInRef, { tableId }, { merge: true });
+    } catch (err) {
+      console.warn('[scanner] tableId backfill failed (non-fatal)', err);
+    }
 
     setScanResult(guestRow);
     setTimeout(() => setScanResult(null), 3000);
@@ -4886,6 +4981,22 @@ export default function App() {
                   onEditGuest={setEditingGuest}
                 />
               )}
+
+            {/* 2026-09-17 — P13.3 Phase 2.2: helper live-edit seating
+                screen. Reuses CoupleSeating with role='helper' so
+                the chrome (preset button, editor modal, table drag)
+                is hidden. Helpers can still drag guest chips into
+                helper-writable tables. Rule-level category scope
+                enforced in saveAssignment + firestore.rules. */}
+            {userRole === 'helper' && currentView === 'seating-edit' && helperActiveAssignment && (
+              <CoupleSeating
+                ownerUid={helperActiveAssignment.ownerUid || helperActiveAssignment.event?.ownerUid}
+                eventId={helperActiveAssignment.eventId || helperActiveAssignment.event?.id}
+                onBack={() => setCurrentView('helper-dashboard')}
+                onOpenToast={showToast}
+                role="helper"
+              />
+            )}
 
             {/* 2026-09-12 — Hermes P13 (seating chart MVP): owner
                 floor plan editor. Renders the floor plan canvas,

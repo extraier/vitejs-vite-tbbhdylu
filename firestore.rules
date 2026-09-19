@@ -1404,6 +1404,31 @@ match /{path=**}/events/{eventId} {
               || isAdmin();
             allow create, update, delete: if isOwnerOrAnyCoOwner(ownerUid);
           }
+
+          // 2026-09-17 — P13.3 Phase 2.1: per-guest check-in stamp
+          // written by ReceptionScanner on success. Powers the live
+          // "T-03 已入座 7/12" badges on the floor plan. One doc per
+          // guestId; re-scans merge-update the scannedAt timestamp.
+          //
+          // Schema:
+          //   guestId:    string (== doc id)
+          //   tableId:    string|null  (denormalized from tableAssignments)
+          //   scannedAt:  number (epoch ms)
+          //   helperUid:  string
+          //
+          // Writes: owner + co-owner + helper (helpers can scan)
+          // Reads:  owner + co-owner + helper (operators on the day)
+          //         + admin (debug).
+          // Note: vendors do NOT see this — it powers operator-only
+          // live UI, not vendor deliverables.
+          match /seatingCheckIns/{guestId} {
+            allow read: if isOwnerOrAnyCoOwner(ownerUid)
+              || isHelperOfEvent(ownerUid)
+              || isAdmin();
+            allow create, update: if isOwnerOrAnyCoOwner(ownerUid)
+              || isHelperOfEvent(ownerUid);
+            allow delete: if isOwnerOrAnyCoOwner(ownerUid);
+          }
         }
 
         // 2026-07-26 — Co-owners collection. Each doc is keyed by

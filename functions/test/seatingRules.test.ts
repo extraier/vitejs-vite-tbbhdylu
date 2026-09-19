@@ -776,3 +776,122 @@ describe('helper category-scope enforcement (P13.2)', () => {
     );
   });
 });
+
+/* ============================ seatingCheckIns (P13.3) ============================ */
+
+describe('seatingCheckIns collection (P13.3)', () => {
+  // ReceptionScanner writes one doc per checked-in guest at
+  // /events/{eventId}/seatingCheckIns/{guestId}. Helpers + owners
+  // can scan (create+update). Only owners/co-owners can delete.
+  // Vendors do NOT get read access — this is operator-only data.
+
+  it.skipIf(skipEmulator)('OWNER can write a seatingCheckIns doc', async () => {
+    const ctx = env.authenticatedContext(OWNER_A);
+    await assertSucceeds(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-x`,
+      ).set({
+        guestId: 'g-x', tableId: 'friends-t', scannedAt: 1700000000000,
+        helperUid: OWNER_A,
+      }),
+    );
+  });
+
+  it.skipIf(skipEmulator)('HELPER can write a seatingCheckIns doc', async () => {
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertSucceeds(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-y`,
+      ).set({
+        guestId: 'g-y', tableId: null, scannedAt: 1700000000000,
+        helperUid: HELPER_A,
+      }),
+    );
+  });
+
+  it.skipIf(skipEmulator)('HELPER can update a seatingCheckIns doc', async () => {
+    // Seed as owner, then update timestamp as helper.
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-z`,
+      ).set({
+        guestId: 'g-z', tableId: null, scannedAt: 1700000000000,
+        helperUid: OWNER_A,
+      });
+    });
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertSucceeds(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-z`,
+      ).update({ scannedAt: 1700000001000 }),
+    );
+  });
+
+  it.skipIf(skipEmulator)('HELPER can READ seatingCheckIns (live badge)', async () => {
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-r`,
+      ).set({
+        guestId: 'g-r', tableId: 'friends-t', scannedAt: 1700000000000,
+        helperUid: OWNER_A,
+      });
+    });
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertSucceeds(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-r`,
+      ).get(),
+    );
+  });
+
+  it.skipIf(skipEmulator)('HELPER cannot DELETE a seatingCheckIns doc', async () => {
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-d`,
+      ).set({
+        guestId: 'g-d', tableId: null, scannedAt: 1700000000000,
+        helperUid: OWNER_A,
+      });
+    });
+    const ctx = env.authenticatedContext(HELPER_A);
+    await assertFails(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-d`,
+      ).delete(),
+    );
+  });
+
+  it.skipIf(skipEmulator)('UNAUTHENTICATED cannot read seatingCheckIns', async () => {
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-n`,
+      ).set({
+        guestId: 'g-n', tableId: null, scannedAt: 1700000000000,
+        helperUid: OWNER_A,
+      });
+    });
+    const ctx = env.unauthenticatedContext();
+    await assertFails(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-n`,
+      ).get(),
+    );
+  });
+
+  it.skipIf(skipEmulator)('OWNER of event-B has no read access to owner-A seatingCheckIns', async () => {
+    await env.withSecurityRulesDisabled(async (writerCtx) => {
+      await writerCtx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-xo`,
+      ).set({
+        guestId: 'g-xo', tableId: null, scannedAt: 1700000000000,
+        helperUid: OWNER_A,
+      });
+    });
+    const ctx = env.authenticatedContext(OWNER_B);
+    await assertFails(
+      ctx.firestore().doc(
+        `artifacts/${APP_ID}/users/${OWNER_A}/events/${EVENT_ID}/seatingCheckIns/g-xo`,
+      ).get(),
+    );
+  });
+});

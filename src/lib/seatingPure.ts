@@ -87,6 +87,9 @@ export interface TableAssignment {
   guestName?: string;
   assignedAt: number; // Date.now() at write time
   assignedBy?: string; // uid (owner / co-owner / helper)
+  assignedByRole?: 'owner' | 'coOwner' | 'helper';
+  /** Optional — when set, marks this as a check-in stamp vs a planning write. */
+  isCheckIn?: boolean;
 }
 
 export interface GuestLite {
@@ -371,3 +374,197 @@ export function buildAssignmentDocId(guestId: string): string {
   if (!guestId) throw new Error('buildAssignmentDocId: empty guestId');
   return guestId;
 }
+
+// ---------- P13.3 — scanner hook + live badge ----------
+
+/**
+ * Type for a single check-in record. Pulled from
+ * /seatingCheckIns/{guestId} (one doc per checked-in guest) — created
+ * in P13.3 by extending handleSimulateReceptionScan. tableId is
+ * denormalized so we can aggregate to per-table counts without a
+ * second query to /tableAssignments.
+ */
+export interface SeatingCheckIn {
+  guestId: string;
+  tableId: string | null;
+  scannedAt: number;
+  helperUid?: string;
+}
+
+/**
+ * Compact live-pill shape: only the fields the floor-plan renderer
+ * needs to draw the "T-03 已入座 7/12" badge. Built by
+ * `liveSeatingBadges`.
+ */
+export interface LiveSeatingBadge {
+  tableId: string;
+  filled: number;
+  capacity: number;
+  overflow: number;
+  checkedIn: number;
+}
+
+/**
+ * Bulk-error shape for the "auto-assign orphans" flow. Each row says
+ * which guest failed and why. Reason is bucketed by `categorizeErrors`.
+ */
+export interface AssignmentError {
+  guestId: string;
+  reason: 'overflow' | 'invalidTable' | 'duplicate' | 'unknown';
+  detail?: string;
+}
+
+/**
+ * Phase 2.6 (P13.3) — live occupancy badge data.
+ *
+ * Given the same inputs as `occupancy`, project down to the minimal shape the
+ * floor-plan renderer needs to draw the "T-03 已入座 7/12" pill on each table.
+ *
+ * Pure: same inputs as `occupancy`, returns an array keyed by tableId.
+ * No Firestore, no React. Trivially memoizable on (tables, assignments,
+ * guestsById, checkIns).
+ *
+ * `checkIns` is an array of `{ guestId, tableId, scannedAt }` records pulled
+ * from `/seatingCheckIns/{guestId}` (one doc per checked-in guest). We
+ * aggregate to a per-table count for the live pill. Guests not in any
+ * table assignment are bucketed under `tableId === '__unmatched__'`.
+ */
+export function liveSeatingBadges(
+  tables: ReadonlyArray<SeatingTable>,
+  assignments: ReadonlyArray<TableAssignment>,
+  guestsById: Readonly<Record<string, GuestLite>>,
+  checkIns?: ReadonlyArray<SeatingCheckIn>,
+): LiveSeatingBadge[] {
+  const occ = occupancy(tables, assignments, guestsById);
+  const checkInsByTable: Record<string, number> = {};
+  let unmatchedCheckIns = 0;
+  if (Array.isArray(checkIns)) {
+    for (const ci of checkIns) {
+      const tableId = ci && ci.tableId;
+      if (tableId) {
+        checkInsByTable[tableId] = (checkInsByTable[tableId] || 0) + 1;
+      } else {
+        unmatchedCheckIns += 1;
+      }
+    }
+  }
+  const badges: LiveSeatingBadge[] = Object.entries(occ).map(
+    ([tableId, row]) => ({
+      tableId,
+      filled: row.filled,
+      capacity: row.capacity,
+      overflow: row.overflow,
+      checkedIn: checkInsByTable[tableId] || 0,
+    }),
+  );
+  if (unmatchedCheckIns > 0) {
+    badges.push({
+      tableId: '__unmatched__',
+      filled: unmatchedCheckIns,
+      capacity: 0,
+      overflow: 0,
+      checkedIn: unmatchedCheckIns,
+    });
+  }
+  return badges;
+}
+
+/**
+ * Phase 2.1 (P13.3) — look up the tableAssignments doc for a guestId.
+ * Returns the assignment (with the tableId) or null if unassigned.
+ *
+ * Pure linear scan. For events ≤1k guests this is O(n) per call but
+ * memoizable on `assignments`. If you need O(1) lookup, build a Map
+ * once outside this helper.
+ */
+export function findAssignmentForGuest(
+  guestId: string | null | undefined,
+  assignments: ReadonlyArray<TableAssignment> | null | undefined,
+): TableAssignment | null {
+  if (!guestId || !Array.isArray(assignments)) return null;
+  return assignments.find((a) => a && a.guestId === guestId) || null;
+}
+
+/**
+ * Phase 2.1 (P13.3) — resolve a guest's table LABEL (not just id) by
+ * joining assignments ↔ tables. Returns null if unassigned. If the
+ * table was deleted but the assignment lingers, returns the tableId
+ * as a fallback (a stale-but-visible state worth surfacing).
+ */
+export function tableLabelForGuest(
+  guestId: string | null | undefined,
+  assignments: ReadonlyArray<TableAssignment>,
+  tables: ReadonlyArray<SeatingTable>,
+): string | null {
+  const a = findAssignmentForGuest(guestId, assignments);
+  if (!a) return null;
+  if (!Array.isArray(tables)) return a.tableId;
+  const t = tables.find(
+    (tt) => tt && (tt.id === a.tableId || tt.tableId === a.tableId),
+  );
+  if (!t) return a.tableId;
+  return t.label || t.id || a.tableId;
+}
+
+/**
+ * Phase 2.6 (P13.3) — format the "7/8/12" live pill text shown on each
+ * table. Returns null when there's nothing meaningful to show.
+ *
+ * Format: `<checkedIn>/<filled>/<capacity>`. e.g. "7/8/12" means
+ * 7 checked in, 8 assigned, 12 seats total. The 3-segment display
+ * makes the at-event-vs-expected gap obvious.
+ */
+export function formatLivePill(badge: Partial<LiveSeatingBadge> | null): string | null {
+  if (!badge || !badge.capacity || badge.tableId === '__unmatched__') return null;
+  const checkedIn = badge.checkedIn || 0;
+  const filled = badge.filled || 0;
+  return `${checkedIn}/${filled}/${badge.capacity}`;
+}
+
+/**
+ * Phase 2.6 (P13.3) — bucket a list of errors by reason. Used by the
+ * bulk "auto-assign" UI to surface one toast per bucket instead of one
+ * per guest. Pure pass-through.
+ */
+export function categorizeErrors(
+  errors: ReadonlyArray<AssignmentError | null | undefined>,
+): { overflow: AssignmentError[]; invalidTable: AssignmentError[]; duplicate: AssignmentError[]; unknown: AssignmentError[] } {
+  const buckets: { overflow: AssignmentError[]; invalidTable: AssignmentError[]; duplicate: AssignmentError[]; unknown: AssignmentError[] } = {
+    overflow: [],
+    invalidTable: [],
+    duplicate: [],
+    unknown: [],
+  };
+  if (!Array.isArray(errors)) return buckets;
+  for (const e of errors) {
+    if (!e) continue;
+    const reason = e.reason || 'unknown';
+    if (reason in buckets && Array.isArray(buckets[reason as keyof typeof buckets])) {
+      (buckets[reason as keyof typeof buckets] as AssignmentError[]).push(e);
+    } else {
+      buckets.unknown.push(e);
+    }
+  }
+  return buckets;
+}
+
+export default {
+  SEATING_TABLE_CATEGORIES,
+  HELPER_WRITABLE_TABLE_CATEGORIES,
+  TABLE_SHAPES,
+  normalizeTable,
+  emptyAssignment,
+  buildAssignmentDocId,
+  occupancy,
+  guestTableFit,
+  categoryForGuest,
+  dietaryAllergens,
+  summarizeDietaryAcrossTables,
+  suggestTableForCategory,
+  validateAssignment,
+  liveSeatingBadges,
+  findAssignmentForGuest,
+  tableLabelForGuest,
+  formatLivePill,
+  categorizeErrors,
+};

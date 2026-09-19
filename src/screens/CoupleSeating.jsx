@@ -44,6 +44,8 @@ import {
   emptyAssignment,
   validateAssignment,
   buildAssignmentDocId,
+  liveSeatingBadges,
+  formatLivePill,
 } from '../lib/seatingPure';
 
 const APP_ID = 'savetheday-production';
@@ -53,6 +55,7 @@ export function CoupleSeating({
   eventId,
   onBack,
   onOpenToast,
+  role = 'owner', // 'owner' | 'helper' — gates write UI
 }) {
   // Live data
   const [tables, setTables] = useState([]);
@@ -62,6 +65,8 @@ export function CoupleSeating({
   // P13.2 additions — assignments + guests (for drag-drop panel)
   const [assignments, setAssignments] = useState([]);
   const [guests, setGuests] = useState([]);
+  // P13.3 — live check-ins for the "已入座 7/12" pill on each table.
+  const [checkIns, setCheckIns] = useState([]);
 
   // Drag state — { tableId, startX, startY, originX, originY, moved }
   const [dragState, setDragState] = useState(null);
@@ -150,11 +155,26 @@ export function CoupleSeating({
       },
     );
 
+    // P13.3 — seatingCheckIns: per-guest check-in stamp written by
+    // ReceptionScanner. Powers the "已入座 X/8" live pill.
+    const checkInsUnsub = onSnapshot(
+      collection(db, seatingCollectionPath(APP_ID, { ownerUid, eventId, collection: 'seatingCheckIns' })),
+      (snap) => {
+        const rows = [];
+        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+        setCheckIns(rows);
+      },
+      (err) => {
+        console.error('[seating] checkIns listener', err);
+      },
+    );
+
     return () => {
       metaUnsub();
       tablesUnsub();
       assignmentsUnsub();
       guestsUnsub();
+      checkInsUnsub();
     };
   }, [ownerUid, eventId]);
 
@@ -284,6 +304,18 @@ export function CoupleSeating({
   const saveAssignment = useCallback(
     async (guestId, tableId, guestName) => {
       if (!ownerUid || !eventId) return { ok: false };
+      // P13.3 — helper live-edit cannot assign guests to owner-only
+      // categories (bride_groom, elder_family, groomsmen, bridesmaid,
+      // ceremony). The Firestore rule blocks it too; this is the
+      // client-side pre-check so the toast doesn't say "failed" when
+      // the rejection is by-design.
+      if (role === 'helper') {
+        const table = tablesRef.current.find((t) => t.id === tableId);
+        if (table && !HELPER_WRITABLE_TABLE_CATEGORIES.includes(table.tableCategory)) {
+          showToast(`家族枱（${table.label || tableId}）只能由主人分配`);
+          return { ok: false };
+        }
+      }
       const validation = validateAssignment(
         guestId,
         tableId,
@@ -353,6 +385,19 @@ export function CoupleSeating({
     [normalizedTables, assignments, guestsById],
   );
 
+  // P13.3 — live attendance badges per table. Pure projection of
+  // (tables, assignments, checkIns) into the minimal shape the
+  // renderer needs. Memoized on the same inputs.
+  const liveBadges = useMemo(
+    () => liveSeatingBadges(normalizedTables, assignments, guestsById, checkIns),
+    [normalizedTables, assignments, guestsById, checkIns],
+  );
+  const liveBadgeByTable = useMemo(() => {
+    const m = {};
+    for (const b of liveBadges) m[b.tableId] = b;
+    return m;
+  }, [liveBadges]);
+
   /* ---------- P13.2: SVG-native drag (no react-konva) ---------- */
   const onTablePointerDown = useCallback((e, table) => {
     // Capture pointer so we get move/up even outside the table.
@@ -382,6 +427,10 @@ export function CoupleSeating({
     (e) => {
       setDragState((s) => {
         if (!s) return null;
+        // P13.3 — helper live-edit cannot move tables. Drag is
+        // owner-only; helpers still get the live-pill + can drag
+        // guest chips into helper-writable tables.
+        if (role !== 'owner') return s;
         const svg = svgRef.current;
         if (!svg) return s;
         const ctm = svg.getScreenCTM();
@@ -407,21 +456,22 @@ export function CoupleSeating({
         return { ...s, moved };
       });
     },
-    [ownerUid, eventId],
+    [ownerUid, eventId, role],
   );
 
   const onSvgPointerUp = useCallback((e) => {
     setDragState((s) => {
       if (!s) return null;
       // If pointer moved <4px, treat as a click — open the editor modal.
+      // P13.3 — helper live-edit does NOT open the editor (read-only mode).
       const wasClick = !s.moved && Math.hypot(e.clientX - s.startClientX, e.clientY - s.startClientY) <= 4;
-      if (wasClick) {
+      if (wasClick && role === 'owner') {
         const table = tablesRef.current.find((t) => t.id === s.tableId);
         if (table) setEditingTable({ ...table });
       }
       return null;
     });
-  }, []);
+  }, [role]);
 
   /* ---------- drag/click ---------- */
   const onCanvasClick = useCallback(
@@ -429,6 +479,8 @@ export function CoupleSeating({
       // Tap on empty SVG (no table hit) creates a new table at the click point.
       // Suppressed during drag-release.
       if (dragState && dragState.moved) return;
+      // P13.3 — helper live-edit cannot create new tables. Owner-only.
+      if (role !== 'owner') return;
       const svg = svgRef.current;
       if (!svg) return;
       const pt = svg.createSVGPoint();
@@ -448,7 +500,7 @@ export function CoupleSeating({
         source: 'manual',
       });
     },
-    [],
+    [role],
   );
 
   /* ---------- rendering ---------- */
@@ -478,9 +530,13 @@ export function CoupleSeating({
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => setPresetsOpen(true)} style={btnSecondary}>
-            ⚙️ 套用 preset
-          </button>
+          {/* Owner-only chrome (preset selector). Helper live-edit
+              hides this — helpers can move/reassign only. */}
+          {role === 'owner' && (
+            <button onClick={() => setPresetsOpen(true)} style={btnSecondary}>
+              ⚙️ 套用 preset
+            </button>
+          )}
         </div>
       </header>
 
@@ -529,6 +585,9 @@ export function CoupleSeating({
             const filled = o ? o.filled : 0;
             const overflow = o && o.overflow > 0;
             const isDragging = dragState && dragState.tableId === t.id && dragState.moved;
+            // P13.3 — live attendance pill (e.g. "已入座 7/8/12")
+            const liveBadge = liveBadgeByTable[t.id];
+            const livePill = formatLivePill(liveBadge);
             return (
               <g
                 key={t.id}
@@ -593,6 +652,31 @@ export function CoupleSeating({
                     </div>
                   </foreignObject>
                 )}
+                {/* Live attendance pill (P13.3) — only renders when at
+                    least one checked-in guest exists for this table. */}
+                {livePill && liveBadge && liveBadge.checkedIn > 0 && (
+                  <foreignObject x={w - 64} y={h + 4} width="60" height="20">
+                    <div
+                      xmlns="http://www.w3.org/1999/xhtml"
+                      data-testid={`live-pill-${t.id}`}
+                      data-checked-in={liveBadge.checkedIn}
+                      title={`已入座 ${liveBadge.checkedIn}/${liveBadge.filled}/${liveBadge.capacity}`}
+                      style={{
+                        background: '#ECFDF5',
+                        border: '1px solid #6EE7B7',
+                        borderRadius: 8,
+                        padding: '0 4px',
+                        fontSize: 10,
+                        lineHeight: '18px',
+                        color: '#065F46',
+                        textAlign: 'center',
+                        fontWeight: 600,
+                      }}
+                    >
+                      ✓ {livePill}
+                    </div>
+                  </foreignObject>
+                )}
               </g>
               );
           })}
@@ -645,8 +729,22 @@ export function CoupleSeating({
       />
 
       <p style={{ marginTop: 8, color: '#64748B', fontSize: 11 }}>
-        撳空白 = 加新枱 · 撳枱 = 編輯 · 拖枱 = 搬位 · 拖賓客到枱 = 分配座位
+        {role === 'owner' ? (
+          <>
+            撳空白 = 加新枱 · 撳枱 = 編輯 · 拖枱 = 搬位 · 拖賓客到枱 = 分配座位
+          </>
+        ) : (
+          <>
+            助手模式：可以拖賓客到 <strong>朋友/同事/小朋友/其他</strong> 枱。家族枱同主家席只能由主人改。
+          </>
+        )}
       </p>
+      {role === 'owner' && (
+        <p style={{ marginTop: 4, color: '#64748B', fontSize: 11 }}>
+          <span style={{ background: '#ECFDF5', padding: '0 4px', borderRadius: 4 }}>✓ 已入座 X/Y/Z</span>
+          {' '} = 接待已掃描嘅即時人數 (X 入座 / Y 已分配 / Z 座位上限)
+        </p>
+      )}
 
       {/* Editor modal */}
       {editingTable && (

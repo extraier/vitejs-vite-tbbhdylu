@@ -33,6 +33,7 @@ import {
   CalendarDays,
   Clock,
   Package,
+  Armchair,
 } from 'lucide-react';
 import { collection, doc, query, updateDoc, where } from 'firebase/firestore';
 import { db, appId } from '../lib/firebase';
@@ -88,6 +89,12 @@ export function HelperDashboard({
     if (perms.canViewBudget) tabs.push({ id: 'budget', label: '預算總覽', Icon: Wallet });
     if (perms.canUploadPhotos) tabs.push({ id: 'photos', label: '上傳相片', Icon: ImageIcon });
     if (perms.canViewPhotos) tabs.push({ id: 'photos', label: '睇相', Icon: ImageIcon });
+    // 2026-09-17 — P13.3 Phase 2.2: helpers with any seating scope
+    // (always-on for now; the rule-level category check in
+    // firestore.rules is the authoritative gate) get a 座位表 tab
+    // that switches App-level view to 'seating-edit', which renders
+    // CoupleSeating with role='helper'.
+    tabs.push({ id: '__seating_edit__', label: '座位表', Icon: Armchair });
     return tabs;
   }, [perms]);
   const [activeTab, setActiveTab] = useState(availableTabs[0]?.id || 'tasks');
@@ -293,7 +300,16 @@ export function HelperDashboard({
             {availableTabs.map(({ id, label, Icon }) => (
               <button
                 key={id}
-                onClick={() => setActiveTab(id)}
+                // 2026-09-17 — P13.3: __seating_edit__ is a "fake" tab
+                // that lifts the helper out of the dashboard into the
+                // App-level seating-edit route. We can't use setActiveTab
+                // for that since the screen renders outside this
+                // component's tree (CoupleSeating with role='helper').
+                onClick={id === '__seating_edit__' ? () => {
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('helper-open-seating-edit'));
+                  }
+                } : () => setActiveTab(id)}
                 className={`flex items-center gap-1 px-3 py-2 text-sm font-bold rounded-t-lg border-b-2 transition-colors ${
                   activeTab === id
                     ? 'text-amber-700 border-amber-500 bg-amber-50/50'
