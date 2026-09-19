@@ -654,28 +654,44 @@ export function SeatingCanvas({
                 )}
                 <text
                   x={w / 2}
-                  y={h / 2 - (isRound ? 14 : 4)}
-                  fontSize={isRound ? "12" : "14"}
+                  y={h / 2 - 4}
+                  fontSize={isRound ? "13" : "14"}
                   fontWeight="600"
                   fill="#0F766E"
                   textAnchor="middle"
                 >
                   {t.label}
                 </text>
-                {/* Two-pill stack: count + category (P13.3 v3,
-                    2026-09-18). User feedback after v2 shipped:
-                    drop the category when overflowing was the
-                    wrong call — operators want to see the category
-                    at a glance even on round tables. Split into two
-                    stacked pills:
-                      Row 1: "X/Y 座位" (count)
-                      Row 2: "category" (smaller, secondary color)
-                    On round 80×80 we use 14px-tall pills with 2px
-                    gap, label moves up; on long tables the existing
-                    20px pills stack normally. Both pills are still
-                    capped by table width and use the same char-width
-                    estimator as v2. Overflow state (filled > capacity)
-                    makes the count pill flip to red. */}
+                {/* Two-pill stack BELOW the table body (v4,
+                    2026-09-18). User feedback after v3 shipped:
+                    the inside-stack layout caused the pills to
+                    visually crowd the label on round tables.
+                    v4 mirrors the dietary-chip pattern: pills live
+                    outside the table body, anchored below it. The
+                    label takes the full center of the table for
+                    breathing room; the count + category pills hang
+                    off the bottom edge like a name tag.
+
+                    Layout on round 80×80 (h=80):
+                      y=36: label "T-01" (centered, 13px)
+                      y=82: count pill (h=18) — sits just below
+                            the south pole of the ellipse
+                      y=102: category pill (h=14)
+                      y=116: bottom edge of category pill
+                      80→116 = 36px canvas padding consumed.
+
+                    Layout on long 180×80 (h=80):
+                      y=36: label "T-05" (centered, 14px)
+                      y=82: count pill (h=20)
+                      y=106: category pill (h=18)
+                      y=124: bottom edge of category pill
+                      80→124 = 44px canvas padding consumed.
+
+                    The total height is 36px (round) and 44px (long)
+                    which is more than the previous inside-table
+                    layout but gives the label room to breathe.
+                    Other tables in the floor plan typically have
+                    ≥60px vertical separation so this fits. */}
                 {(() => {
                   const countLabel = `${filled}/${t.capacity} 座位`;
                   const catLabel = t.tableCategory;
@@ -691,40 +707,41 @@ export function SeatingCanvas({
                     }
                     return w;
                   };
-                  const pillH = isRound ? 14 : 20;
-                  const pillGap = isRound ? 2 : 4;
-                  const fontPx = isRound ? 9 : 10;
-                  // Round tables get a tighter cap because the
-                  // ellipse narrows above/below the equator; long
-                  // tables can use nearly full label room.
+                  // Round tables get smaller pills because the
+                  // canvas layout typically has tighter spacing;
+                  // long tables get bigger pills for legibility.
+                  const countH = isRound ? 18 : 20;
+                  const catH = isRound ? 14 : 18;
+                  const fontPx = isRound ? 10 : 11;
+                  const catFontPx = isRound ? 9 : 10;
+                  // Cap pill width: round can fit ~64px max
+                  // inside its visible canvas footprint; long
+                  // tables get the full label width.
                   const pillMaxW = isRound
-                    ? Math.min(60, w - 16)
-                    : Math.min(140, w - 16);
+                    ? Math.min(72, w)
+                    : Math.min(140, w);
                   // Width per pill: round UP to nearest 4px so
                   // the border renders crisp at any zoom.
                   const countEstW = estW(countLabel);
                   const countW = Math.min(pillMaxW, Math.ceil(countEstW / 4) * 4);
-                  // Category pill: keep the same cap; it shouldn't
-                  // ever be wider than the count pill in practice,
-                  // but if a category name is enormous we still
-                  // cap it.
                   const catEstW = estW(catLabel);
                   const catW = Math.min(pillMaxW, Math.ceil(catEstW / 4) * 4);
-                  // Vertical stack: top of count pill is just below
-                  // the label, gap, then category.
-                  const countY = isRound ? h / 2 - 2 : h / 2 + 4;
-                  const catY = countY + pillH + pillGap;
-                  // Centering: each pill horizontally centered.
+                  // Vertical position: anchored just below the
+                  // table body's bottom edge (y = h). Small 2px
+                  // gap to avoid touching the table border.
+                  const countY = h + 2;
+                  const catY = countY + countH + 2;
+                  // Center horizontally.
                   const countX = (w - countW) / 2;
                   const catX = (w - catW) / 2;
                   return (
                     <>
-                      {/* Count pill (row 1) */}
+                      {/* Count pill (row 1, below table) */}
                       <foreignObject
                         x={countX}
                         y={countY}
                         width={countW}
-                        height={pillH}
+                        height={countH}
                       >
                         <div
                           xmlns="http://www.w3.org/1999/xhtml"
@@ -737,10 +754,10 @@ export function SeatingCanvas({
                             border: overflow
                               ? '1px solid #DC2626'
                               : '1px solid #CBD5E1',
-                            borderRadius: 8,
-                            padding: '0 5px',
+                            borderRadius: 9,
+                            padding: '0 6px',
                             fontSize: fontPx,
-                            lineHeight: `${pillH - 2}px`,
+                            lineHeight: `${countH - 2}px`,
                             color: overflow ? '#991B1B' : '#475569',
                             textAlign: 'center',
                             fontWeight: 600,
@@ -755,16 +772,12 @@ export function SeatingCanvas({
                           {countLabel}
                         </div>
                       </foreignObject>
-                      {/* Category pill (row 2) — always rendered,
-                          even if it duplicates the table label or
-                          is empty. Uses a quieter palette (lighter
-                          background, no border) so it doesn't
-                          compete with the count for attention. */}
+                      {/* Category pill (row 2, below count) */}
                       <foreignObject
                         x={catX}
                         y={catY}
                         width={catW}
-                        height={pillH}
+                        height={catH}
                       >
                         <div
                           xmlns="http://www.w3.org/1999/xhtml"
@@ -774,10 +787,10 @@ export function SeatingCanvas({
                           style={{
                             background: overflow ? '#FEF2F2' : '#FFFFFF',
                             border: '1px solid #E2E8F0',
-                            borderRadius: 8,
-                            padding: '0 5px',
-                            fontSize: fontPx,
-                            lineHeight: `${pillH - 2}px`,
+                            borderRadius: 9,
+                            padding: '0 6px',
+                            fontSize: catFontPx,
+                            lineHeight: `${catH - 2}px`,
                             color: overflow ? '#991B1B' : '#64748B',
                             textAlign: 'center',
                             fontWeight: 500,
