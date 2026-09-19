@@ -671,14 +671,41 @@ export function SeatingCanvas({
                     grows with the text up to ~120px; sits below the
                     label, above the bottom edge. */}
                 {(() => {
-                  const label = `${filled}/${t.capacity} 座位 · ${t.tableCategory}`;
-                  // Approx 7px per zh-HK char @ 10px font + 12px padding
-                  const pillW = Math.min(120, Math.max(56, label.length * 7 + 12));
+                  // Cap pill width by the table shape so we never
+                  // overflow the table body. Round tables (80×80
+                  // typical) get ~60px max because the ellipse
+                  // narrows quickly above and below the equator;
+                  // long tables get full label room.
+                  const pillMaxW = isRound
+                    ? Math.min(60, w - 16)
+                    : Math.min(140, w - 16);
+                  // CJK char widths at 10px PingFang TC: CJK≈10,
+                  // Latin/digit≈5.5, space/slash/dot≈3, padding 12.
+                  let estW = 12;
+                  for (const ch of label) {
+                    const code = ch.charCodeAt(0);
+                    if (code >= 0x4E00 && code <= 0x9FFF) {
+                      estW += 10;
+                    } else if (/[A-Za-z0-9]/.test(ch)) {
+                      estW += 5.5;
+                    } else {
+                      estW += 3;
+                    }
+                  }
+                  const pillW = Math.min(pillMaxW, Math.ceil(estW / 4) * 4);
+                  // Decide what to render. On round tables when the
+                  // category wouldn't fit, drop it and just show
+                  // the count — operators can read the category from
+                  // the editor or the preset.
+                  let shown = label;
+                  if (pillW < estW && isRound && label.includes(' · ')) {
+                    shown = label.split(' · ')[0]; // "X/Y 座位"
+                  }
                   // Center horizontally inside the table's local
                   // coordinate space (the <g> is already translated
                   // to (t.x, t.y); we use the local w/h).
                   const pillX = (w - pillW) / 2;
-                  const pillY = isRound ? h / 2 + 4 : h / 2 + 8;
+                  const pillY = isRound ? h / 2 + 6 : h / 2 + 8;
                   return (
                     <foreignObject
                       x={pillX}
@@ -710,7 +737,7 @@ export function SeatingCanvas({
                           height: '100%',
                         }}
                       >
-                        {label}
+                        {shown}
                       </div>
                     </foreignObject>
                   );
