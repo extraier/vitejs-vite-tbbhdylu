@@ -68,6 +68,7 @@ import {
   suggestTargetTables,
   autoAssignGuests,
 } from '../lib/seatingPure';
+import FindSeatSheet from './FindSeatSheet';
 import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
 const APP_ID = 'savetheday-production';
@@ -112,6 +113,9 @@ export function SeatingCanvas({
   // P13.4.2 — auto-assign sheet (modal for batch auto-placement
   // of unassigned guests into existing tables).
   const [autoAssignOpen, setAutoAssignOpen] = useState(false);
+  // P13.4.4 — Find-Seat QR sheet (modal for generating a public
+  // QR + URL the operator shares at the venue entrance).
+  const [findSeatOpen, setFindSeatOpen] = useState(false);
 
   // Refs
   const svgRef = useRef(null);
@@ -753,6 +757,23 @@ export function SeatingCanvas({
           {role === 'owner' && (
             <>
               <button
+                onClick={() => setFindSeatOpen(true)}
+                data-testid="find-seat-btn"
+                disabled={tables.length === 0}
+                title={
+                  tables.length === 0
+                    ? '需要先有枱先可以生成 Find-Seat QR'
+                    : '生成一個公開 QR，賓客用手機掃就睇到座位表'
+                }
+                style={{
+                  ...btnSecondary,
+                  opacity: tables.length === 0 ? 0.5 : 1,
+                  cursor: tables.length === 0 ? 'not-allowed' : 'pointer',
+                }}
+              >
+                📱 Find-Seat QR
+              </button>
+              <button
                 onClick={() => setAutoAssignOpen(true)}
                 data-testid="auto-assign-btn"
                 disabled={tables.length === 0}
@@ -1316,6 +1337,19 @@ export function SeatingCanvas({
           />
         );
       })()}
+
+      {/* P13.4.4 — Find-Seat QR sheet. Owner-only, generates a
+          publicSeating token doc + URL guests can scan without
+          signing in. */}
+      {findSeatOpen && tables.length > 0 && (
+        <FindSeatSheet
+          ownerUid={ownerUid}
+          eventId={eventId}
+          meta={meta ?? {}}
+          tables={normalizedTables}
+          onClose={() => setFindSeatOpen(false)}
+        />
+      )}
     </div>
   );
 }

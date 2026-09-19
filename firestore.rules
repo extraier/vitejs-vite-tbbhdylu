@@ -498,6 +498,34 @@ match /{path=**}/events/{eventId} {
         allow write: if isAdmin();
       }
 
+      // ---- 2026-09-18 — P13.4.4: Public Find-Seat QR lookup -----------
+      //
+      // Owners stamp a snapshot of their seating chart under
+      // /publicSeating/{token} when they generate a public QR. The
+      // token is a random UUID with an expiry timestamp. The
+      // /find-seat?token=X public route reads this collection with
+      // NO auth required (the whole point is guests can scan the
+      // QR without signing in).
+      //
+      // Read gate: token must not be expired. Firestore's
+      // request.time is server-side, so this can't be spoofed by a
+      // client clock.
+      //
+      // Write gate: only the authenticated owner can stamp a new
+      // token. The ownerUid field on the doc must match the
+      // signed-in uid. update/delete are disabled (one-shot
+      // generation; operators regenerate by stamping a new token
+      // rather than overwriting an expired one).
+      match /publicSeating/{token} {
+        allow read: if resource.data.expiresAt > request.time;
+        allow create: if request.auth != null
+                       && request.resource.data.keys().hasAll(
+                         ['eventId','ownerUid','expiresAt','canvas','tables']
+                       )
+                       && request.resource.data.ownerUid == request.auth.uid;
+        allow update, delete: if false;
+      }
+
       // ---- Owner-scoped data --------------------------------------------
 
       match /users/{ownerUid} {

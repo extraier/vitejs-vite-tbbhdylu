@@ -197,6 +197,14 @@ import { ChangePasswordModal } from './components/modals/ChangePasswordModal';
 import { InvitePartnerModal } from './components/modals/InvitePartnerModal';
 import { EventSettingsModal } from './components/modals/EventSettingsModal';
 
+// 2026-09-18 — P13.4.4: Public Find-Seat page renders for
+// unauthenticated visitors when the URL has ?find-seat=... .
+// No auth required: the publicSeating doc was stamped by the
+// owner with a token, and the Firestore rule only needs that
+// token (no user). Render it before the auth gate so guests
+// can scan the QR without signing in.
+import FindSeatPage from './screens/FindSeatPage';
+
 export default function App() {
   // Auth
   const {
@@ -4066,6 +4074,17 @@ export default function App() {
     setShowInviteModal(false);
     setInviteForm({ name: '', email: '' });
   };
+
+  // 2026-09-18 — P13.4.4: Public Find-Seat page renders for
+  // unauthenticated visitors when the URL has ?find-seat=... .
+  // The URL is rendered ABOVE the auth gate so guests can scan
+  // the QR and immediately see the seating chart without having
+  // to sign in. The actual token verification happens inside
+  // FindSeatPage against the publicSeating Firestore collection.
+  if (typeof window !== 'undefined'
+      && new URLSearchParams(window.location.search).has('find-seat')) {
+    return <FindSeatPage />;
+  }
 
   // ---- Render ----
   if (authChecked && !user && !guest.isGuestMode) {
