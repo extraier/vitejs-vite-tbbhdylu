@@ -75,6 +75,17 @@ import {
 // saves ~15 KB gz on the seating screen.
 import { lazy, Suspense } from 'react';
 const FindSeatSheet = lazy(() => import('./FindSeatSheet'));
+// 2026-09-20 — P13.4.5 perf follow-up: also lazy-load BudgetSheet
+// and AutoAssignSheet. Both were previously inline in this file,
+// meaning every CoupleSeating render paid the parse cost for the
+// 350+ lines of JSX + style objects, even when the operator never
+// opened the budget or auto-assign modal. After extraction:
+//   - BudgetSheet (preset chips + form)        → ~3.5 KB gz chunk
+//   - AutoAssignSheet (candidate list + picker) → ~4.0 KB gz chunk
+// Both are loaded only when first opened; before that they cost
+// ~0 KB on the seating screen critical path.
+const BudgetSheet = lazy(() => import('./BudgetSheet'));
+const AutoAssignSheet = lazy(() => import('./AutoAssignSheet'));
 import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
 const APP_ID = 'savetheday-production';
@@ -1338,40 +1349,47 @@ export function SeatingCanvas({
 
       {/* P13.4.1 — Budget sheet. Owner-only. Tap the budget pill
           in the header to open. Persists costPerHead + budgetCap
-          to the seating meta doc. */}
+          to the seating meta doc. Lazy-loaded (P13.4.5 perf)
+          — Suspense boundary keeps the seating screen responsive
+          while the chunk downloads. */}
       {budgetSheetOpen && (
-        <BudgetSheet
-          costPerHead={meta?.costPerHead ?? DEFAULT_COST_PER_HEAD}
-          budgetCap={meta?.budgetCap ?? DEFAULT_BUDGET_CAP}
-          summary={computeBudget(tables, assignments, {
-            costPerHead: meta?.costPerHead ?? DEFAULT_COST_PER_HEAD,
-            budgetCap: meta?.budgetCap ?? DEFAULT_BUDGET_CAP,
-          })}
-          onSave={async ({ costPerHead: cph, budgetCap: cap }) => {
-            try {
-              await setDoc(
-                doc(db, seatingItemPath(APP_ID, {
-                  ownerUid, eventId, collection: 'seating', itemId: 'main',
-                })),
-                { costPerHead: cph, budgetCap: cap, updatedAt: Date.now() },
-                { merge: true },
-              );
-              setBudgetSheetOpen(false);
-              showToast(
-                cap > 0
-                  ? `已設定預算上限 ${formatHKD(cap, { short: true })} · 每人 ${formatHKD(cph)}`
-                  : `已設定每人成本 ${formatHKD(cph)} (不設上限)`,
-              );
-            } catch (e) {
-              console.error('[seating] saveBudget', e);
-              showToast('儲存失敗，請重試');
-            }
-          }}
-          onCancel={() => setBudgetSheetOpen(false)}
-        />
+        <Suspense fallback={<div style={modalBackdrop}><div style={{ ...modalCard, textAlign: 'center' }}>載入緊預算設定…</div></div>}>
+          <BudgetSheet
+            costPerHead={meta?.costPerHead ?? DEFAULT_COST_PER_HEAD}
+            budgetCap={meta?.budgetCap ?? DEFAULT_BUDGET_CAP}
+            summary={computeBudget(tables, assignments, {
+              costPerHead: meta?.costPerHead ?? DEFAULT_COST_PER_HEAD,
+              budgetCap: meta?.budgetCap ?? DEFAULT_BUDGET_CAP,
+            })}
+            onSave={async ({ costPerHead: cph, budgetCap: cap }) => {
+              try {
+                await setDoc(
+                  doc(db, seatingItemPath(APP_ID, {
+                    ownerUid, eventId, collection: 'seating', itemId: 'main',
+                  })),
+                  { costPerHead: cph, budgetCap: cap, updatedAt: Date.now() },
+                  { merge: true },
+                );
+                setBudgetSheetOpen(false);
+                showToast(
+                  cap > 0
+                    ? `已設定預算上限 ${formatHKD(cap, { short: true })} · 每人 ${formatHKD(cph)}`
+                    : `已設定每人成本 ${formatHKD(cph)} (不設上限)`,
+                );
+              } catch (e) {
+                console.error('[seating] saveBudget', e);
+                showToast('儲存失敗，請重試');
+              }
+            }}
+            onCancel={() => setBudgetSheetOpen(false)}
+          />
+        </Suspense>
       )}
 
-      {/* P13.4.2 — Auto-assign sheet. Owner-only batch assistant. */}
+      {/* P13.4.2 — Auto-assign sheet. Owner-only batch assistant.
+          Lazy-loaded (P13.4.5 perf follow-up) — Suspense boundary
+          shows a small spinner while the candidate-list chunk
+          downloads. */}
       {autoAssignOpen && (() => {
         const assignedIds = new Set(assignments.map((a) => a.guestId));
         const unassigned = guests
@@ -1385,19 +1403,21 @@ export function SeatingCanvas({
               : undefined,
           }));
         return (
-          <AutoAssignSheet
-            unassigned={unassigned}
-            tables={normalizedTables}
-            assignments={assignments}
-            guestsById={guestsById}
-            onPick={(g, t) => {
-              saveAssignment(g.id, t.id, g.name).then((r) => {
-                if (r.ok) setAutoAssignOpen(false);
-              });
-            }}
-            onPickAll={autoAssignAll}
-            onCancel={() => setAutoAssignOpen(false)}
-          />
+          <Suspense fallback={<div style={modalBackdrop}><div style={{ ...modalCard, textAlign: 'center' }}>載入緊自動排位…</div></div>}>
+            <AutoAssignSheet
+              unassigned={unassigned}
+              tables={normalizedTables}
+              assignments={assignments}
+              guestsById={guestsById}
+              onPick={(g, t) => {
+                saveAssignment(g.id, t.id, g.name).then((r) => {
+                  if (r.ok) setAutoAssignOpen(false);
+                });
+              }}
+              onPickAll={autoAssignAll}
+              onCancel={() => setAutoAssignOpen(false)}
+            />
+          </Suspense>
         );
       })()}
 
@@ -1732,348 +1752,6 @@ function PresetCard({ title, description, onClick }) {
   );
 }
 
-// P13.4.1 — Budget config sheet. Lets the owner set costPerHead
-// and budgetCap. Persists to the seating meta doc.
-function BudgetSheet({
-  costPerHead,
-  budgetCap,
-  summary,
-  onSave,
-  onCancel,
-}) {
-  const [cph, setCph] = useState(costPerHead);
-  const [cap, setCap] = useState(budgetCap);
-  const live = computeBudget(
-    // tables/assignments are computed inside summary; we re-use
-    // summary here. The form doesn't actually mutate them; it
-    // just lets the operator see live numbers as they type.
-    // We pass empty arrays because we just want the math against
-    // cph/cap — the actual cost comes from the existing data and
-    // is shown via the `summary` prop.
-    [], [], { costPerHead: cph, budgetCap: cap },
-  );
-  const save = () => onSave({ costPerHead: cph, budgetCap: cap });
-  return (
-    <div role="dialog" style={modalBackdrop} onClick={onCancel}>
-      <div
-        style={{ ...modalCard, maxWidth: 480 }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 style={{ marginTop: 0, color: '#0F766E' }}>💰 預算設定</h3>
-        <p style={{ color: '#64748B', fontSize: 13 }}>
-          設定每位賓客成本同預算上限。已分配嘅賓客數 × 成本 = 預估支出。
-        </p>
-        <div style={{ marginTop: 12, display: 'grid', gap: 12 }}>
-          <label style={{ display: 'block' }}>
-            <span style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 4 }}>
-              每人成本 (HKD)
-            </span>
-            <input
-              type="number"
-              min="0"
-              step="50"
-              data-testid="budget-cph-input"
-              value={cph}
-              onChange={(e) => setCph(Math.max(0, Number(e.target.value) || 0))}
-              style={{
-                width: '100%', padding: '8px 10px', fontSize: 14,
-                border: '1px solid #CBD5E1', borderRadius: 6,
-                boxSizing: 'border-box',
-              }}
-            />
-            <span style={{ fontSize: 11, color: '#94A3B8' }}>
-              預設 $800 (HK 中式婚宴標準)
-            </span>
-          </label>
-          <label style={{ display: 'block' }}>
-            <span style={{ fontSize: 12, color: '#475569', display: 'block', marginBottom: 4 }}>
-              預算上限 (HKD) — 留 0 = 不設上限
-            </span>
-            {/* P13.4.1 refine — preset cap chips. Most HK banquet
-                costs land in $50-200k. One tap sets the cap
-                instead of typing. 自訂 toggle reveals the number
-                input. The chips affect only budgetCap; costPerHead
-                stays editable above. */}
-            <div
-              data-testid="budget-cap-chips"
-              style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}
-            >
-              {[50000, 100000, 150000, 200000, 300000].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  data-testid={`budget-cap-chip-${preset / 1000}k`}
-                  onClick={() => setCap(preset)}
-                  style={{
-                    padding: '4px 10px',
-                    fontSize: 12,
-                    fontWeight: 600,
-                    border: cap === preset ? '1.5px solid #0F766E' : '1px solid #CBD5E1',
-                    background: cap === preset ? '#0F766E' : 'white',
-                    color: cap === preset ? 'white' : '#475569',
-                    borderRadius: 6,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {formatHKD(preset, { short: true })}
-                </button>
-              ))}
-              <button
-                type="button"
-                data-testid="budget-cap-chip-custom"
-                onClick={() => {
-                  // Reveal the number input but keep the current
-                  // value. The user can edit below.
-                  const inp = document.getElementById('budget-cap-number-input');
-                  if (inp) inp.focus();
-                }}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  border: ![50000, 100000, 150000, 200000, 300000].includes(cap) && cap > 0
-                    ? '1.5px solid #0F766E'
-                    : '1px solid #CBD5E1',
-                  background:
-                    ![50000, 100000, 150000, 200000, 300000].includes(cap) && cap > 0
-                      ? '#0F766E'
-                      : 'white',
-                  color:
-                    ![50000, 100000, 150000, 200000, 300000].includes(cap) && cap > 0
-                      ? 'white'
-                      : '#475569',
-                  borderRadius: 6,
-                  cursor: 'pointer',
-                }}
-              >
-                自訂
-              </button>
-            </div>
-            <input
-              id="budget-cap-number-input"
-              type="number"
-              min="0"
-              step="1000"
-              data-testid="budget-cap-input"
-              value={cap}
-              onChange={(e) => setCap(Math.max(0, Number(e.target.value) || 0))}
-              style={{
-                width: '100%', padding: '8px 10px', fontSize: 14,
-                border: '1px solid #CBD5E1', borderRadius: 6,
-                boxSizing: 'border-box',
-              }}
-            />
-          </label>
-          <div
-            data-testid="budget-summary"
-            style={{
-              padding: 12,
-              background: live.overBudget ? '#FEF2F2' : '#F0FDF4',
-              border: '1px solid ' + (live.overBudget ? '#DC2626' : '#14B8A6'),
-              borderRadius: 8,
-              fontSize: 13,
-            }}
-          >
-            <div>
-              <strong>已分配 {summary.totalFilled} 人</strong>
-              <span style={{ color: '#64748B' }}>
-                {' '}/ {summary.totalCapacity} 位
-              </span>
-            </div>
-            <div style={{ marginTop: 4 }}>
-              預估支出:{' '}
-              <strong>{formatHKD(summary.projectedCost)}</strong>
-            </div>
-            {cap > 0 && (
-              <div style={{ marginTop: 4, color: live.overBudget ? '#991B1B' : '#065F46' }}>
-                {live.overBudget ? '⚠️ 超支' : '✓ 在預算內'} · 餘額{' '}
-                {formatHKD(Math.abs(live.remaining))} ({100 - live.percentUsed}%)
-              </div>
-            )}
-          </div>
-        </div>
-        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={onCancel} style={btnGhost}>取消</button>
-          <button
-            onClick={save}
-            data-testid="budget-save"
-            style={btnPrimary}
-          >
-            💾 儲存
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// P13.4.2 — Auto-assign sheet. Shows unassigned guests
-// (guests - assignments) along with the candidate table(s) for
-// each. Owner taps "一鍵擺晒" to run autoAssignGuests against
-// the current state. New assignments are written via the same
-// path the drag-drop uses.
-function AutoAssignSheet({
-  unassigned,
-  tables,
-  assignments,
-  guestsById,
-  onPick,
-  onPickAll,
-  onCancel,
-}) {
-  const totalCapacity = tables.reduce(
-    (sum, t) => sum + (t.capacity > 0 ? t.capacity - (occupancy(
-      tables, assignments, guestsById,
-    )[t.id]?.filled ?? 0) : 0),
-    0,
-  );
-  const overviews = unassigned.map((u) => {
-    const candidates = suggestTargetTables(tables, assignments, {
-      category: u.category,
-      prefer: 'tightest',
-    });
-    return { guest: u, candidates: candidates.slice(0, 3) };
-  });
-  const orphansAfterFit = unassigned.length - Math.min(unassigned.length, totalCapacity);
-  const hasOrphansPending = overviews.some((o) => o.candidates.length === 0);
-  return (
-    <div role="dialog" style={modalBackdrop} onClick={onCancel}>
-      <div
-        style={{ ...modalCard, maxWidth: 640, maxHeight: '80vh', overflowY: 'auto' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 style={{ marginTop: 0, color: '#0F766E' }}>🎯 自動排位</h3>
-        <p style={{ color: '#64748B', fontSize: 13 }}>
-          將 <strong>{unassigned.length}</strong> 位未分配嘅賓客自動擺入仍有空位嘅枱。
-          {' '}
-          目前總共仲有 <strong>{totalCapacity}</strong> 個空位。
-          {orphansAfterFit > 0 && (
-            <span style={{ color: '#DC2626' }}>
-              {' '}如果全部賓客都嚟，仍會有 <strong>{orphansAfterFit}</strong> 位孤兒。
-            </span>
-          )}
-        </p>
-
-        {unassigned.length === 0 ? (
-          <div
-            data-testid="auto-assign-empty"
-            style={{
-              padding: 24,
-              textAlign: 'center',
-              color: '#94A3B8',
-              background: '#F8FAFC',
-              borderRadius: 8,
-              margin: '16px 0',
-            }}
-          >
-            全部賓客都已分配 🎉
-          </div>
-        ) : (
-          <div
-            data-testid="auto-assign-list"
-            style={{ marginTop: 12, display: 'grid', gap: 8 }}
-          >
-            {overviews.map(({ guest: g, candidates }) => (
-              <div
-                key={g.id}
-                data-testid={`auto-assign-row-${g.id}`}
-                style={{
-                  padding: 8,
-                  border: '1px solid #E2E8F0',
-                  borderRadius: 6,
-                  background: candidates.length === 0 ? '#FEF2F2' : 'white',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>
-                    <strong>{g.name || `賓客 ${g.id}`}</strong>
-                    {g.category && (
-                      <span
-                        style={{
-                          marginLeft: 6,
-                          fontSize: 10,
-                          padding: '0 4px',
-                          background: '#E0F2FE',
-                          color: '#0369A1',
-                          borderRadius: 3,
-                        }}
-                      >
-                        {g.category}
-                      </span>
-                    )}
-                  </span>
-                  <span style={{ fontSize: 11, color: '#64748B' }}>
-                    {candidates.length === 0
-                      ? '❌ 冇適合嘅枱'
-                      : `${candidates.length} 張候選`}
-                  </span>
-                </div>
-                {candidates.length > 0 && (
-                  <ul
-                    style={{
-                      margin: '4px 0 0 0',
-                      paddingLeft: 16,
-                      fontSize: 12,
-                      color: '#475569',
-                    }}
-                  >
-                    {candidates.map((c) => (
-                      <li key={c.table.id}>
-                        {c.table.label} · 仲有{' '}
-                        <strong style={{ color: c.remaining <= 2 ? '#EA580C' : '#0F766E' }}>
-                          {c.remaining}
-                        </strong>{' '}
-                        位{' '}
-                        {c.reasons.categoryMatch ? '' : '⚠️ 類別唔啱'}
-                        <button
-                          type="button"
-                          data-testid={`auto-assign-pick-${g.id}-${c.table.id}`}
-                          onClick={() => onPick(g, c.table)}
-                          style={{
-                            marginLeft: 8,
-                            fontSize: 11,
-                            padding: '2px 6px',
-                            border: '1px solid #14B8A6',
-                            background: 'white',
-                            color: '#0F766E',
-                            borderRadius: 3,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          擺呢張
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div style={{ marginTop: 16, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={onCancel} style={btnGhost}>取消</button>
-          {unassigned.length > 0 && (
-            <button
-              onClick={onPickAll}
-              data-testid="auto-assign-pick-all"
-              disabled={totalCapacity <= 0}
-              style={{
-                ...btnPrimary,
-                opacity: totalCapacity <= 0 ? 0.5 : 1,
-                cursor: totalCapacity <= 0 ? 'not-allowed' : 'pointer',
-              }}
-            >
-              🚀 一鍵擺晒 {hasOrphansPending && orphansAfterFit > 0
-                ? `(${orphansAfterFit} 位孤兒)`
-                : ''}
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ---------- preset geometry ---------- */
 
@@ -2093,45 +1771,19 @@ function presetLabel(style, opts = {}) {
   return '自訂空板';
 }
 
-/* ---------- styles ---------- */
-
-const btnPrimary = {
-  padding: '8px 16px',
-  background: '#14B8A6',
-  color: '#FFFFFF',
-  border: 'none',
-  borderRadius: 8,
-  cursor: 'pointer',
-  fontWeight: 600,
-};
-
-const btnSecondary = {
-  padding: '8px 12px',
-  background: '#F0FDFA',
-  color: '#0F766E',
-  border: '1px solid #14B8A6',
-  borderRadius: 8,
-  cursor: 'pointer',
-  fontWeight: 600,
-};
-
-const btnGhost = {
-  padding: '8px 12px',
-  background: 'transparent',
-  color: '#64748B',
-  border: '1px solid #E2E8F0',
-  borderRadius: 8,
-  cursor: 'pointer',
-};
-
-const btnDanger = {
-  padding: '8px 12px',
-  background: '#DC2626',
-  color: '#FFFFFF',
-  border: 'none',
-  borderRadius: 8,
-  cursor: 'pointer',
-};
+// P13.4.5 perf — modal + button styles live in a shared
+// module so BudgetSheet and AutoAssignSheet (which are
+// lazy-loaded) can import them without each redefining the
+// same constants. label/input stay local — only used by the
+// inline GuestPanel and TableEditorModal, which aren't split.
+import {
+  btnPrimary,
+  btnSecondary,
+  btnGhost,
+  btnDanger,
+  modalBackdrop,
+  modalCard,
+} from './seatingModalStyles';
 
 const label = {
   display: 'block',
@@ -2149,26 +1801,6 @@ const input = {
   fontSize: 14,
 };
 
-const modalBackdrop = {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(15, 23, 42, 0.4)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  zIndex: 100,
-};
-
-const modalCard = {
-  background: '#FFFFFF',
-  borderRadius: 12,
-  padding: 20,
-  width: 360,
-  maxWidth: '95vw',
-  maxHeight: '90vh',
-  overflow: 'auto',
-  boxShadow: '0 10px 30px rgba(0,0,0,0.2)',
-};
 
 /* ---------- P13.2: GuestPanel ---------- */
 
