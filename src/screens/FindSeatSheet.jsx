@@ -1,4 +1,8 @@
 // 2026-09-18 — P13.4.4: Find-Seat QR (operator side).
+// 2026-09-20 — V2 #2: switched QR rendering from Google Charts
+// to the locally-installed `qrcode` package. Generates a
+// data:image/png;base64 URL inside the browser — no external
+// network call, works offline, no third-party tracking.
 //
 // Owner generates a random token, writes a publicSeating
 // snapshot doc to Firestore, and renders a QR + URL for
@@ -11,6 +15,7 @@
 import { useState, useEffect } from 'react';
 import { doc, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { renderUrlToPngDataUrl } from '../lib/qrCode';
 import {
   generateFindSeatToken,
   defaultTokenExpiry,
@@ -96,11 +101,42 @@ function FindSeatSheet({
     ? buildFindSeatUrl(window.location.origin + window.location.pathname, token)
     : null;
 
-  // QR via Google Charts (no API key, returns PNG). 320x320 is the
-  // smallest reliable render on a 2x retina scan.
-  const qrSrc = url
-    ? `https://chart.googleapis.com/chart?cht=qr&chs=320x320&chld=L|0&chl=${encodeURIComponent(url)}`
-    : null;
+  // QR via local `qrcode` package (P13.4.5 perf — V2 #2).
+  // Replaces the previous Google Charts URL with a locally-
+  // rendered PNG dataURL: works offline, no external
+  // dependency, no third-party tracking. ~14 KB gz bigger
+  // initial chunk, but that's paid once at app load —
+  // the actual QR render happens in the lazy FindSeatSheet
+  // chunk only after the operator opens it.
+  const [qrDataUrl, setQrDataUrl] = useState(null);
+  const [qrError, setQrError] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!url) {
+      setQrDataUrl(null);
+      setQrError(null);
+      return undefined;
+    }
+    setQrDataUrl(null);
+    setQrError(null);
+    renderUrlToPngDataUrl(url)
+      .then((dataUrl) => {
+        if (!cancelled) setQrDataUrl(dataUrl);
+      })
+      .catch((e) => {
+        console.error('[find-seat] qrcode', e);
+        if (!cancelled) {
+          setQrError('QR 產生失敗 — 請用以下 URL 嘅連結');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+  // Back-compat: the previous implementation exposed
+  // `qrSrc` for tests; keep it as an alias so the data-testid
+  // still resolves a usable src attribute on the <img>.
+  const qrSrc = qrDataUrl;
 
   const remaining = expiresAt ? tokenTimeRemaining(expiresAt, now) : '...';
   const isExpired = expiresAt && expiresAt.getTime() <= now;
@@ -160,12 +196,21 @@ function FindSeatSheet({
               width="320"
               height="320"
               style={{ display: 'block', margin: '0 auto', maxWidth: '100%' }}
-              crossOrigin="anonymous"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-                setError('QR 圖片載入失敗 — 請用以下 URL 嘅連結');
-              }}
             />
+          </div>
+        ) : qrError ? (
+          <div
+            data-testid="find-seat-qr-error"
+            style={{
+              marginTop: 16,
+              padding: 12,
+              background: '#FEF2F2',
+              color: '#991B1B',
+              borderRadius: 8,
+              fontSize: 13,
+            }}
+          >
+            ⚠️ {qrError}
           </div>
         ) : (
           <div
