@@ -86,6 +86,16 @@ const FindSeatSheet = lazy(() => import('./FindSeatSheet'));
 // ~0 KB on the seating screen critical path.
 const BudgetSheet = lazy(() => import('./BudgetSheet'));
 const AutoAssignSheet = lazy(() => import('./AutoAssignSheet'));
+// 2026-09-20 — P13.4.5 a11y follow-up: keyboard-shortcut legend
+// overlay. Owner presses "?" or taps the keyboard icon to open.
+// Lazy-loaded — operators rarely open it, so it doesn't need
+// to be in the seating critical path.
+const KeyboardShortcutsOverlay = lazy(
+  () => import('./KeyboardShortcutsOverlay'),
+);
+import {
+  shouldHandleCanvasShortcut,
+} from '../lib/seatingKeys';
 import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
 const APP_ID = 'savetheday-production';
@@ -423,10 +433,41 @@ export function SeatingCanvas({
   // QR + URL the operator shares at the venue entrance).
   const [findSeatOpen, setFindSeatOpen] = useState(false);
 
+  // P13.4.5 a11y — keyboard-shortcut legend. Owner-only;
+  // helper mode never sees this state. Lazy-loaded via
+  // React.lazy + Suspense (see imports above).
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   // Refs
   const svgRef = useRef(null);
   const metaRef = useRef(null);
   metaRef.current = meta;
+
+  // P13.4.5 a11y — global "?" keypress opens the keyboard
+  // shortcut legend. Owner-only; helper mode never installs
+  // this listener (no `?` surprise for guests looking at the
+  // seating canvas in helper view). Skip when the user is
+  // typing into an input — otherwise the budget cap field
+  // would re-open the overlay every time they typed "?" in
+  // a custom-cap value.
+  useEffect(() => {
+    if (role !== 'owner') return undefined;
+    const onKey = (e) => {
+      // Punctuation key on QWERTY (and most CJK pinyin IMEs
+      // return "?" as key). Also accept Shift+/ which is the
+      // the canonical US layout for "?".
+      const isQuestionMark =
+        e.key === '?' ||
+        (e.shiftKey && e.key === '/') ||
+        (e.key === '/' && e.shiftKey);
+      if (!isQuestionMark) return;
+      if (!shouldHandleCanvasShortcut(e)) return;
+      e.preventDefault();
+      setShortcutsOpen(true);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [role]);
 
   // P13.4.5 — a11y: roving tabindex target for the seating canvas.
   // Owner-only; cleared on Escape or successful delete.
@@ -1148,6 +1189,25 @@ export function SeatingCanvas({
               reassign only. */}
           {role === 'owner' && (
             <>
+              {/* P13.4.5 a11y — keyboard-shortcut legend button.
+                  Tapping is equivalent to pressing "?". Same
+                  shortcut keys work everywhere on the seating
+                  screen as long as the user isn't typing into
+                  an input (see onSvgKeyDown + shouldHandleCanvasShortcut). */}
+              <button
+                onClick={() => setShortcutsOpen(true)}
+                data-testid="shortcuts-btn"
+                title="快捷鍵一覽 (按 ? 鍵)"
+                aria-label="快捷鍵一覽"
+                style={{
+                  ...btnGhost,
+                  padding: '6px 10px',
+                  fontSize: 16,
+                  lineHeight: 1,
+                }}
+              >
+                ⌨️
+              </button>
               <button
                 onClick={() => setFindSeatOpen(true)}
                 data-testid="find-seat-btn"
@@ -1436,6 +1496,26 @@ export function SeatingCanvas({
             assignments={assignments}
             guests={guests}
             onClose={() => setFindSeatOpen(false)}
+          />
+        </Suspense>
+      )}
+
+      {/* P13.4.5 a11y follow-up — keyboard-shortcut legend.
+          Owner-only. Either tap the ⌨️ button in the header or
+          press "?" anywhere on the seating screen. Lazy-loaded
+          (only paid for when first opened). */}
+      {role === 'owner' && shortcutsOpen && (
+        <Suspense
+          fallback={
+            <div style={modalBackdrop}>
+              <div style={{ ...modalCard, textAlign: 'center' }}>
+                載入緊快捷鍵一覽…
+              </div>
+            </div>
+          }
+        >
+          <KeyboardShortcutsOverlay
+            onClose={() => setShortcutsOpen(false)}
           />
         </Suspense>
       )}
