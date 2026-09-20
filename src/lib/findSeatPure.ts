@@ -11,6 +11,7 @@
 // with table labels + capacities. Guests eyeball the chart the
 // way they'd eyeball a printed one in the lobby.
 //
+//
 // V2 (this file's `buildRedactedAssignments` + `matchGuestName`)
 // adds a name-search field. The owner ALSO stamps a redacted
 // copy of each assigned guest (only name + tableId + tableLabel,
@@ -18,6 +19,14 @@
 // {guestId}. The public page reads this collection group, filters
 // by the typed name, and highlights the matching table on the
 // canvas.
+//
+// V3 (cacheRedactedAssignments + readRedactedAssignmentsCache):
+// sessionStorage cache so one scan session = one Firestore read.
+// Real-world impact: a guest who reloads the page (drops signal,
+// fat-fingers the QR twice, hits refresh) doesn't re-trigger the
+// collectionGroup query. TTL defaults to 30 min — bounded by the
+// publicSeating expiresAt, but a short cache TTL also means
+// last-minute seat reassignments propagate reasonably fast.
 
 /**
  * Token generator. Returns a 32-char URL-safe base64 string
@@ -290,4 +299,87 @@ export function matchGuestName(
   });
   matches.sort((a, b) => a.name.length - b.name.length);
   return matches.slice(0, limit);
+}
+
+// ---- V3: sessionStorage cache for the public assignments ----
+// (2026-09-20 — P13.4.5 V2 follow-up)
+//
+// Cache shape:
+//   key  = `findSeat:assignments:v1:${token}`
+//   val  = JSON.stringify({ ts, rows })
+//   ttl  = 30 minutes (default; operator-side regen bumps
+//          the token so the cache key naturally rotates)
+
+/** Default cache TTL — 30 minutes. */
+export const ASSIGNMENTS_CACHE_TTL_MS = 30 * 60 * 1000;
+
+/** Stable, namespaced cache key for a given token. */
+export function assignmentsCacheKey(token: string): string {
+  return `findSeat:assignments:v1:${token}`;
+}
+
+/**
+ * Read the cached rows for a token. Returns:
+ *   { ok: true, rows } on cache hit (within TTL)
+ *   { ok: false, reason: 'miss' | 'expired' | 'malformed' | 'no_storage' }
+ *     otherwise
+ *
+ * Pure (no side effects); takes `storage` as a parameter so the
+ * function can be unit-tested without a DOM. Pass `null` to
+ * simulate SSR/no-storage environments.
+ */
+export function readRedactedAssignmentsCache(
+  storage: Storage | null,
+  token: string,
+  now: number = Date.now(),
+  ttl: number = ASSIGNMENTS_CACHE_TTL_MS,
+): { ok: true; rows: RedactedAssignment[] } | { ok: false; reason: string } {
+  if (!storage) return { ok: false, reason: 'no_storage' };
+  if (!token || token.length < 16) return { ok: false, reason: 'malformed' };
+  let raw: string | null = null;
+  try {
+    raw = storage.getItem(assignmentsCacheKey(token));
+  } catch (e) {
+    return { ok: false, reason: 'no_storage' };
+  }
+  if (!raw) return { ok: false, reason: 'miss' };
+  let parsed: { ts?: number; rows?: RedactedAssignment[] };
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return { ok: false, reason: 'malformed' };
+  }
+  if (!parsed || typeof parsed.ts !== 'number' || !Array.isArray(parsed.rows)) {
+    return { ok: false, reason: 'malformed' };
+  }
+  if (now - parsed.ts > ttl) return { ok: false, reason: 'expired' };
+  return { ok: true, rows: parsed.rows };
+}
+
+/**
+ * Write the rows to the cache. Silently no-ops when storage
+ * is unavailable (Safari private mode, quota exceeded, etc.) —
+ * the public page falls through to the Firestore read.
+ *
+ * Pure (no return value); takes `storage` as a parameter so the
+ * function can be unit-tested without a DOM.
+ */
+export function cacheRedactedAssignments(
+  storage: Storage | null,
+  token: string,
+  rows: RedactedAssignment[],
+  now: number = Date.now(),
+): boolean {
+  if (!storage) return false;
+  if (!token || token.length < 16) return false;
+  try {
+    storage.setItem(
+      assignmentsCacheKey(token),
+      JSON.stringify({ ts: now, rows }),
+    );
+    return true;
+  } catch (e) {
+    // Quota exceeded, disabled storage, etc. — silent fall-through.
+    return false;
+  }
 }

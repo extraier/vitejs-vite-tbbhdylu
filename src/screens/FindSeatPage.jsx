@@ -13,6 +13,8 @@ import {
   validatePublicUrl,
   fetchPublicSnapshot,
   matchGuestName,
+  readRedactedAssignmentsCache,
+  cacheRedactedAssignments,
 } from '../lib/findSeatPure';
 
 function FindSeatPage() {
@@ -60,10 +62,34 @@ function FindSeatPage() {
   // This is a single collectionGroup read; we pull ALL rows and
   // filter client-side. Cost is bounded by the # of assigned
   // guests (a 500-guest wedding is ~500 200-byte docs).
+  //
+  // V3 — sessionStorage cache. A reload, fat-fingered re-scan,
+  // or accidental refresh should not re-trigger the read. Cache
+  // is keyed by token (rotates on operator regenerate) with a
+  // 30-min TTL. Cache failures fall through silently — the page
+  // does the Firestore read regardless.
   useEffect(() => {
     if (status !== 'valid' || !token) return undefined;
     let cancelled = false;
     setSearchStatus('loading');
+
+    // Best-effort cache read. Any failure (no storage, expired,
+    // malformed, missing token) falls through to Firestore.
+    let storage = null;
+    try {
+      storage = typeof window !== 'undefined' ? window.sessionStorage : null;
+    } catch (e) {
+      storage = null;
+    }
+    if (storage) {
+      const cached = readRedactedAssignmentsCache(storage, token);
+      if (cached.ok) {
+        setAssignments(cached.rows);
+        setSearchStatus(cached.rows.length === 0 ? 'unavailable' : 'ready');
+        return undefined;
+      }
+    }
+
     (async () => {
       try {
         const snap = await getDocs(collection(db, `findSeatAssignments/${token}`));
@@ -79,6 +105,10 @@ function FindSeatPage() {
         });
         setAssignments(rows);
         setSearchStatus(rows.length === 0 ? 'unavailable' : 'ready');
+        // Best-effort write to cache for next reload.
+        if (storage && rows.length > 0) {
+          cacheRedactedAssignments(storage, token, rows);
+        }
       } catch (e) {
         // Not-found is fine — operator may have generated V1 only.
         // Treat as "name search unavailable" rather than crashing.
