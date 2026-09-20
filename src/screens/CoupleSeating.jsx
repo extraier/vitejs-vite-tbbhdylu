@@ -41,7 +41,7 @@
  * Permissions: CoupleSeating is owner/co-owner only. The helper
  * drag-drop variant is HelperSeatingEdit (Phase 2.2).
  */
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { seatingItemPath, seatingCollectionPath } from '../lib/firestorePaths';
@@ -78,6 +78,295 @@ const FindSeatSheet = lazy(() => import('./FindSeatSheet'));
 import { invalidateScannerTablesCache } from '../lib/scannerTablesCache';
 
 const APP_ID = 'savetheday-production';
+
+// ─────────────────────────────────────────────────────────────────
+// P13.4.5 perf — memoized table node.
+//
+// Before this commit, every drag tick re-evaluated and re-rendered
+// all 29 table <g> blocks even though only one had changed position.
+// The pills (count, category, dietary, fixed-slot badge, live-pill)
+// are cheap JSX but the foreignObject math (char-width estimator,
+// pill positioning) runs on every render of every table.
+//
+// Solution: extract the per-table JSX into a `memo`'d component
+// that only re-renders when its specific props change. The parent
+// supplies stable handler references and an `onMove` boolean that
+// tells the node whether it's the one being dragged.
+//
+// Equality strategy (arePropsEqual below):
+//   t         — by reference; updated by Firestore snapshot, so
+//               reference equality holds between renders when
+//               the row hasn't changed.
+//   o         — occupancy record by reference; recomputed only
+//               when assignments change.
+//   liveBadge — by reference; flips rarely (check-in events).
+//   focused   — boolean; flips on Tab/click.
+//   isDragging — boolean; flips only when dragState moves
+//                between tables or starts/ends.
+//   handlers  — by reference; parent uses useMemo so the bundle
+//               is stable for the canvas's lifetime.
+// ─────────────────────────────────────────────────────────────────
+const TableNode = memo(function TableNode({
+  t,
+  o,
+  liveBadge,
+  focused,
+  isDragging,
+  handlers,
+  guestsById,
+}) {
+  const { onTablePointerDown, onAssign, setFocusedTableId } = handlers;
+  const livePill = formatLivePill(liveBadge);
+  const isRound = t.shape === 'round';
+  const w = isRound ? 80 : 160;
+  const h = isRound ? 80 : 60;
+  const filled = o ? o.filled : 0;
+  const overflow = o && o.overflow > 0;
+  // Char-width estimator (PingFang TC at 10px): CJK=10,
+  // Latin/digit=5.5, punct=3, padding 12. Inlined here so the
+  // memoized node is self-contained.
+  const estW = (s) => {
+    let w = 12;
+    for (const ch of s) {
+      const code = ch.charCodeAt(0);
+      if (code >= 0x4E00 && code <= 0x9FFF) w += 10;
+      else if (/[A-Za-z0-9]/.test(ch)) w += 5.5;
+      else w += 3;
+    }
+    return w;
+  };
+  // P13.3 — Two-pill stack BELOW the table body.
+  // v4 (2026-09-18): label centered, pills hang below.
+  const countLabel = `${filled}/${t.capacity} 座位`;
+  const catLabel = t.tableCategory;
+  const countH = isRound ? 18 : 20;
+  const catH = isRound ? 14 : 18;
+  const fontPx = isRound ? 10 : 11;
+  const catFontPx = isRound ? 9 : 10;
+  const pillMaxW = isRound ? Math.min(72, w) : Math.min(140, w);
+  const countEstW = estW(countLabel);
+  const countW = Math.min(pillMaxW, Math.ceil(countEstW / 4) * 4);
+  const catEstW = estW(catLabel);
+  const catW = Math.min(pillMaxW, Math.ceil(catEstW / 4) * 4);
+  const countY = h + 2;
+  const catY = countY + countH + 2;
+  const countX = (w - countW) / 2;
+  const catX = (w - catW) / 2;
+  const badge = fixedSlotBadge(t.tableCategory);
+  const showAboveLivePill = !(livePill && liveBadge && liveBadge.checkedIn > 0);
+  return (
+    <g
+      data-testid={`seating-table-${t.id}`}
+      data-filled={filled}
+      data-overflow={overflow ? 'true' : 'false'}
+      transform={`translate(${t.x}, ${t.y}) rotate(${t.rotation ?? 0} ${w / 2} ${h / 2})`}
+      tabIndex={focused ? 0 : -1}
+      role="button"
+      aria-label={`${t.label || t.id}, ${isRound ? '圓枱' : '長枱'}, 容量 ${t.capacity}, 已坐 ${filled}${overflow ? ', 超出容量' : ''}`}
+      onFocus={() => setFocusedTableId(t.id)}
+      style={{
+        cursor: isDragging ? 'grabbing' : 'grab',
+        userSelect: 'none',
+        outline: focused ? '2px solid #0F766E' : 'none',
+        outlineOffset: 4,
+      }}
+      onPointerDown={(e) => onTablePointerDown(e, t)}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const guestId = e.dataTransfer.getData('text/guestId');
+        if (!guestId) return;
+        onAssign(guestId, t.id, guestsById && guestsById[guestId]?.name);
+      }}
+    >
+      <title>{`${t.label || t.id} - ${isRound ? '圓枱' : '長枱'} ${t.capacity}位`}</title>
+      {isRound ? (
+        <ellipse
+          cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2}
+          fill={overflow ? '#FEE2E2' : '#FFFFFF'}
+          stroke={overflow ? '#DC2626' : '#14B8A6'}
+          strokeWidth="2"
+        />
+      ) : (
+        <rect
+          x="0" y="0" width={w} height={h} rx="6"
+          fill={overflow ? '#FEE2E2' : '#FFFFFF'}
+          stroke={overflow ? '#DC2626' : '#14B8A6'}
+          strokeWidth="2"
+        />
+      )}
+      <text
+        x={w / 2}
+        y={h / 2}
+        fontSize={isRound ? "13" : "14"}
+        fontWeight="600"
+        fill="#0F766E"
+        textAnchor="middle"
+        dominantBaseline="central"
+      >
+        {t.label}
+      </text>
+      {/* Count pill (row 1, below table) */}
+      <foreignObject x={countX} y={countY} width={countW} height={countH}>
+        <div
+          xmlns="http://www.w3.org/1999/xhtml"
+          data-testid={`table-count-pill-${t.id}`}
+          data-filled={filled}
+          data-capacity={t.capacity}
+          title={`已分配 ${filled}/${t.capacity} 座位`}
+          style={{
+            background: overflow ? '#FEF2F2' : '#F1F5F9',
+            border: overflow
+              ? '1px solid #DC2626'
+              : '1px solid #CBD5E1',
+            borderRadius: 9,
+            padding: '0 6px',
+            fontSize: fontPx,
+            lineHeight: `${countH - 2}px`,
+            color: overflow ? '#991B1B' : '#475569',
+            textAlign: 'center',
+            fontWeight: 600,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            boxSizing: 'border-box',
+            width: '100%',
+            height: '100%',
+          }}
+        >
+          {countLabel}
+        </div>
+      </foreignObject>
+      {/* Category pill (row 2, below count) */}
+      <foreignObject x={catX} y={catY} width={catW} height={catH}>
+        <div
+          xmlns="http://www.w3.org/1999/xhtml"
+          data-testid={`table-category-pill-${t.id}`}
+          data-category={t.tableCategory}
+          title={`分類：${t.tableCategory}`}
+          style={{
+            background: overflow ? '#FEF2F2' : '#FFFFFF',
+            border: '1px solid #E2E8F0',
+            borderRadius: 9,
+            padding: '0 6px',
+            fontSize: catFontPx,
+            lineHeight: `${catH - 2}px`,
+            color: overflow ? '#991B1B' : '#64748B',
+            textAlign: 'center',
+            fontWeight: 500,
+            fontStyle: 'italic',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            boxSizing: 'border-box',
+            width: '100%',
+            height: '100%',
+          }}
+        >
+          {catLabel}
+        </div>
+      </foreignObject>
+      {/* Dietary chip (P13.2) */}
+      {o && Object.keys(o.dietary).length > 0 && (
+        <foreignObject x={w - 8} y={-8} width="56" height="20">
+          <div
+            xmlns="http://www.w3.org/1999/xhtml"
+            data-testid={`dietary-chip-${t.id}`}
+            style={{
+              background: '#FEF3C7',
+              border: '1px solid #F59E0B',
+              borderRadius: 8,
+              padding: '0 4px',
+              fontSize: 10,
+              lineHeight: '18px',
+              color: '#92400E',
+              textAlign: 'center',
+              fontWeight: 600,
+            }}
+          >
+            ⚠ {Object.keys(o.dietary).length}
+          </div>
+        </foreignObject>
+      )}
+      {/* P13.4.3 — Fixed-slot badge (主家/證婚/兄弟/姐妹/長輩) */}
+      {badge && (
+        <foreignObject
+          x={(w - 36) / 2}
+          y={showAboveLivePill ? 4 : h / 2 + (isRound ? 8 : 14)}
+          width="36"
+          height="14"
+        >
+          <div
+            xmlns="http://www.w3.org/1999/xhtml"
+            data-testid={`fixed-slot-badge-${t.id}`}
+            data-fixed-slot={t.tableCategory}
+            style={{
+              background: badge.bg,
+              border: 'none',
+              borderRadius: 4,
+              padding: '0 3px',
+              fontSize: 9,
+              lineHeight: '14px',
+              color: badge.color,
+              textAlign: 'center',
+              fontWeight: 700,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              boxSizing: 'border-box',
+              width: '100%',
+              height: '100%',
+            }}
+          >
+            {badge.text}
+          </div>
+        </foreignObject>
+      )}
+      {/* Live attendance pill (P13.3) */}
+      {livePill && liveBadge && liveBadge.checkedIn > 0 && (
+        <foreignObject x={4} y={4} width="56" height="20">
+          <div
+            xmlns="http://www.w3.org/1999/xhtml"
+            data-testid={`live-pill-${t.id}`}
+            data-checked-in={liveBadge.checkedIn}
+            title={`已入座 ${liveBadge.checkedIn}/${liveBadge.filled}/${liveBadge.capacity}`}
+            style={{
+              background: '#ECFDF5',
+              border: '1px solid #6EE7B7',
+              borderRadius: 8,
+              padding: '0 4px',
+              fontSize: 10,
+              lineHeight: '18px',
+              color: '#065F46',
+              textAlign: 'center',
+              fontWeight: 600,
+            }}
+          >
+            ✓ {livePill}
+          </div>
+        </foreignObject>
+      )}
+    </g>
+  );
+}, areTableNodePropsEqual);
+
+function areTableNodePropsEqual(prev, next) {
+  // Reference-equality for everything except focused/dragging,
+  // which are derived booleans (the underlying state objects —
+  // focusedTableId and dragState — change reference on every
+  // drag tick, but the per-table derivations are stable while
+  // that's not the case).
+  if (prev.t !== next.t) return false;
+  if (prev.o !== next.o) return false;
+  if (prev.liveBadge !== next.liveBadge) return false;
+  if (prev.focused !== next.focused) return false;
+  if (prev.isDragging !== next.isDragging) return false;
+  if (prev.handlers !== next.handlers) return false;
+  if (prev.guestsById !== next.guestsById) return false;
+  return true;
+}
 
 export function SeatingCanvas({
   ownerUid,
@@ -737,6 +1026,15 @@ export function SeatingCanvas({
     return { w, h };
   }, [meta]);
 
+  // P13.4.5 perf — stable handler bundle for memoized TableNode.
+  // The bundle is the SAME object across renders unless one of
+  // its members changes reference. This is what lets `memo` skip
+  // re-rendering tables whose props are otherwise identical.
+  const tableHandlers = useMemo(
+    () => ({ onTablePointerDown, onAssign, setFocusedTableId }),
+    [onTablePointerDown, onAssign, setFocusedTableId],
+  );
+
   if (!ownerUid || !eventId) {
     return (
       <div style={{ padding: 24 }}>
@@ -922,356 +1220,24 @@ export function SeatingCanvas({
           <rect width={dim.w} height={dim.h} fill="url(#floor-grid)" />
 
           {/* tables */}
+          {/* tables — memoized TableNode for the perf win
+              (P13.4.5). The old inline `<g>` block re-evaluated
+              and re-rendered every table on every drag tick;
+              now only the dragged table's node re-renders. */}
           {normalizedTables.map((t) => {
             const isRound = t.shape === 'round';
-            const w = isRound ? 80 : 160;
-            const h = isRound ? 80 : 60;
-            const o = occ[t.id];
-            const filled = o ? o.filled : 0;
-            const overflow = o && o.overflow > 0;
-            const isDragging = dragState && dragState.tableId === t.id && dragState.moved;
-            // P13.3 — live attendance pill (e.g. "已入座 7/8/12")
-            const liveBadge = liveBadgeByTable[t.id];
-            const livePill = formatLivePill(liveBadge);
             return (
-              <g
+              <TableNode
                 key={t.id}
-                transform={`translate(${t.x}, ${t.y}) rotate(${t.rotation ?? 0} ${w / 2} ${h / 2})`}
-                data-testid={`seating-table-${t.id}`}
-                data-filled={filled}
-                data-overflow={overflow ? 'true' : 'false'}
-                tabIndex={focusedTableId === t.id ? 0 : -1}
-                role="button"
-                aria-label={`${t.label || t.id}, ${isRound ? '圓枱' : '長枱'}, 容量 ${t.capacity}, 已坐 ${filled}${overflow ? ', 超出容量' : ''}`}
-                onFocus={() => setFocusedTableId(t.id)}
-                style={{
-                  cursor: isDragging ? 'grabbing' : 'grab',
-                  userSelect: 'none',
-                  outline: focusedTableId === t.id ? '2px solid #0F766E' : 'none',
-                  outlineOffset: 4,
-                }}
-                onPointerDown={(e) => onTablePointerDown(e, t)}
-                onDragOver={(e) => {
-                  // Required so the drop event fires.
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'move';
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const guestId = e.dataTransfer.getData('text/guestId');
-                  if (!guestId) return;
-                  onAssign(guestId, t.id, guestsById[guestId]?.name);
-                }}
-              >
-                <title>{`${t.label || t.id} - ${isRound ? '圓枱' : '長枱'} ${t.capacity}位`}</title>
-                {isRound ? (
-                  <ellipse
-                    cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2}
-                    fill={overflow ? '#FEE2E2' : '#FFFFFF'}
-                    stroke={overflow ? '#DC2626' : '#14B8A6'}
-                    strokeWidth="2"
-                  />
-                ) : (
-                  <rect
-                    x="0" y="0" width={w} height={h} rx="6"
-                    fill={overflow ? '#FEE2E2' : '#FFFFFF'}
-                    stroke={overflow ? '#DC2626' : '#14B8A6'}
-                    strokeWidth="2"
-                  />
-                )}
-                <text
-                  x={w / 2}
-                  y={h / 2}
-                  fontSize={isRound ? "13" : "14"}
-                  fontWeight="600"
-                  fill="#0F766E"
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                >
-                  {t.label}
-                </text>
-                {/* Two-pill stack BELOW the table body (v4,
-                    2026-09-18). User feedback after v3 shipped:
-                    the inside-stack layout caused the pills to
-                    visually crowd the label on round tables.
-                    v4 mirrors the dietary-chip pattern: pills live
-                    outside the table body, anchored below it. The
-                    label takes the full center of the table for
-                    breathing room; the count + category pills hang
-                    off the bottom edge like a name tag.
-
-                    Layout on round 80×80 (h=80):
-                      y=36: label "T-01" (centered, 13px)
-                      y=82: count pill (h=18) — sits just below
-                            the south pole of the ellipse
-                      y=102: category pill (h=14)
-                      y=116: bottom edge of category pill
-                      80→116 = 36px canvas padding consumed.
-
-                    Layout on long 180×80 (h=80):
-                      y=36: label "T-05" (centered, 14px)
-                      y=82: count pill (h=20)
-                      y=106: category pill (h=18)
-                      y=124: bottom edge of category pill
-                      80→124 = 44px canvas padding consumed.
-
-                    The total height is 36px (round) and 44px (long)
-                    which is more than the previous inside-table
-                    layout but gives the label room to breathe.
-                    Other tables in the floor plan typically have
-                    ≥60px vertical separation so this fits. */}
-                {(() => {
-                  const countLabel = `${filled}/${t.capacity} 座位`;
-                  const catLabel = t.tableCategory;
-                  // Char-width estimator (PingFang TC at 10px):
-                  // CJK=10, Latin/digit=5.5, punct=3, padding 12.
-                  const estW = (s) => {
-                    let w = 12;
-                    for (const ch of s) {
-                      const code = ch.charCodeAt(0);
-                      if (code >= 0x4E00 && code <= 0x9FFF) w += 10;
-                      else if (/[A-Za-z0-9]/.test(ch)) w += 5.5;
-                      else w += 3;
-                    }
-                    return w;
-                  };
-                  // Round tables get smaller pills because the
-                  // canvas layout typically has tighter spacing;
-                  // long tables get bigger pills for legibility.
-                  const countH = isRound ? 18 : 20;
-                  const catH = isRound ? 14 : 18;
-                  const fontPx = isRound ? 10 : 11;
-                  const catFontPx = isRound ? 9 : 10;
-                  // Cap pill width: round can fit ~64px max
-                  // inside its visible canvas footprint; long
-                  // tables get the full label width.
-                  const pillMaxW = isRound
-                    ? Math.min(72, w)
-                    : Math.min(140, w);
-                  // Width per pill: round UP to nearest 4px so
-                  // the border renders crisp at any zoom.
-                  const countEstW = estW(countLabel);
-                  const countW = Math.min(pillMaxW, Math.ceil(countEstW / 4) * 4);
-                  const catEstW = estW(catLabel);
-                  const catW = Math.min(pillMaxW, Math.ceil(catEstW / 4) * 4);
-                  // Vertical position: anchored just below the
-                  // table body's bottom edge (y = h). Small 2px
-                  // gap to avoid touching the table border.
-                  const countY = h + 2;
-                  const catY = countY + countH + 2;
-                  // Center horizontally.
-                  const countX = (w - countW) / 2;
-                  const catX = (w - catW) / 2;
-                  return (
-                    <>
-                      {/* Count pill (row 1, below table) */}
-                      <foreignObject
-                        x={countX}
-                        y={countY}
-                        width={countW}
-                        height={countH}
-                      >
-                        <div
-                          xmlns="http://www.w3.org/1999/xhtml"
-                          data-testid={`table-count-pill-${t.id}`}
-                          data-filled={filled}
-                          data-capacity={t.capacity}
-                          title={`已分配 ${filled}/${t.capacity} 座位`}
-                          style={{
-                            background: overflow ? '#FEF2F2' : '#F1F5F9',
-                            border: overflow
-                              ? '1px solid #DC2626'
-                              : '1px solid #CBD5E1',
-                            borderRadius: 9,
-                            padding: '0 6px',
-                            fontSize: fontPx,
-                            lineHeight: `${countH - 2}px`,
-                            color: overflow ? '#991B1B' : '#475569',
-                            textAlign: 'center',
-                            fontWeight: 600,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            boxSizing: 'border-box',
-                            width: '100%',
-                            height: '100%',
-                          }}
-                        >
-                          {countLabel}
-                        </div>
-                      </foreignObject>
-                      {/* Category pill (row 2, below count) */}
-                      <foreignObject
-                        x={catX}
-                        y={catY}
-                        width={catW}
-                        height={catH}
-                      >
-                        <div
-                          xmlns="http://www.w3.org/1999/xhtml"
-                          data-testid={`table-category-pill-${t.id}`}
-                          data-category={t.tableCategory}
-                          title={`分類：${t.tableCategory}`}
-                          style={{
-                            background: overflow ? '#FEF2F2' : '#FFFFFF',
-                            border: '1px solid #E2E8F0',
-                            borderRadius: 9,
-                            padding: '0 6px',
-                            fontSize: catFontPx,
-                            lineHeight: `${catH - 2}px`,
-                            color: overflow ? '#991B1B' : '#64748B',
-                            textAlign: 'center',
-                            fontWeight: 500,
-                            fontStyle: 'italic',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            boxSizing: 'border-box',
-                            width: '100%',
-                            height: '100%',
-                          }}
-                        >
-                          {catLabel}
-                        </div>
-                      </foreignObject>
-                    </>
-                  );
-                })()}
-                {/* Dietary chip (P13.2) */}
-                {o && Object.keys(o.dietary).length > 0 && (
-                  <foreignObject x={w - 8} y={-8} width="56" height="20">
-                    <div
-                      xmlns="http://www.w3.org/1999/xhtml"
-                      data-testid={`dietary-chip-${t.id}`}
-                      style={{
-                        background: '#FEF3C7',
-                        border: '1px solid #F59E0B',
-                        borderRadius: 8,
-                        padding: '0 4px',
-                        fontSize: 10,
-                        lineHeight: '18px',
-                        color: '#92400E',
-                        textAlign: 'center',
-                        fontWeight: 600,
-                      }}
-                    >
-                      ⚠ {Object.keys(o.dietary).length}
-                    </div>
-                  </foreignObject>
-                )}
-                {/* P13.4.3 — Fixed-slot badge (主家/證婚/兄弟/姐妹/
-                    長輩). Renders centered at the top of the table
-                    body so it's always visible without colliding
-                    with the live-pill (top-left), dietary chip
-                    (top-right outside), or label (centered). Hidden
-                    when the live-pill is shown to avoid top-edge
-                    collision on round 80×80 tables where the arc
-                    narrows quickly above the equator. */}
-                {(() => {
-                  const badge = fixedSlotBadge(t.tableCategory);
-                  if (!badge) return null;
-                  const showAboveLivePill = !(livePill && liveBadge && liveBadge.checkedIn > 0);
-                  if (!showAboveLivePill) {
-                    // Render alongside the label instead.
-                    return (
-                      <foreignObject
-                        x={(w - 36) / 2}
-                        y={h / 2 + (isRound ? 8 : 14)}
-                        width="36"
-                        height="14"
-                      >
-                        <div
-                          xmlns="http://www.w3.org/1999/xhtml"
-                          data-testid={`fixed-slot-badge-${t.id}`}
-                          data-fixed-slot={t.tableCategory}
-                          style={{
-                            background: badge.bg,
-                            border: 'none',
-                            borderRadius: 4,
-                            padding: '0 3px',
-                            fontSize: 9,
-                            lineHeight: '14px',
-                            color: badge.color,
-                            textAlign: 'center',
-                            fontWeight: 700,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            boxSizing: 'border-box',
-                            width: '100%',
-                            height: '100%',
-                          }}
-                        >
-                          {badge.text}
-                        </div>
-                      </foreignObject>
-                    );
-                  }
-                  // No live-pill: render at top-center inside the table.
-                  return (
-                    <foreignObject
-                      x={(w - 36) / 2}
-                      y={4}
-                      width="36"
-                      height="14"
-                    >
-                      <div
-                        xmlns="http://www.w3.org/1999/xhtml"
-                        data-testid={`fixed-slot-badge-${t.id}`}
-                        data-fixed-slot={t.tableCategory}
-                        style={{
-                          background: badge.bg,
-                          border: 'none',
-                          borderRadius: 4,
-                          padding: '0 3px',
-                          fontSize: 9,
-                          lineHeight: '14px',
-                          color: badge.color,
-                          textAlign: 'center',
-                          fontWeight: 700,
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          boxSizing: 'border-box',
-                          width: '100%',
-                          height: '100%',
-                        }}
-                      >
-                        {badge.text}
-                      </div>
-                    </foreignObject>
-                  );
-                })()}
-                {/* Live attendance pill (P13.3, repositioned 2026-09-18
-                    to option D — top-left inside the table body,
-                    mirroring the dietary chip's top-right placement).
-                    Only renders when at least one checked-in guest
-                    exists for this table. The 4px inset keeps the
-                    pill clear of the table body's stroke and, on
-                    round tables, just inside the upper-left arc. */}
-                {livePill && liveBadge && liveBadge.checkedIn > 0 && (
-                  <foreignObject x={4} y={4} width="56" height="20">
-                    <div
-                      xmlns="http://www.w3.org/1999/xhtml"
-                      data-testid={`live-pill-${t.id}`}
-                      data-checked-in={liveBadge.checkedIn}
-                      title={`已入座 ${liveBadge.checkedIn}/${liveBadge.filled}/${liveBadge.capacity}`}
-                      style={{
-                        background: '#ECFDF5',
-                        border: '1px solid #6EE7B7',
-                        borderRadius: 8,
-                        padding: '0 4px',
-                        fontSize: 10,
-                        lineHeight: '18px',
-                        color: '#065F46',
-                        textAlign: 'center',
-                        fontWeight: 600,
-                      }}
-                    >
-                      ✓ {livePill}
-                    </div>
-                  </foreignObject>
-                )}
-              </g>
-              );
+                t={t}
+                o={occ[t.id]}
+                liveBadge={liveBadgeByTable[t.id]}
+                focused={focusedTableId === t.id}
+                isDragging={Boolean(dragState && dragState.tableId === t.id && dragState.moved)}
+                handlers={tableHandlers}
+                guestsById={guestsById}
+              />
+            );
           })}
         </svg>
 
