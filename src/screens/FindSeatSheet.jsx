@@ -9,7 +9,7 @@
 // the new random token).
 
 import { useState, useEffect } from 'react';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import {
   generateFindSeatToken,
@@ -18,6 +18,7 @@ import {
   tokenTimeRemaining,
   buildPublicSnapshot,
   buildFindSeatUrl,
+  buildRedactedAssignments,
 } from '../lib/findSeatPure';
 
 function FindSeatSheet({
@@ -25,6 +26,8 @@ function FindSeatSheet({
   eventId,
   meta,
   tables,
+  assignments = [],
+  guests = [],
   onClose,
 }) {
   const [token, setToken] = useState(null);
@@ -41,7 +44,31 @@ function FindSeatSheet({
       const newToken = generateFindSeatToken();
       const expiry = defaultTokenExpiry();
       const snap = buildPublicSnapshot(eventId, ownerUid, meta, tables, expiry);
-      await setDoc(doc(db, `publicSeating/${newToken}`), snap);
+      // Stamp the chart snapshot (V1) + parent doc + redacted
+      // assignment rows (V2). All three writes go through one
+      // writeBatch so they either all land or none does — guests
+      // never see a half-state where the chart is up but name
+      // search returns 0 results.
+      const guestsById = Object.fromEntries(guests.map((g) => [g.id, g]));
+      const tablesById = Object.fromEntries(tables.map((t) => [t.id, t]));
+      const redacted = buildRedactedAssignments(assignments, guestsById, tablesById);
+      const batch = writeBatch(db);
+      batch.set(doc(db, `publicSeating/${newToken}`), snap);
+      batch.set(
+        doc(db, `findSeatAssignments/${newToken}`),
+        { ownerUid, expiresAt: expiry },
+      );
+      for (const row of redacted) {
+        batch.set(
+          doc(db, `findSeatAssignments/${newToken}/${row.guestId}`),
+          {
+            name: row.name,
+            tableId: row.tableId,
+            tableLabel: row.tableLabel,
+          },
+        );
+      }
+      await batch.commit();
       setToken(newToken);
       setExpiresAt(expiry);
     } catch (e) {

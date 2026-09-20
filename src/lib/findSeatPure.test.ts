@@ -205,3 +205,151 @@ describe('fetchPublicSnapshot', () => {
     expect(fetched).toBe(false);
   });
 });
+
+// ---- V2: redacted assignments + name-search ----
+// (2026-09-20 — P13.4.5 V2)
+
+import {
+  buildRedactedAssignments,
+  matchGuestName,
+} from './findSeatPure';
+
+describe('buildRedactedAssignments (V2)', () => {
+  const guestsById = {
+    g1: { name: 'Chan Tai Man' },
+    g2: { name: 'Lee 小明' },
+    g3: { name: 'Wong 大文' },
+    g4: { name: '   ' }, // blank name — drops
+    g5: { name: 'Orphan' }, // no assignment
+  };
+  const tablesById = {
+    t1: { label: 'T-01' },
+    t2: { label: 'T-02 主家席' },
+    t3: { label: 'T-03' },
+  };
+
+  it('emits one row per assigned guest with name + tableId + tableLabel', () => {
+    const rows = buildRedactedAssignments(
+      [
+        { guestId: 'g1', tableId: 't1' },
+        { guestId: 'g2', tableId: 't2' },
+        { guestId: 'g3', tableId: 't3' },
+      ],
+      guestsById,
+      tablesById,
+    );
+    expect(rows).toEqual([
+      { guestId: 'g1', name: 'Chan Tai Man', tableId: 't1', tableLabel: 'T-01' },
+      { guestId: 'g2', name: 'Lee 小明', tableId: 't2', tableLabel: 'T-02 主家席' },
+      { guestId: 'g3', name: 'Wong 大文', tableId: 't3', tableLabel: 'T-03' },
+    ]);
+  });
+
+  it('drops assignments pointing at missing guests', () => {
+    const rows = buildRedactedAssignments(
+      [{ guestId: 'ghost', tableId: 't1' }],
+      guestsById,
+      tablesById,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('drops assignments pointing at missing tables', () => {
+    const rows = buildRedactedAssignments(
+      [{ guestId: 'g1', tableId: 'ghost-table' }],
+      guestsById,
+      tablesById,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('drops guests with blank names', () => {
+    const rows = buildRedactedAssignments(
+      [{ guestId: 'g4', tableId: 't1' }],
+      guestsById,
+      tablesById,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('falls back to tableId when label is missing', () => {
+    const rows = buildRedactedAssignments(
+      [{ guestId: 'g1', tableId: 't1' }],
+      guestsById,
+      { t1: {} as { label?: string } },
+    );
+    expect(rows[0]?.tableLabel).toBe('t1');
+  });
+
+  it('trims surrounding whitespace from names', () => {
+    const rows = buildRedactedAssignments(
+      [{ guestId: 'g1', tableId: 't1' }],
+      { g1: { name: '  Chan Tai Man  ' } },
+      tablesById,
+    );
+    expect(rows[0]?.name).toBe('Chan Tai Man');
+  });
+});
+
+describe('matchGuestName (V2)', () => {
+  const rows = [
+    { guestId: 'g1', name: 'Chan Tai Man', tableId: 't1', tableLabel: 'T-01' },
+    { guestId: 'g2', name: 'Chan Tai Man Wong', tableId: 't2', tableLabel: 'T-02' },
+    { guestId: 'g3', name: 'Lee 小明', tableId: 't3', tableLabel: 'T-03' },
+    { guestId: 'g4', name: 'Wong 大文', tableId: 't4', tableLabel: 'T-04' },
+    { guestId: 'g5', name: 'Alice', tableId: 't5', tableLabel: 'T-05' },
+    { guestId: 'g6', name: 'Alex', tableId: 't6', tableLabel: 'T-06' },
+  ];
+
+  it('returns empty array on empty query', () => {
+    expect(matchGuestName(rows, '')).toEqual([]);
+    expect(matchGuestName(rows, '   ')).toEqual([]);
+  });
+
+  it('matches case-insensitively', () => {
+    const m = matchGuestName(rows, 'CHAN');
+    expect(m).toHaveLength(2);
+    expect(m.map((r) => r.guestId)).toContain('g1');
+    expect(m.map((r) => r.guestId)).toContain('g2');
+  });
+
+  it('matches substrings within names', () => {
+    const m = matchGuestName(rows, 'tai');
+    expect(m.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('collapses whitespace in both query and stored names', () => {
+    const m = matchGuestName(rows, '  chan   ');
+    expect(m.length).toBe(2);
+  });
+
+  it('returns shortest-name-first on ties', () => {
+    const m = matchGuestName(rows, 'chan');
+    expect(m[0]?.name).toBe('Chan Tai Man'); // shorter than "Chan Tai Man Wong"
+  });
+
+  it('caps results at the supplied limit', () => {
+    // 6 rows match any partial alphanum; limit=2 → 2 returned
+    const m = matchGuestName(rows, 'a', 2);
+    expect(m).toHaveLength(2);
+  });
+
+  it('matches CJK characters in names', () => {
+    expect(matchGuestName(rows, '小明')).toHaveLength(1);
+    expect(matchGuestName(rows, '大文')).toHaveLength(1);
+  });
+
+  it('handles a name containing both Latin + CJK', () => {
+    const mixed = [
+      ...rows,
+      { guestId: 'g7', name: 'Chan 大文', tableId: 't7', tableLabel: 'T-07' },
+    ];
+    const m = matchGuestName(mixed, '大文');
+    expect(m.map((r) => r.guestId)).toContain('g4');
+    expect(m.map((r) => r.guestId)).toContain('g7');
+  });
+
+  it('returns empty when nothing matches', () => {
+    expect(matchGuestName(rows, 'xyz123')).toEqual([]);
+  });
+});

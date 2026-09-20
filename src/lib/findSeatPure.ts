@@ -1,4 +1,5 @@
 // 2026-09-18 — P13.4.4: Public Find-Seat QR (V1).
+// 2026-09-20 — P13.4.5 V2: redacted assignments + name-search.
 //
 // The owner stamps a snapshot of the seating chart under
 // /publicSeating/{token} when they generate a public QR. Guests
@@ -8,9 +9,15 @@
 //
 // V1 ships the chart-only experience: visible seating canvas
 // with table labels + capacities. Guests eyeball the chart the
-// way they'd eyeball a printed one in the lobby. V2 (later,
-// out of scope here) will add a name-search field that returns
-// table assignment for a typed guest name.
+// way they'd eyeball a printed one in the lobby.
+//
+// V2 (this file's `buildRedactedAssignments` + `matchGuestName`)
+// adds a name-search field. The owner ALSO stamps a redacted
+// copy of each assigned guest (only name + tableId + tableLabel,
+// no phone/email/audit-trail) into /findSeatAssignments/{token}/
+// {guestId}. The public page reads this collection group, filters
+// by the typed name, and highlights the matching table on the
+// canvas.
 
 /**
  * Token generator. Returns a 32-char URL-safe base64 string
@@ -206,4 +213,81 @@ export async function fetchPublicSnapshot(
   const data = snap.data() as PublicSeatingSnapshot;
   if (data.expiresAt <= now) return { ok: false, reason: 'expired' };
   return { ok: true, snap: data };
+}
+
+// ---- V2: redacted assignments + name-search --------------------------
+// (2026-09-20 — P13.4.5 V2)
+
+/**
+ * Shape of one redacted assignment row stamped to
+ * /findSeatAssignments/{token}/{guestId}. The minimum the
+ * public page needs to answer "where do I sit?".
+ */
+export interface RedactedAssignment {
+  guestId: string;
+  name: string;
+  tableId: string;
+  tableLabel: string;
+}
+
+/**
+ * Strip assignments down to {guestId, name, tableId, tableLabel}
+ * and join with the table label so the public page can show
+ * "你嘅枱係 T-03 (主家席)" without round-tripping to the
+ * snapshot doc.
+ *
+ * Drops unassigned guests and guests whose table is missing
+ * from the snapshot — those wouldn't be searchable anyway.
+ */
+export function buildRedactedAssignments(
+  assignments: Array<{ guestId: string; tableId: string }>,
+  guestsById: Record<string, { name: string } | undefined>,
+  tablesById: Record<string, { label?: string } | undefined>,
+): RedactedAssignment[] {
+  const out: RedactedAssignment[] = [];
+  for (const a of assignments) {
+    const guest = guestsById[a.guestId];
+    const table = tablesById[a.tableId];
+    const name = guest?.name?.trim() ?? '';
+    if (!name || !table) continue;
+    out.push({
+      guestId: a.guestId,
+      name,
+      tableId: a.tableId,
+      tableLabel: table.label || a.tableId,
+    });
+  }
+  return out;
+}
+
+/**
+ * Filter a redacted-assignments list by a typed name string.
+ *
+ * Matching rules:
+ *  - case-insensitive
+ *  - whitespace-collapsed (the typed query and the stored
+ *    name both get collapsed before compare, so "  chan   "
+ *    matches "Chan Tai Man")
+ *  - substring (typing "Chan" returns all matches containing
+ *    "chan" anywhere — including middle-of-name matches
+ *    for bilingual cases like "Chan 大文")
+ *
+ * Hard-capped at `limit` results to avoid runaway UI lists on
+ * a 500-guest wedding. Sorted by name length ascending so the
+ * shortest (most-specific) name shows up first when there's a
+ * tie — "Chan Tai Man" sorts before "Chan Tai Man Wong".
+ */
+export function matchGuestName(
+  rows: RedactedAssignment[],
+  query: string,
+  limit: number = 5,
+): RedactedAssignment[] {
+  const q = (query || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!q) return [];
+  const matches = rows.filter((r) => {
+    const n = (r.name || '').replace(/\s+/g, ' ').toLowerCase();
+    return n.includes(q);
+  });
+  matches.sort((a, b) => a.name.length - b.name.length);
+  return matches.slice(0, limit);
 }

@@ -526,6 +526,50 @@ match /{path=**}/events/{eventId} {
         allow update, delete: if false;
       }
 
+      // ---- 2026-09-20 — P13.4.5 V2: redacted assignments for guest
+      //   name-search on the public Find-Seat page.
+      //
+      //   /findSeatAssignments/{token}                  (parent doc)
+      //     = { ownerUid, expiresAt }                   — single doc
+      //   /findSeatAssignments/{token}/{guestId}        (child doc)
+      //     = { name, tableId, tableLabel }             — denormalized
+      //
+      //   Same token + same expiry as the matching publicSeating doc.
+      //   On the public page, a collectionGroup query by token+name
+      //   returns matching candidates; the client filters and
+      //   highlights the table on the canvas.
+      //
+      //   Read gate (children): parent doc must not be expired.
+      //     Reads must happen AFTER the parent doc exists, so we
+      //     use a get() on the parent. Firestore enforces the read
+      //     at the request time, not when the child was stamped.
+      //   Write gate (parent): same ownerUid as publicSeating.
+      //   Write gate (children): same ownerUid as the parent doc.
+      //     We do this client-side via writeBatch in FindSeatSheet.
+      match /findSeatAssignments/{token} {
+        allow read: if resource.data.expiresAt > request.time;
+        allow create: if request.auth != null
+                       && request.resource.data.keys().hasAll(
+                         ['ownerUid','expiresAt']
+                       )
+                       && request.resource.data.ownerUid == request.auth.uid;
+        allow update, delete: if false;
+
+        match /{guestId} {
+          allow read: if get(/databases/$(database)/documents/findSeatAssignments/$(token)).data.expiresAt > request.time;
+          // The owner stamps these from the FindSeatSheet after
+          // writing the publicSeating snapshot. The auth.uid must
+          // match the parent doc's ownerUid.
+          allow create: if request.auth != null
+                         && request.resource.data.keys().hasAll(
+                           ['name','tableId','tableLabel']
+                         )
+                         && get(/databases/$(database)/documents/findSeatAssignments/$(token)).data.ownerUid
+                            == request.auth.uid;
+          allow update, delete: if false;
+        }
+      }
+
       // ---- Owner-scoped data --------------------------------------------
 
       match /users/{ownerUid} {

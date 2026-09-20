@@ -1447,6 +1447,8 @@ export function SeatingCanvas({
             eventId={eventId}
             meta={meta ?? {}}
             tables={normalizedTables}
+            assignments={assignments}
+            guests={guests}
             onClose={() => setFindSeatOpen(false)}
           />
         </Suspense>

@@ -1,27 +1,37 @@
 // 2026-09-18 — P13.4.4: Public Find-Seat page (V1 chart-only).
+// 2026-09-20 — P13.4.5 V2: name-search + highlighted-table.
 //
-// Anonymous-reads publicSeating/{token}, renders the seating
-// canvas with table labels and capacities. Guests scan the
-// QR with their phones, the page opens, they see the same
-// chart the operator has on their laptop — and find their
-// table visually (or by walking the venue and matching
-// table numbers to the labels).
-//
-// V2 (out of scope here) will add a name-search input that
-// resolves a guest's table via a thin Cloud Function lookup.
+// Anonymous-reads publicSeating/{token} for the chart, then
+// optionally fetches the redacted /findSeatAssignments/{token}
+// collection group for name-search. Guest types their name,
+// matches are returned + the matched table pulses on the canvas.
 
-import { useState, useEffect, useMemo } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { doc, getDoc, getDocs, collection } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import {
   validatePublicUrl,
   fetchPublicSnapshot,
+  matchGuestName,
 } from '../lib/findSeatPure';
 
 function FindSeatPage() {
   const [status, setStatus] = useState('loading'); // loading | valid | expired | not_found | malformed | error
   const [snap, setSnap] = useState(null);
   const [now, setNow] = useState(Date.now());
+
+  // V2 — name-search state. The full redacted list lives
+  // in memory; the typed query is matched client-side via
+  // matchGuestName (case-insensitive, CJK-aware, limit 5).
+  const [assignments, setAssignments] = useState([]);
+  const [searchStatus, setSearchStatus] = useState('idle'); // idle | loading | ready | unavailable
+  const [query, setQuery] = useState('');
+  const [pulseTableId, setPulseTableId] = useState(null);
+
+  const token = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    return new URLSearchParams(window.location.search).get('find-seat');
+  }, []);
 
   useEffect(() => {
     const url = typeof window !== 'undefined' ? window.location.href : '';
@@ -30,8 +40,6 @@ function FindSeatPage() {
       setStatus(validation);
       return;
     }
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('find-seat');
     let cancelled = false;
     (async () => {
       const out = await fetchPublicSnapshot({ doc: (p) => doc(db, p) }, token);
@@ -46,7 +54,39 @@ function FindSeatPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [token]);
+
+  // V2 — fetch the redacted assignments once the chart is valid.
+  // This is a single collectionGroup read; we pull ALL rows and
+  // filter client-side. Cost is bounded by the # of assigned
+  // guests (a 500-guest wedding is ~500 200-byte docs).
+  useEffect(() => {
+    if (status !== 'valid' || !token) return undefined;
+    let cancelled = false;
+    setSearchStatus('loading');
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, `findSeatAssignments/${token}`));
+        if (cancelled) return;
+        const rows = snap.docs.map((d) => {
+          const data = d.data() || {};
+          return {
+            guestId: d.id,
+            name: data.name || '',
+            tableId: data.tableId || '',
+            tableLabel: data.tableLabel || data.tableId || '',
+          };
+        });
+        setAssignments(rows);
+        setSearchStatus(rows.length === 0 ? 'unavailable' : 'ready');
+      } catch (e) {
+        // Not-found is fine — operator may have generated V1 only.
+        // Treat as "name search unavailable" rather than crashing.
+        if (!cancelled) setSearchStatus('unavailable');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [status, token]);
 
   // Tick the expiry countdown once a minute.
   useEffect(() => {
@@ -54,6 +94,31 @@ function FindSeatPage() {
     const t = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(t);
   }, [status]);
+
+  const matches = useMemo(
+    () => (searchStatus === 'ready' ? matchGuestName(assignments, query) : []),
+    [assignments, query, searchStatus],
+  );
+
+  // Pulse the selected table for ~3 seconds so the guest can
+  // spot it on the chart visually.
+  useEffect(() => {
+    if (!matches.length) {
+      setPulseTableId(null);
+      return undefined;
+    }
+    // Pick the first match; guests typically have one table
+    // and the shortest-name-first sort puts them up top.
+    const top = matches[0];
+    setPulseTableId(top.tableId);
+    const t = setTimeout(() => setPulseTableId(null), 3000);
+    return () => clearTimeout(t);
+  }, [matches]);
+
+  const onPickMatch = useCallback((m) => {
+    setQuery(m.name);
+    setPulseTableId(m.tableId);
+  }, []);
 
   if (status === 'loading') {
     return <Page><Center>載入緊…</Center></Page>;
@@ -117,11 +182,116 @@ function FindSeatPage() {
           </Badge>
         )}
       </Header>
-      <Canvas snap={snap} />
+      <SearchPanel
+        searchStatus={searchStatus}
+        query={query}
+        onChangeQuery={setQuery}
+        matches={matches}
+        onPickMatch={onPickMatch}
+      />
+      <Canvas snap={snap} pulseTableId={pulseTableId} />
       <Footer>
         <span>🙏 主人家 · Powered by savetheday.io</span>
       </Footer>
     </Page>
+  );
+}
+
+function SearchPanel({ searchStatus, query, onChangeQuery, matches, onPickMatch }) {
+  if (searchStatus === 'unavailable') return null; // V1 fallback — no redacted assignments stamped
+  return (
+    <div
+      style={{
+        padding: '12px 16px',
+        background: 'white',
+        borderBottom: '1px solid #E2E8F0',
+      }}
+    >
+      <label
+        htmlFor="find-seat-name"
+        style={{
+          display: 'block',
+          fontSize: 12,
+          color: '#64748B',
+          marginBottom: 6,
+          fontWeight: 600,
+        }}
+      >
+        🔍 用你嘅名搵枱（中英名都會搵到）
+      </label>
+      <input
+        id="find-seat-name"
+        type="text"
+        inputMode="search"
+        autoComplete="off"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck="false"
+        value={query}
+        onChange={(e) => onChangeQuery(e.target.value)}
+        placeholder="例如：Chan Tai Man / 小明"
+        data-testid="find-seat-search"
+        aria-label="輸入你嘅名搵枱"
+        style={{
+          width: '100%',
+          padding: '12px 14px',
+          fontSize: 16,
+          border: '1px solid #CBD5E1',
+          borderRadius: 8,
+          fontFamily: 'inherit',
+          boxSizing: 'border-box',
+        }}
+      />
+      {matches.length > 0 && (
+        <ul
+          data-testid="find-seat-matches"
+          style={{
+            listStyle: 'none',
+            margin: '8px 0 0',
+            padding: 0,
+            border: '1px solid #E2E8F0',
+            borderRadius: 8,
+            overflow: 'hidden',
+          }}
+        >
+          {matches.map((m) => (
+            <li key={m.guestId}>
+              <button
+                type="button"
+                onClick={() => onPickMatch(m)}
+                data-testid={`find-seat-match-${m.guestId}`}
+                style={{
+                  display: 'flex',
+                  width: '100%',
+                  padding: '12px 14px',
+                  border: 'none',
+                  background: 'white',
+                  borderBottom: '1px solid #F1F5F9',
+                  fontFamily: 'inherit',
+                  fontSize: 14,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                }}
+              >
+                <span style={{ fontWeight: 600, color: '#0F172A' }}>{m.name}</span>
+                <span style={{ color: '#0F766E', fontSize: 13 }}>→ {m.tableLabel}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {searchStatus === 'ready' && query.trim().length > 0 && matches.length === 0 && (
+        <p
+          data-testid="find-seat-no-match"
+          style={{ color: '#94A3B8', fontSize: 12, margin: '8px 0 0' }}
+        >
+          搵唔到「{query.trim()}」…可能係打錯字？或者行到座位表對住枱號。
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -228,7 +398,7 @@ function Footer({ children }) {
  * Labels centered. Categories labeled (主家席/證婚席/朋友席)
  * via the tableCategory field on the snapshot.
  */
-function Canvas({ snap }) {
+function Canvas({ snap, pulseTableId }) {
   const { canvas: c, tables } = snap;
 
   // Scale-to-fit the SVG into the device width (with horizontal
@@ -261,14 +431,14 @@ function Canvas({ snap }) {
             height: 'auto',
           }}
         >
-          {tables.map((t) => renderTable(t))}
+          {tables.map((t) => renderTable(t, pulseTableId))}
         </svg>
       </div>
     </div>
   );
 }
 
-function renderTable(t) {
+function renderTable(t, pulseTableId) {
   const w = t.shape === 'long' ? 180 : t.shape === 'rect' ? 160 : 80;
   const h = t.shape === 'long' ? 60 : t.shape === 'rect' ? 100 : 80;
   const transform = t.rotation ? `rotate(${t.rotation} ${t.x + w / 2} ${t.y + h / 2})` : undefined;
@@ -284,8 +454,35 @@ function renderTable(t) {
     colleagues: '#F1F5F9',
     other: '#F8FAFC',
   };
+  const isPulsing = pulseTableId && pulseTableId === t.id;
   return (
-    <g key={t.id} transform={transform}>
+    <g key={t.id} transform={transform} data-table-id={t.id}>
+      {isPulsing && (
+        <circle
+          cx={t.x + w / 2}
+          cy={t.y + h / 2}
+          r={(isLong ? Math.max(w, h) : 40) + 14}
+          fill="none"
+          stroke="#DC2626"
+          strokeWidth={3}
+          opacity={0.85}
+        >
+          <animate
+            attributeName="r"
+            from={(isLong ? Math.max(w, h) : 40) + 6}
+            to={(isLong ? Math.max(w, h) : 40) + 22}
+            dur="1.2s"
+            repeatCount="indefinite"
+          />
+          <animate
+            attributeName="opacity"
+            from="0.9"
+            to="0"
+            dur="1.2s"
+            repeatCount="indefinite"
+          />
+        </circle>
+      )}
       {isLong ? (
         <rect
           x={t.x}
@@ -294,8 +491,8 @@ function renderTable(t) {
           height={h}
           rx={6}
           fill={fillByCategory[t.tableCategory] ?? '#F8FAFC'}
-          stroke="#0F766E"
-          strokeWidth={1}
+          stroke={isPulsing ? '#DC2626' : '#0F766E'}
+          strokeWidth={isPulsing ? 3 : 1}
         />
       ) : (
         <circle
@@ -303,8 +500,8 @@ function renderTable(t) {
           cy={t.y + 40}
           r={40}
           fill={fillByCategory[t.tableCategory] ?? '#F8FAFC'}
-          stroke="#0F766E"
-          strokeWidth={1}
+          stroke={isPulsing ? '#DC2626' : '#0F766E'}
+          strokeWidth={isPulsing ? 3 : 1}
         />
       )}
       <text

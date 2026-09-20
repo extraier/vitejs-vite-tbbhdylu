@@ -101,19 +101,21 @@ describe('CountdownCard', () => {
   });
 
   it('renders the hours countdown when the event is < 2 days out', async () => {
-    // Pick a date that's 40 hours in the future. The "+40h"
-    // matters because the test builds the date from
-    // toISOString().slice(0, 10) (UTC date) and the component
-    // re-parses it as LOCAL date. If we picked +30h and the
-    // wall clock is late evening, the local-tz difference
-    // can flip diffDays to 0 and the test wrongly hits the
-    // "today" branch. 40h guarantees diffDays >= 1 in every
-    // timezone, and diffDays < 2 in every timezone — exactly
-    // the hours branch we want to exercise.
+    // Build the date string directly as LOCAL YYYY-MM-DD so
+    // there's no UTC-vs-local-tz disagreement when the
+    // component re-parses it. We add exactly 1 day + a few
+    // hours to guarantee diffDays === 1 (the hours branch)
+    // regardless of the wall clock time of day.
+    //
+    // History: 2026-08-23 /commit a2c0179 used +30h, then
+    // bumped to +40h to dodge late-evening UTC-slice flips.
+    // Both were fragile — the right fix is to avoid the
+    // UTC conversion entirely.
     const future = new Date();
-    future.setHours(future.getHours() + 40);
-    const futureDate = future.toISOString().slice(0, 10);
-    const futureTime = future.toTimeString().slice(0, 5);
+    future.setDate(future.getDate() + 1);
+    future.setHours(future.getHours() + 4);
+    const futureDate = `${future.getFullYear()}-${String(future.getMonth() + 1).padStart(2, '0')}-${String(future.getDate()).padStart(2, '0')}`;
+    const futureTime = `${String(future.getHours()).padStart(2, '0')}:${String(future.getMinutes()).padStart(2, '0')}`;
     render(<CountdownHarness eventDate={futureDate} eventTime={futureTime} />);
     expect(screen.getByTestId('guest-countdown-headline').textContent).toMatch(/小時/);
   });
