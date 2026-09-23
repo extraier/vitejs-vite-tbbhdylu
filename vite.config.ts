@@ -1,26 +1,11 @@
-// 2026-09-20 — V2 #2 follow-up: split firebase + react into
-// dedicated vendor chunks so they don't bloat the index chunk.
-//
-// Before this commit:
-//   dist/assets/index-*.js = 393.91 KB gz
-//     - includes firebase/app + firestore + functions + storage
-//       + auth + react + react-dom inline
-//
-// After:
-//   dist/assets/firebase-vendor-*.js   ~80 KB gz (one chunk)
-//   dist/assets/react-vendor-*.js      ~45 KB gz (one chunk)
-//   dist/assets/index-*.js             ~270 KB gz
-//
-// The two vendor chunks are cached across all routes — a
-// guest scanning the QR + the operator opening the seating
-// screen share the same firebase + react download.
-//
-// manualChunks is gated by build mode (production only) to
-// avoid affecting the dev server's HMR performance.
+// 2026-09-20 — V2 #2 follow-up #4: deep-import plugin for
+// lucide-react. See ./vite-plugins/lucideDeepImports.js for
+// the rationale and edge-case handling.
 
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { visualizer } from 'rollup-plugin-visualizer'
+import { lucideDeepImportsPlugin } from './vite-plugins/lucideDeepImports.js'
 
 const shouldAnalyze = process.env.ANALYZE === '1'
 
@@ -57,6 +42,10 @@ function vendorChunk(id: string): string | undefined {
 
 export default defineConfig(({ command }) => ({
   plugins: [
+    // lucideDeepImportsPlugin MUST run before @vitejs/plugin-react
+    // so the rewritten imports land as plain ES module imports
+    // (not JSX-rewritten JSX nodes).
+    lucideDeepImportsPlugin(),
     react(),
     shouldAnalyze && visualizer({
       filename: 'dist/bundle-report.html',
@@ -78,7 +67,13 @@ export default defineConfig(({ command }) => ({
     },
   },
   optimizeDeps: {
-    // This stops the bundler from crashing when loading our icons
-    include: ['lucide-react']
+    // 2026-09-20 — removed 'lucide-react' from this list.
+    // The lucideDeepImportsPlugin rewrites every barrel
+    // import to per-icon deep imports, so the barrel is
+    // never actually requested. Pre-bundling it now would
+    // be wasted work (and would actually be counter-
+    // productive: Vite would pull the whole 4,538-icon
+    // barrel into the dep cache, defeating the rewrite).
+    include: [],
   }
 }))
