@@ -44,7 +44,6 @@ if (typeof globalThis !== 'undefined') {
   globalThis.__firestore_onSnapshot = onSnapshot;
 }
 import {
-  DEFAULT_VENDORS,
   FREE_TIER_LIMIT_MB,
   INITIAL_JOB_REQUESTS,
   getTaskCategoryLabel,
@@ -73,6 +72,7 @@ import { usePartnerInvitePreview } from './hooks/usePartnerInvitePreview';
 import { useHelperAuth } from './hooks/useHelperAuth';
 import { useFirestoreCollection } from './hooks/useFirestoreCollection';
 import { useFirestoreDoc } from './hooks/useFirestoreDoc';
+import { useMergedVendors } from './hooks/useMergedVendors';
 import { useUserProfile } from './hooks/useUserProfile';
 import { useUploadPreferencesToken } from './hooks/useUploadPreferencesToken';
 import { useEventOwnerNames } from './hooks/useEventOwnerNames';
@@ -769,88 +769,11 @@ export default function App() {
   // catalog. The merge dedupes by doc.id so the same vendor
   // doesn't appear twice (rare but possible if a vendor was added
   // both to DEFAULT_VENDORS and as a seeded Firestore doc).
-  const [vendorsStatic] = useState(DEFAULT_VENDORS);
-  const [vendorsLive, setVendorsLive] = useState([]);
-  const [vendorsLiveLoading, setVendorsLiveLoading] = useState(true);
-  useEffect(() => {
-    const ref = collection(db, 'vendors');
-    const unsub = onSnapshot(
-      ref,
-      (snap) => {
-        const list = snap.docs
-          .map((d) => {
-            const x = d.data();
-            // Filter out rejected/suspended vendors — they shouldn't
-            // appear in the public catalog. Default to 'approved'
-            // for legacy docs (pre-onboarding vendors without a
-            // status field are treated as approved per existing
-            // AdminVendors logic).
-            const status = x.status || 'approved';
-            if (status === 'rejected' || status === 'suspended') return null;
-            return {
-              id: d.id,                 // doc id (vendorUid/slug)
-              vendorUid: d.id,
-              name: x.name || d.id,
-              category: x.category || 'other',
-              subcategory: x.subcategory || null,
-              rating: typeof x.rating === 'number' ? x.rating : 0,
-              // Imported vendors don't carry price — show a friendly
-              // placeholder so the UI doesn't render empty cells.
-              price: x.price || '請查詢',
-              tags: Array.isArray(x.tags) ? x.tags : [],
-              description: x.description || '',
-              portfolio: Array.isArray(x.portfolio) ? x.portfolio : [],
-              portfolioCount: typeof x.portfolioCount === 'number' ? x.portfolioCount : (Array.isArray(x.portfolio) ? x.portfolio.length : 0),
-              featured: !!x.featured,
-              createdAt: x.createdAt?.toMillis?.() ?? Date.parse(x.createdAt) ?? 0,
-              signupStatus: x.signupStatus || 'uninvited',
-              source: x.source || null,
-              // 2026-07-21 — city enrichment. The
-              // scripts/enrich-vendor-cities.cjs script derives
-              // these from name/description/address for any
-              // imported vendor and writes them back. Live
-              // vendors may also set serviceAreaCity manually.
-              serviceAreaCity: x.serviceAreaCity || null,
-              serviceAreaDistrict: x.serviceAreaDistrict || null,
-              // 2026-07-20 — popularity counter, maintained by the
-              // onVendorImageViewCreated cloud function + daily
-              // sweep. We prefer the 7d count as the default
-              // 'popularity' metric — it smooths out daily noise
-              // while staying fresh enough to highlight trending
-              // vendors. Falls back to 30d if 7d is missing.
-              popularity: x.popularity || null,
-              viewCount:
-                (x.popularity?.viewCount7d ?? 0) ||
-                (x.popularity?.viewCount30d ?? 0) ||
-                (x.popularity?.viewCountTotal ?? 0),
-              isLive: true,
-            };
-          })
-          .filter(Boolean);
-        setVendorsLive(list);
-        setVendorsLiveLoading(false);
-      },
-      (err) => {
-        console.warn('[discover vendors] subscribe failed:', err?.message || err);
-        setVendorsLiveLoading(false);
-      },
-    );
-    return () => unsub();
-  }, []);
-
-  // Merged list: live vendors first (newest), then static demo
-  // entries (any not already in live — rare but possible). Couples
-  // see all 672+ vendors in the catalog.
-  const vendors = useMemo(() => {
-    const liveIds = new Set(vendorsLive.map((v) => v.id));
-    const merged = [
-      ...vendorsLive,
-      ...vendorsStatic
-        .filter((v) => !liveIds.has(v.id))
-        .map((v) => ({ ...v, isLive: false })),
-    ];
-    return merged;
-  }, [vendorsStatic, vendorsLive]);
+  // 2026-09-24 — extracted to useMergedVendors hook + vendorPure
+  // lib module. Pure functions are unit-tested; hook returns
+  // { vendors, loading, error } matching what the inline code
+  // produced.
+  const { vendors, loading: vendorsLiveLoading } = useMergedVendors();
   const [discoverFilter, setDiscoverFilter] = useState('all');
   const [jobRequests, setJobRequests] = useState(INITIAL_JOB_REQUESTS);
   // 2026-08-08 — proposals removed from in-memory React state.
