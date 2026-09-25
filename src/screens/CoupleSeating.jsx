@@ -1082,9 +1082,33 @@ export function SeatingCanvas({
   // The bundle is the SAME object across renders unless one of
   // its members changes reference. This is what lets `memo` skip
   // re-rendering tables whose props are otherwise identical.
+  //
+  // 2026-09-25 — TDZ hotfix (the sequel). Commit 98a61bd
+  // (P13.4.5 perf follow-up, 2026-09-20) introduced this
+  // useMemo with the SHORTHAND `{ onAssign }` — but
+  // `onAssign` was never declared in SeatingCanvas. The
+  // actual function is `saveAssignment` (L730). The shorthand
+  // was supposed to read from the prop the TableNode receives,
+  // but SeatingCanvas's parent passes `handlers` from
+  // TableNode (the other direction), not the other way around.
+  //
+  // Until now, this crashed on every seating render with
+  // `ReferenceError: onAssign is not defined`. The previous
+  // App.jsx TDZ (fixed in 2259922) was masking this — the
+  // page errored out before the seating click ever reached
+  // SeatingCanvas. With App.jsx rendering, the bug surfaced.
+  //
+  // Fix: rename `onAssign` to the actual local binding
+  // `saveAssignment`. The TableNode receives it via the
+  // `handlers.onAssign` destructure at L139, so the consumer
+  // contract is unchanged.
   const tableHandlers = useMemo(
-    () => ({ onTablePointerDown, onAssign, setFocusedTableId }),
-    [onTablePointerDown, onAssign, setFocusedTableId],
+    () => ({
+      onTablePointerDown,
+      onAssign: saveAssignment,
+      setFocusedTableId,
+    }),
+    [onTablePointerDown, saveAssignment, setFocusedTableId],
   );
 
   if (!ownerUid || !eventId) {
