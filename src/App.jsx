@@ -369,21 +369,6 @@ export default function App() {
     }
   }, [user]);
 
-  // 2026-09-17 — P13.3 Phase 2.2: HelperDashboard dispatches a
-  // 'helper-open-seating-edit' CustomEvent when the helper taps the
-  // 座位表 tab. The dashboard is rendered inside the helper-dashboard
-  // view, so it can't directly setCurrentView — we listen here and
-  // perform the route swap.
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const handler = () => {
-      if (userRole !== 'helper') return;
-      setCurrentView('seating-edit');
-    };
-    window.addEventListener('helper-open-seating-edit', handler);
-    return () => window.removeEventListener('helper-open-seating-edit', handler);
-  }, [userRole]);
-
   // 2026-07-20 — vendor invitation deep-link. If the user opened a
   // `?signup&venue=<slug>&token=<token>` link, we stash the (slug,
   // token) into sessionStorage so the vendor onboarding wizard can
@@ -501,6 +486,29 @@ export default function App() {
   const [currentView, setCurrentView] = useState(
     guest.isGuestMode ? 'guest-portal' : 'events-dashboard',
   );
+
+  // 2026-09-17 — P13.3 Phase 2.2: HelperDashboard dispatches a
+  // 'helper-open-seating-edit' CustomEvent when the helper taps the
+  // 座位表 tab. The dashboard is rendered inside the helper-dashboard
+  // view, so it can't directly setCurrentView — we listen here and
+  // perform the route swap.
+  //
+  // 2026-09-25 — TDZ hotfix. This useEffect originally lived at
+  // the TOP of the function (around L377) and referenced `userRole`
+  // inside its deps array. But `userRole` is declared above us
+  // now, so the binding is initialized by the time the deps array
+  // is evaluated — no more ReferenceError on first render. Moved
+  // from cc21596's position. Same pattern as the 2026-08-01
+  // ownerNames sub TDZ fix.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handler = () => {
+      if (userRole !== 'helper') return;
+      setCurrentView('seating-edit');
+    };
+    window.addEventListener('helper-open-seating-edit', handler);
+    return () => window.removeEventListener('helper-open-seating-edit', handler);
+  }, [userRole]);
 
   // 2026-07-15 — chat state. selectedInquiry holds the conversation
   // the user is currently viewing in ChatRoom; null when on the inbox.
