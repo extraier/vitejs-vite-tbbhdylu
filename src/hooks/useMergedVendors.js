@@ -26,6 +26,18 @@ import { DEFAULT_VENDORS } from '../lib/config';
 export function useMergedVendors() {
   const { data: liveDocs, loading, error } = useFirestoreCollection(
     collection(db, 'vendors'),
+    // 2026-09-26 — explicit `[]` deps, with rationale.
+    // Empty deps = subscribe once on mount, unsubscribe on
+    // unmount. This matches the original App.jsx inline
+    // `useEffect(...)` semantics exactly. Firestore's
+    // onSnapshot pushes live updates without needing
+    // re-subscription, so an empty dep list is safe AND
+    // optimal — a single subscription per component
+    // lifetime. Pinning `[]` (vs implicit default) makes
+    // the intent visible to the next reader. `db` is a
+    // module-level constant, so no real-world re-init
+    // causes this effect to be stale.
+    [],
   );
   const vendors = useMemo(() => {
     const live = liveDocs

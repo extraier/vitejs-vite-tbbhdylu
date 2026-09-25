@@ -30,8 +30,33 @@ describe('useMergedVendors', () => {
     // doc itself; require the function-call form AND the
     // db-sourced collection ref AND a destructured { data, ... }
     // pattern so a future hand-rolled onSnapshot fails the build.
+    //
+    // Pattern allows optional whitespace / line-comments inside
+    // the useFirestoreCollection(...) argument list — the V2
+    // audit (2026-09-26) added a multi-line comment block
+    // justifying the explicit `[]` deps, and that broke this
+    // test. The audit-time fix is to make the regex whitespace-
+    // tolerant (\\s) including newlines, plus a permissive
+    // `[^)]*` between the collection call and the closing `)` —
+    // what we actually care about is that the FIRST arg is
+    // `collection(db, 'vendors')` and that there IS a second
+    // arg (the deps array) so the subscription semantics are
+    // pinned.
     expect(src).toMatch(
-      /useFirestoreCollection\(\s*collection\(\s*db,\s*['"]vendors['"]\s*\)\s*,\s*\)/,
+      /useFirestoreCollection\(\s*collection\(\s*db,\s*['"]vendors['"]\s*\)\s*,[\s\S]*?\)/,
+    );
+  });
+
+  it('pins subscription deps to [] (subscribe-once, unsubscribe-on-unmount)', () => {
+    // 2026-09-26 audit: the hook's subscription must be
+    // subscribe-once-per-mount. Firestore's onSnapshot pushes
+    // live updates, so an empty deps array is optimal AND
+    // matches the original App.jsx inline code's semantics.
+    // Pin this so a future refactor that switches to
+    // `[liveDocs]` or similar can't silently re-subscribe
+    // on every render.
+    expect(src).toMatch(
+      /useFirestoreCollection\(\s*collection\(\s*db,\s*['"]vendors['"]\s*\)\s*,[\s\S]*?\[\s*\][\s\S]*?\)/,
     );
   });
 
