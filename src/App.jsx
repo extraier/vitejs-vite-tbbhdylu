@@ -487,6 +487,28 @@ export default function App() {
     guest.isGuestMode ? 'guest-portal' : 'events-dashboard',
   );
 
+  // 2026-09-26 — V2 #3.5 / P13.5 follow-up. Sub-tab selector
+  // inside the 嘉賓與座位 view. Two tabs:
+  //   'list'    — GuestList (the original 嘉賓 view)
+  //   'seating' — CoupleSeating (the seating canvas editor)
+  // Default 'list' so the existing entry-point behaviour is
+  // unchanged (clicking 🎟️ 嘉賓與座位 lands on the guest list,
+  // not straight on the canvas). Reset to 'list' whenever the
+  // user navigates AWAY from couple-guests so re-entering the
+  // view lands on the list (matches user mental model of
+  // "嘉賓 first, 座位表 second").
+  const [coupleGuestsTab, setCoupleGuestsTab] = useState('list');
+  // Reset to 'list' when leaving couple-guests. Without this,
+  // a user who lands on the seating tab, navigates away to
+  // e.g. checklist, then clicks the header button again
+  // would re-enter straight on seating — surprising. The
+  // explicit reset makes the entry state predictable.
+  useEffect(() => {
+    if (currentView !== 'couple-guests' && coupleGuestsTab !== 'list') {
+      setCoupleGuestsTab('list');
+    }
+  }, [currentView, coupleGuestsTab]);
+
   // 2026-09-17 — P13.3 Phase 2.2: HelperDashboard dispatches a
   // 'helper-open-seating-edit' CustomEvent when the helper taps the
   // 座位表 tab. The dashboard is rendered inside the helper-dashboard
@@ -4424,24 +4446,28 @@ export default function App() {
                         <span className="hidden sm:inline">返回總大堂</span>
                       </button>
                     )}
-                    {/* 2026-09-12 — Hermes P13 (seating chart MVP):
-                        single CTA in the global header linking
-                        to the seating chart editor. Owner-only —
-                        hidden for vendor and helper roles because
-                        they don't get the canvas editor (their
-                        drag-drop view is Phase 2.2). The button
-                        only appears after the events-dashboard
-                        has selected an event so currentEvent is
-                        already populated. */}
+                    {/* 2026-09-12 — Hermes P13 (seating chart MVP).
+                        The 🪑 座位表 button used to live here in the
+                        global header. It moved INTO the 嘉賓與座位
+                        section as a sub-tab (see
+                        `currentView === 'couple-guests'` block below)
+                        on 2026-09-26 — users told us reaching it
+                        from the header felt detached from the
+                        guest-list workflow (assigning a table to a
+                        specific guest is the dominant action). Now
+                        the global header is reserved for cross-app
+                        shortcuts (back, bell, profile) and per-event
+                        deep work lives inside the corresponding
+                        section. */}
                     {currentEvent && userRole === 'owner' && (
                       <button
-                        onClick={() => setCurrentView('couple-seating')}
-                        data-testid="header-seating-cta"
+                        onClick={() => setCurrentView('couple-guests')}
+                        data-testid="header-guests-cta"
                         className="flex items-center gap-1 text-sm font-bold text-teal-700 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 px-2 sm:px-3 py-1.5 rounded-lg border border-teal-200 transition-colors flex-shrink-0"
-                        title="Reception 座位表"
-                        aria-label="Reception 座位表"
+                        title="嘉賓與座位"
+                        aria-label="嘉賓與座位"
                       >
-                        🪑<span className="hidden sm:inline">座位表</span>
+                        🎟️<span className="hidden sm:inline">嘉賓與座位</span>
                       </button>
                     )}
                     {/* 2026-08-08 — header buttons moved next to the user
@@ -4947,28 +4973,101 @@ export default function App() {
             {(userRole === 'owner' || userRole === 'reception') &&
               currentEvent &&
               currentView === 'couple-guests' && (
-                <GuestList
-                  guests={eventGuests}
-                  userRole={userRole}
-                  helperPerms={helperPerms}
-                  searchQuery={''}
-                  onSearchChange={() => {}}
-                  newGuestForm={newGuestForm}
-                  onNewGuestFormChange={setNewGuestForm}
-                  onAddGuest={handleAddGuest}
-                  familyForm={familyForm}
-                  onFamilyFormChange={setFamilyForm}
-                  onAddFamily={handleAddFamily}
-                  onPreviewAsGuest={(g) => {
-                    setActiveGuestPortal(g);
-                    setUserRole('guest_portal');
-                    setCurrentView('guest-portal');
-                  }}
-                  onShowQr={setViewingQrCode}
-                  onCheckIn={handleSimulateReceptionScan}
-                  onOpenInvitationEditor={() => setShowInvitationEditor(true)}
-                  onEditGuest={setEditingGuest}
-                />
+                <>
+                  {/* 2026-09-26 — V2 #3.5 / P13.5 follow-up.
+                      Sub-tab strip inside 嘉賓與座位 view. Two
+                      tabs: 🎟️ 嘉賓 (the guest list) and
+                      🪑 座位表 (the canvas editor). Lives at
+                      the top of the view so it scrolls with
+                      the content, NOT pinned (we want the
+                      guest list to keep its own filter bar
+                      visible when the user scrolls inside the
+                      list). Tab pill style mirrors the rest
+                      of the app's section nav — same colour
+                      family as the wedding-day sub-tabs so it
+                      feels like a deeper level of the same
+                      nav, not a new chrome. */}
+                  <div
+                    role="tablist"
+                    aria-label="嘉賓與座位 sub-tabs"
+                    className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4"
+                    data-testid="couple-guests-tablist"
+                  >
+                    <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+                      <button
+                        role="tab"
+                        aria-selected={coupleGuestsTab === 'list'}
+                        data-testid="couple-guests-tab-list"
+                        onClick={() => setCoupleGuestsTab('list')}
+                        className={
+                          'px-3 sm:px-4 py-1.5 rounded-md text-sm font-semibold transition-colors ' +
+                          (coupleGuestsTab === 'list'
+                            ? 'bg-teal-600 text-white shadow'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50')
+                        }
+                      >
+                        🎟️ 嘉賓
+                      </button>
+                      <button
+                        role="tab"
+                        aria-selected={coupleGuestsTab === 'seating'}
+                        data-testid="couple-guests-tab-seating"
+                        onClick={() => setCoupleGuestsTab('seating')}
+                        className={
+                          'px-3 sm:px-4 py-1.5 rounded-md text-sm font-semibold transition-colors ' +
+                          (coupleGuestsTab === 'seating'
+                            ? 'bg-teal-600 text-white shadow'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50')
+                        }
+                      >
+                        🪑 座位表
+                      </button>
+                    </div>
+                  </div>
+
+                  {coupleGuestsTab === 'list' ? (
+                    <GuestList
+                      guests={eventGuests}
+                      userRole={userRole}
+                      helperPerms={helperPerms}
+                      searchQuery={''}
+                      onSearchChange={() => {}}
+                      newGuestForm={newGuestForm}
+                      onNewGuestFormChange={setNewGuestForm}
+                      onAddGuest={handleAddGuest}
+                      familyForm={familyForm}
+                      onFamilyFormChange={setFamilyForm}
+                      onAddFamily={handleAddFamily}
+                      onPreviewAsGuest={(g) => {
+                        setActiveGuestPortal(g);
+                        setUserRole('guest_portal');
+                        setCurrentView('guest-portal');
+                      }}
+                      onShowQr={setViewingQrCode}
+                      onCheckIn={handleSimulateReceptionScan}
+                      onOpenInvitationEditor={() => setShowInvitationEditor(true)}
+                      onEditGuest={setEditingGuest}
+                    />
+                  ) : (
+                    // 2026-09-26 — V2 #3.5 / P13.5 follow-up.
+                    // Same CoupleSeating component that used to
+                    // live at currentView === 'couple-seating'.
+                    // We render it inline here so the user
+                    // sees the canvas without leaving
+                    // 嘉賓與座位. The "← 返回" button on the
+                    // canvas takes them to the events-dashboard
+                    // (CoupleSeating.onBack) — that's the same
+                    // pre-existing behaviour, no change.
+                    <CoupleSeating
+                      ownerUid={dataOwnerUid}
+                      eventId={currentEvent.id}
+                      onBack={() => setCurrentView(
+                        currentEvent ? 'couple-checklist' : 'events-dashboard',
+                      )}
+                      onOpenToast={showToast}
+                    />
+                  )}
+                </>
               )}
 
             {/* 2026-09-17 — P13.3 Phase 2.2 (refactored 2026-09-18):
@@ -4994,16 +5093,15 @@ export default function App() {
                 table CRUD modal, and the 3-preset selector
                 (中式 12 圍 / 西式 8 long / 自訂空板). Drag-drop
                 and guest-to-table assignment come in P13.2. */}
-            {userRole === 'owner' && currentEvent && currentView === 'couple-seating' && (
-              <CoupleSeating
-                ownerUid={dataOwnerUid}
-                eventId={currentEvent.id}
-                onBack={() => setCurrentView(
-                  currentEvent ? 'couple-checklist' : 'events-dashboard',
-                )}
-                onOpenToast={showToast}
-              />
-            )}
+            {/* 2026-09-26 — V2 #3.5 / P13.5 follow-up. The
+                `currentView === 'couple-seating'` block that
+                used to live here was REMOVED. CoupleSeating is
+                now mounted inside the `couple-guests` view as
+                a sub-tab (see the fragment above) so the
+                seating editor and the guest list share the
+                same section-nav chrome. The standalone block
+                became dead — no header button or routing path
+                sets `currentView === 'couple-seating'` anymore. */}
 
             {userRole === 'owner' && currentEvent && currentView === 'photo-drop' && (
               <PhotoDrop

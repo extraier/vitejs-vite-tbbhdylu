@@ -56,6 +56,7 @@ import {
   liveSeatingBadges,
   formatLivePill,
   chinesePreset as chinesePresetFn,
+  westernPreset as westernPresetFn,
   CHINESE_ROUND_CAPACITY_OPTIONS,
   CHINESE_ROUND_COUNT_OPTIONS,
   fixedSlotBadge,
@@ -1314,6 +1315,45 @@ export function SeatingCanvas({
           </defs>
           <rect width={dim.w} height={dim.h} fill="url(#floor-grid)" />
 
+          {/* 2026-09-26 — V2 #3.5 / P13.5 follow-up. Dance-floor
+              decor for the western preset. Drawn BEFORE the
+              tables so the tables render on top of it (the
+              dance floor is "below" the seating, between the
+              two rows of long tables). Gated on
+              `meta.style === 'western'` so the chinese preset
+              and custom boards don't render a phantom dance
+              floor. Geometry mirrors `westernPreset()` —
+              x=560, y=430, w=480, h=200. */}
+          {meta?.style === 'western' && (
+            <g data-testid="dance-floor-decor">
+              <rect
+                x={560}
+                y={430}
+                width={480}
+                height={200}
+                rx={6}
+                fill="#0F766E"
+                fillOpacity={0.08}
+                stroke="#0F766E"
+                strokeWidth={1.5}
+                strokeDasharray="6 4"
+              />
+              <text
+                x={560 + 480 / 2}
+                y={430 + 200 / 2}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontSize={20}
+                fontWeight={600}
+                fill="#0F766E"
+                pointerEvents="none"
+                style={{ userSelect: 'none' }}
+              >
+                💃 中央 Dance Floor 🕺
+              </text>
+            </g>
+          )}
+
           {/* tables */}
           {/* tables — memoized TableNode for the perf win
               (P13.4.5). The old inline `<g>` block re-evaluated
@@ -1861,7 +1901,7 @@ function PresetCard({ title, description, onClick }) {
 
 function presetTables(style, opts = {}) {
   if (style === 'chinese') return chinesePresetFn(opts);
-  if (style === 'western') return westernPreset();
+  if (style === 'western') return westernPresetFn();
   return []; // custom = empty board
 }
 

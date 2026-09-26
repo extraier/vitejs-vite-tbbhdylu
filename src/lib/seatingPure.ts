@@ -1065,6 +1065,82 @@ export function chinesePreset(opts: ChinesePresetOptions = {}): SeatingTable[] {
 }
 
 /**
+ * Western / 長枱 banquet preset (8 long tables + head table +
+ * central dance floor). 2026-09-26 — V2 #3.5 / P13.5 follow-up.
+ *
+ * Geometry (canvas 1600×900):
+ *   y=80   Head Table (長 14) centered at x=540
+ *   y=200  Sweetheart witness table (長 6) centered at x=740
+ *   y=370  Row A: 4 long tables (8-seat each), x=120/440/960/1280
+ *   y=430..630  中央 dance floor rect (480×200, x=560) — drawn
+ *                 by the canvas SVG, NOT a seatable table.
+ *   y=700  Row B: 4 long tables, mirrored.
+ *
+ * Long-table capacity = 8 (banquet-side seats). Operators can
+ * edit capacity per-table after apply.
+ *
+ * Why shape 'long' for the head table too: 'long' renders as
+ * a wide rectangle (vs 'rect' which is shorter). The chinese
+ * preset uses 'long' for its 主家席, so the head-table visual
+ * is consistent across both presets.
+ */
+export function westernPreset(): SeatingTable[] {
+  const rows: SeatingTable[] = [];
+  // Head table — bride + groom + parents
+  rows.push({
+    id: 'p-w-head',
+    label: 'Head Table',
+    shape: 'long',
+    capacity: 14,
+    tableCategory: 'bride_groom',
+    x: 540, y: 80, rotation: 0,
+    source: 'preset',
+  });
+  // Witness / MC table directly below the head table
+  rows.push({
+    id: 'p-w-witness',
+    label: '證婚席',
+    shape: 'rect',
+    capacity: 6,
+    tableCategory: 'ceremony',
+    x: 740, y: 200, rotation: 0,
+    source: 'preset',
+  });
+  // 8 long tables, two rows of 4, flanking the central dance floor.
+  // Row A at y=370, Row B at y=700. Within each row, 4 tables
+  // arranged with a 280px gap in the middle to make room for
+  // the dance floor.
+  const longCap = 8;
+  const rowAY = 370;
+  const rowBY = 700;
+  const rowAColX = [120, 440, 960, 1280]; // 4 columns, gap from 440→960
+  const rowBColX = [120, 440, 960, 1280];
+  for (let i = 0; i < 4; i++) {
+    rows.push({
+      id: `p-w-a-${i + 1}`,
+      label: `長枱 A${i + 1}`,
+      shape: 'long',
+      capacity: longCap,
+      tableCategory: 'friends',
+      x: rowAColX[i], y: rowAY, rotation: 0,
+      source: 'preset',
+    });
+  }
+  for (let i = 0; i < 4; i++) {
+    rows.push({
+      id: `p-w-b-${i + 1}`,
+      label: `長枱 B${i + 1}`,
+      shape: 'long',
+      capacity: longCap,
+      tableCategory: 'friends',
+      x: rowBColX[i], y: rowBY, rotation: 0,
+      source: 'preset',
+    });
+  }
+  return rows;
+}
+
+/**
  * Convert 1..20 to traditional Chinese numerals (一, 二, 三 …
  * 二十) for 圍枱 labels. Operators see "第三圍" not "第 3 圍".
  */
@@ -1105,6 +1181,7 @@ export default {
   categorizeErrors,
   chineseNumber,
   chinesePreset,
+  westernPreset,
   fixedSlotBadge,
   DEFAULT_COST_PER_HEAD,
   DEFAULT_BUDGET_CAP,
