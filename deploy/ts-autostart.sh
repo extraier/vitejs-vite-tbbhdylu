@@ -36,8 +36,38 @@ TALMII_SERVER="/home/openclaw/bin/talmii_server.py"
 TALMII_PORT=9878
 TALMII_CMD="/usr/bin/python3 $TALMII_SERVER"
 CLOUDFLARED_BIN="/home/openclaw/bin/cloudflared"
-CLOUDFLARED_TOKEN_FILE="/home/openclaw/.cloudflared/...oken"
+# 2026-08-05 — was a literal placeholder "..."oken" (4 dots + "oken")
+# left over from an earlier version of this script. The actual
+# token file in /home/openclaw/.cloudflared/ is named after the
+# Cloudflare tunnel UUID, e.g.
+#   1a40aafa-6a7e-433d-9ba5-884bf2885c3d.json
+# Hard-coding the exact filename would break if the tunnel ever
+# rotates; better to glob the only *.json file in that dir (the
+# tunnel credentials are the only JSON in /home/openclaw/.cloudflared/
+# in this deployment — cert.pem and config.yml are the other files).
+CLOUDFLARED_TOKEN_FILE="$(ls /home/openclaw/.cloudflared/*.json 2>/dev/null | head -1)"
 CLOUDFLARED_LOG="/tmp/cloudflared.log"
+# Hermes 2026-10-27 — second CF tunnel on this host: talmii-nas.
+#
+# talmii.com / www.talmii.com were serving CF error 530 because this
+# tunnel had NO connector at all — the credentials file was missing from
+# the NAS. Restored 2026-10-27 by fetching the tunnel token from the CF
+# API and starting a connector.
+#
+# It uses REMOTE-MANAGED config (ingress lives in Cloudflare, not in a
+# local config.yml), so it is started with --token-file and no
+# --config. IMPORTANT CLI NOTE for cloudflared 2026.10.4:
+#   - `tunnel --token X`        → INVALID, "flag provided but not defined: -token"
+#   - `tunnel --token-file X`   → INVALID, same error (that flag belongs
+#                                to the `run` subcommand)
+#   - `tunnel run --token-file X` → CORRECT
+# The token file IS a credentials file; cloudflared accepts it via
+# --token-file.
+TALMII_TUNNEL_NAME="talmii-nas"
+TALMII_TUNNEL_TOKEN_FILE="/home/openclaw/.cloudflared/741256d8-dcbc-45ec-b80c-c42be7bed1db.token"
+TALMII_TUNNEL_LOG="/tmp/cloudflared-talmii.log"
+# Separate metrics port so the two connectors can be probed independently.
+TALMII_TUNNEL_METRICS_PORT=2001
 # CF Tunnel connects outbound to CF edge; routes talmii.com / www.talmii.com
 # traffic to http://127.0.0.1:9877 (the local fli-data-server).
 
@@ -48,6 +78,11 @@ PHOTO_UPLOAD_PORT=9879
 PHOTO_UPLOAD_CMD="/usr/bin/python3 $PHOTO_UPLOAD_SERVER"
 PHOTO_UPLOAD_LOG="/tmp/photo-upload.log"
 PHOTO_UPLOAD_PID="/tmp/photo-upload.pid"
+
+# TRMNL ePaper display server (Seeedstudio 7.5" DIY kit, containerized).
+# Funnel-exposes /api/* so the device can reach setup/display/log over HTTPS.
+TRMNL_CONTAINER="trmnl-bloomberg"
+TRMNL_INTERNAL_PORT=8081
 # Public hostname Funnel exposes (HTTPS); must match VITE_NAS_UPLOAD_URL in the
 # frontend's .env.local. Keep this in sync if the tailnet hostname ever changes.
 PHOTO_FUNNEL_HOST="https://ugreen-nas.tail20bf1.ts.net"
@@ -90,6 +125,9 @@ apply_funnel() {
   # Wedding app photo upload (separate path on the same Funnel hostname).
   "$TS_CLI" funnel  --bg --set-path=/upload "http://127.0.0.1:$PHOTO_UPLOAD_PORT" >/dev/null 2>&1
   "$TS_CLI" funnel  --bg --set-path=/photos "http://127.0.0.1:$PHOTO_UPLOAD_PORT" >/dev/null 2>&1
+  # TRMNL ePaper display (containerized) — /api/* is the BYOS protocol path.
+  # Funnel strips /api before forwarding, so origin sees /setup /display /log.
+  "$TS_CLI" funnel  --bg --set-path=/api "http://127.0.0.1:$TRMNL_INTERNAL_PORT" >/dev/null 2>&1
   echo "$(date -Iseconds) Funnel config applied" >> "$WATCHDOG_LOG"
 }
 
@@ -150,12 +188,18 @@ start_cloudflared() {
     echo "$(date -Iseconds) cloudflared token not found at $CLOUDFLARED_TOKEN_FILE" >> "$WATCHDOG_LOG"
     return 1
   fi
-  local TOKEN
-  TOKEN=$(cat "$CLOUDFLARED_TOKEN_FILE")
+  # 2026-08-05 — switched from --token $(cat <json>) to
+  # --config <config.yml>. The previous code read the tunnel
+  # credentials JSON as a string and passed it to --token,
+  # which expects just the tunnel UUID. The JSON blob caused
+  # cloudflared to fail to register with the CF edge. Using
+  # --config picks up both credentials-file AND ingress rules
+  # from the same file.
   nohup "$CLOUDFLARED_BIN" tunnel --no-autoupdate --metrics localhost:2000 \
-    run --token "$TOKEN" >> "$CLOUDFLARED_LOG" 2>&1 &
+    --config /home/openclaw/.cloudflared/config.yml \
+    run >> "$CLOUDFLARED_LOG" 2>&1 &
   local pid=$!
-  echo "$(date -Iseconds) Started cloudflared, pid $pid" >> "$WATCHDOG_LOG"
+  echo "$(date -Iseconds) Started cloudflared (config-based), pid $pid" >> "$WATCHDOG_LOG"
   return 0
 }
 
@@ -164,6 +208,49 @@ wait_for_cloudflared() {
   # registered with the CF edge. That's our liveness probe.
   for i in $(seq 1 20); do  # 10s
     if curl -s -o /dev/null http://127.0.0.1:2000/metrics 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+# Hermes 2026-10-27 — talmii-nas connector (second CF tunnel on this host).
+#
+# Hermes 2026-10-27 — the health probe uses the ha_connections GAUGE, not
+# just "is /metrics reachable". /metrics answers as soon as the process
+# binds the port, which happens BEFORE the connector has registered with
+# the CF edge. A gauge of 0 means "process up but not registered" — that
+# is NOT healthy. Same class of bug as the log-mtime watchdog.
+start_talmii_tunnel() {
+  if pgrep -f "cloudflared.*tunnel run --token-file ${TALMII_TUNNEL_TOKEN_FILE}" > /dev/null; then
+    return 0
+  fi
+  if [ ! -r "$TALMII_TUNNEL_TOKEN_FILE" ]; then
+    echo "$(date -Iseconds) talmii tunnel token not found at $TALMII_TUNNEL_TOKEN_FILE" >> "$WATCHDOG_LOG"
+    return 1
+  fi
+  # Hermes 2026-10-27: `tunnel run --token-file` is the only spelling that
+  # works in cloudflared 2026.10.4. Do NOT add `run $TALMII_TUNNEL_NAME`
+  # after --token-file: the token already names the tunnel.
+  setsid nohup "$CLOUDFLARED_BIN" --no-autoupdate \
+    --metrics "localhost:${TALMII_TUNNEL_METRICS_PORT}" \
+    tunnel run --token-file "$TALMII_TUNNEL_TOKEN_FILE" \
+    >> "$TALMII_TUNNEL_LOG" 2>&1 < /dev/null &
+  local pid=$!
+  echo "$(date -Iseconds) Started talmii tunnel connector, pid $pid" >> "$WATCHDOG_LOG"
+  return 0
+}
+
+wait_for_talmii_tunnel() {
+  # Wait for ha_connections > 0, i.e. actually registered with the edge.
+  for i in $(seq 1 40); do  # 20s
+    local conns
+    conns=$(curl -s --max-time 3 \
+            "http://127.0.0.1:${TALMII_TUNNEL_METRICS_PORT}/metrics" 2>/dev/null \
+            | grep -m1 '^cloudflared_tunnel_ha_connections ' \
+            | awk '{print $2}')
+    if [ -n "$conns" ] && [ "$conns" -gt 0 ] 2>/dev/null; then
       return 0
     fi
     sleep 0.5
@@ -209,15 +296,20 @@ while true; do
   start_fli_data_server
   start_talmii_server
   start_cloudflared
+  start_talmii_tunnel
   start_photo_upload_server
   if wait_for_daemon; then
     if wait_for_fli_data_server; then
       if wait_for_talmii_server; then
         if wait_for_cloudflared; then
-          if wait_for_photo_upload_server; then
-            apply_funnel
+          if wait_for_talmii_tunnel; then
+            if wait_for_photo_upload_server; then
+              apply_funnel
+            else
+              echo "$(date -Iseconds) WARNING: photo-upload-server did not become ready after 10s" >> "$WATCHDOG_LOG"
+            fi
           else
-            echo "$(date -Iseconds) WARNING: photo-upload-server did not become ready after 10s" >> "$WATCHDOG_LOG"
+            echo "$(date -Iseconds) WARNING: talmii tunnel did not register with CF edge after 20s" >> "$WATCHDOG_LOG"
           fi
         else
           echo "$(date -Iseconds) WARNING: cloudflared did not become ready after 10s" >> "$WATCHDOG_LOG"
@@ -250,6 +342,12 @@ while true; do
     fi
     if ! pgrep -f "cloudflared tunnel.*run" > /dev/null; then
       echo "$(date -Iseconds) cloudflared died, restarting" >> "$WATCHDOG_LOG"
+      break
+    fi
+    # Hermes 2026-10-27: also watch the talmii-nas connector. Its pgrep
+    # pattern must include --token-file because that is how it is launched.
+    if ! pgrep -f "cloudflared.*tunnel run --token-file ${TALMII_TUNNEL_TOKEN_FILE}" > /dev/null; then
+      echo "$(date -Iseconds) talmii tunnel connector died, restarting" >> "$WATCHDOG_LOG"
       break
     fi
     if ! pgrep -f "photo_upload_server.py" > /dev/null; then
