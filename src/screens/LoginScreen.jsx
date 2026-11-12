@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
 import { readUiLang, writeUiLang } from '../lib/uiLang';
+import { authErrorMessage, withAuthTimeout } from '../lib/authErrorMessage';
 import {
   Heart,
   Mail,
@@ -171,23 +172,12 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     setBusy(true);
     try {
       if (mode === 'signin') {
-        await onEmailLogin(email, password);
+        await withAuthTimeout(onEmailLogin(email, password));
       } else {
-        await onEmailRegister(email, password);
+        await withAuthTimeout(onEmailRegister(email, password));
       }
     } catch (err) {
-      const code = err?.code || '';
-      if (code.includes('user-not-found') || code.includes('wrong-password') || code.includes('invalid-credential')) {
-        setError(t.errWrongCreds);
-      } else if (code.includes('email-already-in-use')) {
-        setError(t.errEmailInUse);
-      } else if (code.includes('weak-password')) {
-        setError(t.errWeakPassword);
-      } else if (code.includes('invalid-email')) {
-        setError(t.errInvalidEmail);
-      } else {
-        setError(err?.message || t.errGeneric);
-      }
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -202,9 +192,9 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     }
     setBusy(true);
     try {
-      await onCompleteEmailLink(email);
-    } catch {
-      setError(t.errEmailLink);
+      await withAuthTimeout(onCompleteEmailLink(email));
+    } catch (err) {
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -214,9 +204,9 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     setError(null);
     setBusy(true);
     try {
-      await onGoogleLogin();
+      await withAuthTimeout(onGoogleLogin());
     } catch (err) {
-      setError(err?.message || t.errGoogle);
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -249,9 +239,9 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     setError(null);
     setBusy(true);
     try {
-      await onContinueAsGuest();
+      await withAuthTimeout(onContinueAsGuest());
     } catch (err) {
-      setError(err?.message || t.errGuest);
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -580,7 +570,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               obvious path for existing accounts. */}
           <p className="mt-2 text-[11px] text-slate-500 text-center leading-snug">
             {lang === 'zh'
-              ? '已有商戶帳號?請用上面 email + 密碼 直接登入。'
+              ? '已有商戶帳號? 請用上面 email + 密碼 直接登入。'
               : 'Already a vendor? Sign in above with your email + password.'}
           </p>
         </div>

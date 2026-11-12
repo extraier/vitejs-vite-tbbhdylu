@@ -8,12 +8,12 @@ describe('buildNewEventFields', () => {
     const fields = buildNewEventFields('Our day', 'uid-1', 1000);
     expect(fields).toEqual({
       name: 'Our day',
-      date: '2027-01-01',
       tier: 'free',
       budget: 350000,
       coOwners: ['uid-1'],
       createdAt: 1000,
     });
+    expect(fields.date).toBeUndefined();
   });
 });
 

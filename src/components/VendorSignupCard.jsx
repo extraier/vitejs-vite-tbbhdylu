@@ -32,6 +32,7 @@ import { useState } from 'react';
 import { Briefcase, Mail, Lock, Loader2, Globe } from 'lucide-react';
 import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
 import { readUiLang, writeUiLang } from '../lib/uiLang';
+import { authErrorMessage, withAuthTimeout } from '../lib/authErrorMessage';
 
 const STRINGS = {
   zh: {
@@ -137,13 +138,10 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
     setVendorSignupIntent();
     setBusy(true);
     try {
-      await onGoogleLogin();
+      await withAuthTimeout(onGoogleLogin());
     } catch (err) {
-      // 2026-08-08 — clear the stashed intent on Google signup failure
-      // so the user can fall back to the regular LoginScreen without
-      // being routed to vendor onboarding on the next sign-in.
       clearVendorSignupIntent();
-      setError(err?.message || t.errGoogle);
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -180,22 +178,10 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
     setVendorSignupIntent();
     setBusy(true);
     try {
-      await onEmailRegister(email, password, displayName.trim());
+      await withAuthTimeout(onEmailRegister(email, password, displayName.trim()));
     } catch (err) {
-      // 2026-08-08 — clear the stashed intent on submit failure so
-      // the user can fall back to the regular LoginScreen via the
-      // back link without the next sign-in being hijacked.
       clearVendorSignupIntent();
-      const code = err?.code || '';
-      if (code.includes('email-already-in-use')) {
-        setError(t.errEmailInUse);
-      } else if (code.includes('weak-password')) {
-        setError(t.errWeakPassword);
-      } else if (code.includes('invalid-email')) {
-        setError(t.errInvalidEmail);
-      } else {
-        setError(err?.message || t.errGeneric);
-      }
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }

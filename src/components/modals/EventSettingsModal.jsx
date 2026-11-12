@@ -22,6 +22,7 @@
 
 import { X } from 'lucide-react';
 import { OwnerNamesEditor } from '../OwnerNamesEditor';
+import { EventDateEditor } from '../EventDateEditor';
 // 2026-08-23 — Manus P2c: owner-facing publish trigger for the
 // guestExperience/public projection. Pairs with the publishGuestExperience
 // Cloud Function deployed in P2a.
@@ -33,6 +34,7 @@ export function EventSettingsModal({
   currentUser,
   currentEvent,
   onToast,
+  onSaveDate,
 }) {
   if (!open) return null;
   return (
@@ -66,6 +68,14 @@ export function EventSettingsModal({
             onToast={onToast}
           />
         </section>
+
+        {onSaveDate && (
+          <EventDateEditor
+            date={currentEvent?.date || ''}
+            onSave={onSaveDate}
+            onToast={onToast}
+          />
+        )}
 
         {/* 2026-08-23 — Manus P2c: guest-experience publish trigger.
             One button writes the privacy-filtered public doc that

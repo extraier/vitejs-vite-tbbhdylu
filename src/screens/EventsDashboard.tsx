@@ -8,6 +8,7 @@ import { EventRenameModal } from '../components/modals/EventRenameModal';
 import { EventDeleteModal } from '../components/modals/EventDeleteModal';
 import { NotOnboardedEmailModal } from '../components/modals/NotOnboardedEmailModal';
 import { useUserProfile } from '../hooks/useUserProfile';
+import { UserMenu } from '../components/UserMenu';
 import { useState, useEffect, useRef } from 'react';
 
 // 2026-07-21 — Three premium features unlockable via social proof
@@ -33,7 +34,7 @@ interface EventsDashboardProps {
   vendors?: any[];
   onSelectVendor?: (v: any) => void;
   onGoDiscover?: () => void;
-  user?: { uid: string } | null;
+  user?: { uid: string; email?: string; displayName?: string } | null;
   currentEvent?: any;
   onOpenChat?: (v: any) => void;
   // 2026-07-30 — purchaseModalOpen state lifted to App.jsx. The
@@ -57,6 +58,7 @@ interface EventsDashboardProps {
   // write. The dashboard doesn't own its own toast hook; we
   // delegate to the parent's `showToast`.
   onToast?: (msg: string) => void;
+  onOpenProfile?: () => void;
 }
 
 export function EventsDashboard({
@@ -75,6 +77,7 @@ export function EventsDashboard({
   onClearCurrentEvent,
   onOpenEventSettings,
   onToast,
+  onOpenProfile,
 }: EventsDashboardProps) {
   // 2026-07-30 — useUserProfile hook replaces the inline
   // unlocks + tier subscriptions added in Phases 2-4. The hook
@@ -101,7 +104,16 @@ export function EventsDashboard({
 
 
   return (
-    <div className="max-w-4xl mx-auto mt-12 p-4 animate-in fade-in zoom-in duration-300">
+    <div className="max-w-4xl mx-auto mt-6 p-4 animate-in fade-in zoom-in duration-300">
+      {user ? (
+        <div className="flex justify-end mb-4">
+          <UserMenu
+            user={user}
+            onOpenProfile={() => onOpenProfile?.()}
+            onUpgrade={() => onPurchaseModalOpen?.()}
+          />
+        </div>
+      ) : null}
       <div className="text-center mb-12">
         <Heart className="w-16 h-16 text-rose-500 mx-auto mb-4 fill-rose-100" />
         <h1 className="text-4xl font-black text-slate-800 mb-2">Save The Day · 總大堂</h1>
@@ -215,7 +227,9 @@ export function EventsDashboard({
             <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mb-2 shadow-sm">
               <Plus className="w-5 h-5 text-rose-500" />
             </div>
-            <h3 className="text-base font-bold text-slate-800 mb-2">➕ 再建立一個婚禮</h3>
+            <h3 className="text-base font-bold text-slate-800 mb-2">
+              {events.length === 0 ? '➕ 建立你的婚禮' : '➕ 再建立一個婚禮'}
+            </h3>
             <input
               type="text"
               required
@@ -387,7 +401,7 @@ function EventCard({ event, onSelect, onRename, onDelete, onOpenSettings }: Even
         {event.name}
       </h3>
       <p className="text-sm text-slate-500 flex items-center gap-1 mb-4">
-        <Calendar className="w-4 h-4" /> 預定日期: {event.date}
+        <Calendar className="w-4 h-4" /> 預定日期: {event.date || '未設定'}
       </p>
       <div className="flex justify-between items-center border-t border-slate-100 pt-4 mt-4">
         <span className="text-xs font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded">

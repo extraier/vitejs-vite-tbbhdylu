@@ -860,7 +860,7 @@ export default function App() {
     assignedContactId: '',
     customTitle: '',
     venue: '',
-    dueDate: '2026-12-31',
+    dueDate: '',
     // 2026-07-17 — optional HH:MM for finer-grained deadlines (e.g.
     // "下午茶 14:30"). Empty string = date-only (existing behavior).
     // Format will match <input type="time"> emission: "HH:MM".
@@ -2927,6 +2927,10 @@ export default function App() {
       chosenHelperName = newTaskForm.assignedHelperName || '';
     }
 
+    if (!newTaskForm.dueDate) {
+      showToast('請先選擇任務日期');
+      return;
+    }
     const newTask = {
       eventId: currentEvent.id,
       title,
@@ -2971,7 +2975,7 @@ export default function App() {
       assignedContactId: '',
       customTitle: '',
       venue: '',
-      dueDate: '2026-12-31',
+      dueDate: '',
       dueTime: '',
       estimatedCost: '',
       taskType: 'vendor',
@@ -3024,6 +3028,17 @@ export default function App() {
     setCurrentEvent({ ...currentEvent, budget: Number(newBudget) });
     showToast('✅ 總預算已更新');
     return Number(newBudget);
+  };
+
+  const handleSaveEventDate = async (date) => {
+    const target = eventSettingsTarget;
+    const ownerUid = target?._ownerUid || dataOwnerUid;
+    if (!user || !target?.id || !ownerUid) return;
+    const eventRef = doc(db, 'artifacts', appId, 'users', ownerUid, 'events', target.id);
+    const next = date || '';
+    await updateDoc(eventRef, { date: next });
+    setEventSettingsTarget((prev) => (prev && prev.id === target.id ? { ...prev, date: next } : prev));
+    setCurrentEvent((prev) => (prev && prev.id === target.id ? { ...prev, date: next } : prev));
   };
 
   // Restore 2026-07-02: inline edit task cost from CoupleChecklist
@@ -4729,6 +4744,7 @@ export default function App() {
                 // path so the user sees the success message in the
                 // same surface where they triggered the action.
                 onOpenEventSettings={(ev) => setEventSettingsTarget(ev)}
+                onOpenProfile={() => setCurrentView('profile')}
                 onToast={showToast}
                 onOpenChat={(vendor) =>
                   handleOpenChat({
@@ -5739,6 +5755,7 @@ export default function App() {
             currentUser={{ ...user, uid: ownerUid }}
             currentEvent={eventSettingsTarget}
             onToast={showToast}
+            onSaveDate={handleSaveEventDate}
             onClose={() => {
               setEventSettingsTarget(null);
               if (openedFromTab) {

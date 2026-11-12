@@ -92,9 +92,11 @@ describe('OwnerNamesEditor', () => {
   it('disables the save button when nothing has changed', () => {
     render(<OwnerNamesEditor {...baseProps} />);
     // Both inputs are pre-filled with the existing values, so
-    // trimming them yields the same strings — save stays disabled.
-    const save = screen.getByRole('button', { name: '儲存' });
+    // trimming them yields the same strings — save stays disabled
+    // and the label says the names are already stored.
+    const save = screen.getByRole('button', { name: '已儲存' });
     expect(save.disabled).toBe(true);
+    expect(screen.getByText('已儲存。可以喺大日流程指派俾自己')).toBeTruthy();
   });
 
   it('enables the save button when the user types a new name', () => {

@@ -6,7 +6,6 @@
 export function buildNewEventFields(name, ownerUid, now = Date.now()) {
   return {
     name,
-    date: '2027-01-01',
     tier: 'free',
     budget: 350000,
     coOwners: [ownerUid],
