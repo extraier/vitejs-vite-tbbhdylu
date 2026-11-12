@@ -12,6 +12,7 @@ import { X, UserPlus, Users, Mail, Trash2, Check, RefreshCw, Clock, ChevronRight
 import { collection, query, onSnapshot, orderBy, doc, deleteDoc } from 'firebase/firestore';
 import { sendSignInLinkToEmail } from 'firebase/auth';
 import { db, appId, auth } from '../../lib/firebase';
+import { helperInviteContinueUrl } from '../../lib/helperInviteLink';
 import {
   helpersApi,
   defaultHelperPerms,
@@ -160,10 +161,9 @@ export function HelperManager({ ownerUid, currentEvent, onClose }) {
       // when they click it. The link lands on
       // `https://savetheday.io/?__heroinvite=1` (see useAuth below).
       //
-      // We persist the email locally so the AuthScreen useEffect can
-      // call signInWithEmailLink(email, link) without prompting the
-      // helper to re-enter the address — otherwise the link click
-      // would only land them on a blank screen.
+      // The invitee opens the link on their own device, so the owner's
+      // localStorage cannot supply the email. The continue URL carries
+      // it, and the login screen asks if an older link omitted it.
       if (inviteRes?.pendingEmailRegistration) {
         // 2026-07-18 — Try the rich SMTP email FIRST. The new
         // sendHelperInviteEmail cloud function renders a branded
@@ -222,7 +222,10 @@ export function HelperManager({ ownerUid, currentEvent, onClose }) {
             auth,
             inviteEmail.trim().toLowerCase(),
             {
-              url: 'https://savetheday.io/?__heroinvite=1',
+              url: helperInviteContinueUrl(
+                'https://savetheday.io',
+                inviteEmail.trim().toLowerCase(),
+              ),
               // 2026-07-18 — DO NOT pass `handleCodeInApp: false`.
               // Firebase REQUIRES `handleCodeInApp: true` for
               // sendSignInLinkToEmail, even if it feels weird —
@@ -300,7 +303,10 @@ export function HelperManager({ ownerUid, currentEvent, onClose }) {
           // signed-into.
           if (!copyLink) {
             setCopyLink(
-              `https://savetheday.io/?__heroinvite=1&email=${encodeURIComponent(inviteEmail.trim().toLowerCase())}`,
+              helperInviteContinueUrl(
+                'https://savetheday.io',
+                inviteEmail.trim().toLowerCase(),
+              ),
             );
           }
         }

@@ -55,6 +55,10 @@ const STRINGS = {
     errGeneric: '登入失敗, 請稍後再試',
     errGoogle: 'Google 登入失敗',
     errGuest: '訪客登入失敗',
+    emailLinkTitle: '邀請連結',
+    emailLinkBody: '請輸入收到邀請嘅電郵，以完成登入。',
+    emailLinkCta: '完成邀請登入',
+    errEmailLink: '邀請連結登入失敗，請確認電郵同連結仍然有效',
   },
   en: {
     tagline:
@@ -92,6 +96,10 @@ const STRINGS = {
     errGeneric: 'Sign-in failed. Please try again.',
     errGoogle: 'Google sign-in failed',
     errGuest: 'Guest sign-in failed',
+    emailLinkTitle: 'Invitation link',
+    emailLinkBody: 'Enter the email address that received the invite to finish signing in.',
+    emailLinkCta: 'Finish invite sign-in',
+    errEmailLink: 'Invite sign-in failed. Check the email and that the link is still valid.',
   },
 };
 
@@ -114,7 +122,7 @@ const STRINGS = {
 //   readOnlyEmail     — when true, the email input is read-only
 //                       (prevents typos from creating a wrong account)
 
-export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup, defaultEmail, defaultMode, inviteMessage, readOnlyEmail }) {
+export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup, defaultEmail, defaultMode, inviteMessage, readOnlyEmail, emailLinkPending, onCompleteEmailLink }) {
   const [lang, setLang] = useState('zh'); // 'zh' | 'en'
   const t = STRINGS[lang];
 
@@ -173,6 +181,23 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
       } else {
         setError(err?.message || t.errGeneric);
       }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitEmailLink = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (!email || !email.includes('@')) {
+      setError(t.errInvalidEmail);
+      return;
+    }
+    setBusy(true);
+    try {
+      await onCompleteEmailLink(email);
+    } catch {
+      setError(t.errEmailLink);
     } finally {
       setBusy(false);
     }
@@ -292,6 +317,31 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               <div className="text-xs font-bold text-rose-600 mb-1">💍 婚禮共同籌備邀請</div>
               <div className="text-sm text-slate-700 leading-relaxed">{inviteMessage}</div>
             </div>
+          )}
+
+          {emailLinkPending && onCompleteEmailLink && (
+            <form onSubmit={submitEmailLink} className="mb-5 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-left space-y-2">
+              <div className="text-xs font-bold text-emerald-800">{t.emailLinkTitle}</div>
+              <p className="text-sm text-emerald-900 leading-relaxed">{t.emailLinkBody}</p>
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                aria-label={t.emailLinkTitle}
+                placeholder={t.emailPlaceholder}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={busy}
+                className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+              />
+              <button
+                type="submit"
+                disabled={busy}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold py-2.5 rounded-lg text-sm"
+              >
+                {t.emailLinkCta}
+              </button>
+            </form>
           )}
 
           {/* Google button */}

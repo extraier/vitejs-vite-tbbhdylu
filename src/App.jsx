@@ -28,6 +28,8 @@ import {
      } from 'firebase/firestore';
 
 import { db, appId } from './lib/firebase';
+import { buildNewEventFields } from './lib/newEvent';
+import { nextVendorView } from './lib/vendorRoute';
 
 // ─── onSnapshot import retention (defensive, no longer load-bearing) ────
 // Historical context: importing `onSnapshot` from `firebase/firestore` used
@@ -233,6 +235,8 @@ export default function App() {
     // handler at App.jsx 2507 sees `!user` and fails with
     // "登入狀態已過期" — exactly what the previous screenshot showed.
     acceptAnonymousSession,
+    emailLinkPending,
+    completeEmailLinkSignIn,
   } = useAuth();
   // 2026-07-26 — Partner-invite pre-fill. Detects ?t=<token> in URL,
   // calls previewPartnerInvite CF, and exposes the partnerEmail + eventName
@@ -320,21 +324,26 @@ export default function App() {
   // during the first render (which would trigger a TDZ crash).
   const _userUnlocksForUpload = userUnlocks;
 
-  // 2026-07-15 — auto-route vendors to their dashboard. When the user
-  // signs in and has the `vendor: true` custom claim (set by
-  // applyAsVendor), we flip userRole to 'vendor' and route them to the
-  // vendor dashboard. Without this, returning vendors would land on
-  // the couple events-dashboard and see the "I'm a Vendor" CTA again.
-  //
-  // The role check also runs on every isVendor change, so when the
-  // claim flips true mid-session (after submitting the wizard) we
-  // auto-route instead of leaving the user stuck on a stale screen.
+  // Returning vendors land on the vendor dashboard instead of the
+  // couple events list. useAuth clears isVendor while it refreshes the
+  // ID token, then sets it again. That refresh must not pull a vendor
+  // off the profile editor, onboarding, or an inquiry thread.
+  const vendorRouteRef = useRef({ uid: null });
   useEffect(() => {
-    if (!user || user.isAnonymous) return;
+    if (!user || user.isAnonymous) {
+      vendorRouteRef.current.uid = null;
+      return;
+    }
     if (!isVendor) return;
-    setUserRole('vendor');
-    if (currentView !== 'vendor-dashboard') {
-      setCurrentView('vendor-dashboard');
+    const decision = nextVendorView({
+      isVendor: true,
+      alreadyRouted: vendorRouteRef.current.uid === user.uid,
+      currentView,
+    });
+    vendorRouteRef.current.uid = user.uid;
+    setUserRole(decision.role);
+    if (decision.view !== currentView) {
+      setCurrentView(decision.view);
     }
   }, [isVendor, user]);
 
@@ -2791,20 +2800,7 @@ export default function App() {
       setShowSignUpPrompt(true);
       return;
     }
-    const newEvent = {
-      name: newEventName,
-      date: '2027-01-01',
-      tier: 'free',
-      budget: 350000,
-      // 2026-07-26 — Co-owners (couples/partners). The creator's
-      // uid is always the first entry. When a partner accepts an
-      // invite, the partner's uid gets pushed onto this array
-      // (see acceptPartnerInvite Cloud Function). Used by the
-      // Firestore rules (isEventCoOwner, isCoOwnerOfEventDoc) to
-      // grant equal CRUD access to the partner.
-      coOwners: [user.uid],
-      createdAt: Date.now(),
-    };
+    const newEvent = buildNewEventFields(newEventName, user.uid);
     const docRef = await addDoc(
       collection(db, 'artifacts', appId, 'users', user.uid, 'events'),
       newEvent,
@@ -2832,13 +2828,7 @@ export default function App() {
       // user.uid is the SAME UID we had pre-link — Firebase preserved
       // it during linkWithCredential. So the write goes to the same
       // path; nothing to migrate.
-      const newEvent = {
-        name,
-        date: '2027-01-01',
-        tier: 'free',
-        budget: 350000,
-        createdAt: Date.now(),
-      };
+      const newEvent = buildNewEventFields(name, user.uid);
       const docRef = await addDoc(
         collection(db, 'artifacts', appId, 'users', user.uid, 'events'),
         newEvent,
@@ -4097,6 +4087,8 @@ export default function App() {
             : undefined
         }
         readOnlyEmail={Boolean(partnerInvite)}
+        emailLinkPending={emailLinkPending}
+        onCompleteEmailLink={completeEmailLinkSignIn}
       />
     );
   }
