@@ -1,0 +1,32 @@
+import { describe, expect, it } from 'vitest';
+import { authEntryState, parseAuthEntry } from './authEntry';
+
+describe('parseAuthEntry', () => {
+  it('opens vendor sign-up from the hash, including a slug kept inside the hash', () => {
+    expect(parseAuthEntry('#signup-as-vendor')).toEqual({ kind: 'vendor', slug: '' });
+    expect(parseAuthEntry('#signup-as-vendor?slug=abc-studio')).toEqual({
+      kind: 'vendor',
+      slug: 'abc-studio',
+    });
+  });
+
+  it('opens couple sign-up from #signup', () => {
+    expect(parseAuthEntry('#signup')).toEqual({ kind: 'signup', slug: '' });
+  });
+
+  it('leaves the sign-in card alone for an empty or unknown hash', () => {
+    expect(parseAuthEntry('')).toEqual({ kind: null, slug: '' });
+    expect(parseAuthEntry('#login')).toEqual({ kind: null, slug: '' });
+  });
+});
+
+describe('authEntryState', () => {
+  it('maps a fresh vendor hash onto the vendor card', () => {
+    expect(authEntryState('#signup-as-vendor?slug=abc').signingUpAs).toBe('vendor');
+  });
+
+  it('maps a fresh #signup hash onto couple sign-up mode', () => {
+    expect(authEntryState('#signup').loginMode).toBe('signup');
+    expect(authEntryState('#signup').signingUpAs).toBeNull();
+  });
+});

@@ -31,6 +31,7 @@
 import { useState } from 'react';
 import { Briefcase, Mail, Lock, Loader2, Globe } from 'lucide-react';
 import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
+import { readUiLang, writeUiLang } from '../lib/uiLang';
 
 const STRINGS = {
   zh: {
@@ -118,8 +119,12 @@ function clearVendorSignupIntent() {
 }
 
 export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
-  const [lang, setLang] = useState('zh');
+  const [lang, setLang] = useState(readUiLang);
   const t = STRINGS[lang];
+  const chooseLang = (next) => {
+    writeUiLang(next);
+    setLang(next);
+  };
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -203,7 +208,7 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
         <div className="inline-flex bg-white rounded-full shadow-sm border border-slate-200 p-1 text-xs font-bold">
           <button
             type="button"
-            onClick={() => setLang('zh')}
+            onClick={() => chooseLang('zh')}
             aria-pressed={lang === 'zh'}
             className={`px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
               lang === 'zh' ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:text-slate-700'
@@ -213,7 +218,7 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
           </button>
           <button
             type="button"
-            onClick={() => setLang('en')}
+            onClick={() => chooseLang('en')}
             aria-pressed={lang === 'en'}
             className={`px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
               lang === 'en' ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:text-slate-700'
@@ -247,7 +252,8 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
             <img
               src="https://www.svgrepo.com/show/475656/google-color.svg"
               className="w-5 h-5"
-              alt="Google"
+              alt=""
+              aria-hidden="true"
             />
             {t.googleCta}
           </button>
@@ -407,9 +413,23 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
         </div>
 
         <p className="text-center text-xs text-slate-500 mt-6">
-          {lang === 'zh'
-            ? '註冊即代表你同意儲存你的商戶資料。'
-            : 'By signing up you agree to our storing your business information.'}
+          {lang === 'zh' ? (
+            <>
+              註冊即代表你同意儲存你的商戶資料。詳見{' '}
+              <a href="/vendor-terms" className="underline" target="_blank" rel="noreferrer">商戶服務條款</a>
+              {' '}同{' '}
+              <a href="/privacy" className="underline" target="_blank" rel="noreferrer">私隱</a>
+              。
+            </>
+          ) : (
+            <>
+              By signing up you agree to our storing your business information. See{' '}
+              <a href="/vendor-terms" className="underline" target="_blank" rel="noreferrer">vendor terms</a>
+              {' '}and{' '}
+              <a href="/privacy" className="underline" target="_blank" rel="noreferrer">privacy</a>
+              .
+            </>
+          )}
         </p>
       </div>
     </div>

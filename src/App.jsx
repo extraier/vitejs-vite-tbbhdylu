@@ -30,6 +30,8 @@ import {
 import { db, appId } from './lib/firebase';
 import { buildNewEventFields } from './lib/newEvent';
 import { nextVendorView } from './lib/vendorRoute';
+import { authEntryState } from './lib/authEntry';
+import { legalNoticeKey } from './lib/legalNotice';
 
 // ─── onSnapshot import retention (defensive, no longer load-bearing) ────
 // Historical context: importing `onSnapshot` from `firebase/firestore` used
@@ -101,6 +103,7 @@ import { useGuestExperience } from './hooks/useGuestExperience';
 import { useGuestPortalBootstrap } from './hooks/useGuestPortalBootstrap';
 
 import { LoginScreen } from './screens/LoginScreen';
+import { LegalNotice } from './screens/LegalNotice';
 import { VendorSignupCard } from './components/VendorSignupCard';
 import { EventsDashboard } from './screens/EventsDashboard';
 import { CoupleChecklist } from './screens/CoupleChecklist';
@@ -283,11 +286,25 @@ export default function App() {
   // it bails on isAnonymous, cleared by handleLinkGuestAccount on success.
   const [pendingCreateEventName, setPendingCreateEventName] = useState(null);
 
-  // 2026-07-14 — 'signing up as' toggle. null = regular login, 'vendor' =
-  // show the dedicated VendorSignupCard instead. Set when the user clicks
-  // the green 'I'm a Vendor' CTA on the public main page, cleared when
-  // they click 'back to sign in' on the vendor card.
-  const [signingUpAs, setSigningUpAs] = useState(null);
+  // 'signing up as' toggle. null = regular login, 'vendor' = the vendor
+  // card. A fresh load of #signup-as-vendor (including ?slug= inside the
+  // hash) must open that card before paint. Later hash changes, including
+  // the in-page links, follow the same mapping.
+  const [signingUpAs, setSigningUpAs] = useState(() => (
+    authEntryState(typeof window !== 'undefined' ? window.location.hash : '').signingUpAs
+  ));
+  const [coupleSignupFromHash, setCoupleSignupFromHash] = useState(() => (
+    authEntryState(typeof window !== 'undefined' ? window.location.hash : '').loginMode === 'signup'
+  ));
+  useEffect(() => {
+    const applyAuthEntry = () => {
+      const next = authEntryState(window.location.hash);
+      setSigningUpAs(next.signingUpAs);
+      setCoupleSignupFromHash(next.loginMode === 'signup');
+    };
+    window.addEventListener('hashchange', applyAuthEntry);
+    return () => window.removeEventListener('hashchange', applyAuthEntry);
+  }, []);
 
   // 2026-07-14 — defensive modal close. If the user signs in (Google or
   // email) WHILE the signup prompt is open, the modal stays open unless
@@ -4036,6 +4053,12 @@ export default function App() {
   // module. While the FindSeatPage chunk is fetched, render a
   // full-page "載入緊…" placeholder so the screen doesn't
   // flash empty / show stale content.
+  if (typeof window !== 'undefined' && legalNoticeKey(window.location.pathname)) {
+    return (
+      <LegalNotice page={legalNoticeKey(window.location.pathname)} />
+    );
+  }
+
   if (typeof window !== 'undefined'
       && new URLSearchParams(window.location.search).has('find-seat')) {
     return (
@@ -4067,7 +4090,10 @@ export default function App() {
           onEmailRegister={registerWithEmail}
           onBack={() => {
             try { sessionStorage.removeItem('postLoginIntent'); } catch {}
+            const next = window.location.pathname + window.location.search;
+            window.history.pushState(null, '', next);
             setSigningUpAs(null);
+            setCoupleSignupFromHash(false);
           }}
         />
       );
@@ -4080,7 +4106,7 @@ export default function App() {
         onContinueAsGuest={continueAsGuest}
         onVendorSignup={() => setSigningUpAs('vendor')}
         defaultEmail={partnerInvite?.partnerEmail}
-        defaultMode={partnerInvite ? 'signup' : undefined}
+        defaultMode={partnerInvite ? 'signup' : (coupleSignupFromHash ? 'signup' : undefined)}
         inviteMessage={
           partnerInvite
             ? `你已被邀請一同籌備「${partnerInvite.eventName}」婚禮。請用 ${partnerInvite.partnerEmail} 建立帳戶以加入。\n(You've been invited to co-plan the "${partnerInvite.eventName}" wedding. Sign up with ${partnerInvite.partnerEmail} to join.)`

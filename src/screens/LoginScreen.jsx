@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
+import { readUiLang, writeUiLang } from '../lib/uiLang';
 import {
   Heart,
   Mail,
@@ -23,6 +24,7 @@ const STRINGS = {
     tagline:
       '婚禮一站式管理：實時 QR Code 入席、賓客相片收集箱、預算管理。新人、兄弟姊妹、商戶通用平台。',
     googleCta: '使用 Google 帳號登入',
+    googleSignupCta: '使用 Google 帳號註冊',
     emailPlaceholder: '電郵地址',
     passwordPlaceholder: '密碼',
     passwordSignupPlaceholder: '設定密碼 (至少 8 字元，至少 3 種字元)',
@@ -64,6 +66,7 @@ const STRINGS = {
     tagline:
       "One bilingual (中文 + English) wedding platform for Hong Kong and Taiwan. Live QR check-in, photo drop, and budget tracking for couples, helpers, and vendors.",
     googleCta: 'Sign in with Google',
+    googleSignupCta: 'Sign up with Google',
     emailPlaceholder: 'Email address',
     passwordPlaceholder: 'Password',
     passwordSignupPlaceholder: 'Min 8 chars, 3 of 4 categories',
@@ -123,8 +126,12 @@ const STRINGS = {
 //                       (prevents typos from creating a wrong account)
 
 export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup, defaultEmail, defaultMode, inviteMessage, readOnlyEmail, emailLinkPending, onCompleteEmailLink }) {
-  const [lang, setLang] = useState('zh'); // 'zh' | 'en'
+  const [lang, setLang] = useState(readUiLang); // 'zh' | 'en'
   const t = STRINGS[lang];
+  const chooseLang = (next) => {
+    writeUiLang(next);
+    setLang(next);
+  };
 
   const [mode, setMode] = useState(defaultMode || 'signin'); // 'signin' | 'signup'
   const [email, setEmail] = useState(defaultEmail || '');
@@ -230,6 +237,13 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     if (onVendorSignup) onVendorSignup();
   };
 
+  const openVendorSignup = () => {
+    handleVendorCta();
+    if (window.location.hash !== '#signup-as-vendor') {
+      window.location.hash = '#signup-as-vendor';
+    }
+  };
+
   const handleGuest = async () => {
     if (!onContinueAsGuest) return;
     setError(null);
@@ -268,7 +282,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
         <div className="inline-flex bg-white rounded-full shadow-sm border border-slate-200 p-1 text-xs font-bold">
           <button
             type="button"
-            onClick={() => setLang('zh')}
+            onClick={() => chooseLang('zh')}
             aria-pressed={lang === 'zh'}
             className={`px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
               lang === 'zh' ? 'bg-rose-500 text-white' : 'text-slate-500 hover:text-slate-700'
@@ -278,7 +292,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           </button>
           <button
             type="button"
-            onClick={() => setLang('en')}
+            onClick={() => chooseLang('en')}
             aria-pressed={lang === 'en'}
             className={`px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
               lang === 'en' ? 'bg-rose-500 text-white' : 'text-slate-500 hover:text-slate-700'
@@ -307,7 +321,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               mobile still see the brand subtitle — just at the
               bottom where there's room. */}
           <p className="hidden sm:block text-sm font-bold text-slate-500 tracking-widest uppercase mb-6">
-            Save The Day · 婚禮一站式管理
+            {lang === 'zh' ? 'Save The Day · 婚禮一站式管理' : 'Save The Day · All-in-one wedding management'}
           </p>
           <p className="text-slate-500 mb-6 text-sm leading-relaxed">{t.tagline}</p>
 
@@ -353,9 +367,10 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
             <img
               src="https://www.svgrepo.com/show/475656/google-color.svg"
               className="w-5 h-5"
-              alt="Google"
+              alt=""
+              aria-hidden="true"
             />
-            {t.googleCta}
+            {mode === 'signup' ? t.googleSignupCta : t.googleCta}
           </button>
 
           {/* OR divider */}
@@ -547,7 +562,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           </div>
           <a
             href="#signup-as-vendor"
-            onClick={(e) => { e.preventDefault(); handleVendorCta(); }}
+            onClick={openVendorSignup}
             className="w-full inline-flex items-center justify-between gap-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold py-3 px-4 rounded-xl transition-colors text-sm"
           >
             <span className="flex items-center gap-2">
@@ -609,8 +624,8 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
                   : 'Join the directory to reach HK couples. Sign up first, then complete your vendor profile.'}
               </p>
               <a
-                href="#signup"
-                onClick={(e) => { e.preventDefault(); setMode('signup'); }}
+                href="#signup-as-vendor"
+                onClick={openVendorSignup}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold transition-colors"
               >
                 {lang === 'zh' ? '建立商戶帳號 →' : 'Create vendor account →'}
@@ -641,7 +656,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
         </section>
 
         <p className="text-center text-xs text-slate-400 mt-8">
-          © 2026 Save The Day · 婚禮一站式管理
+          © 2026 Save The Day · {lang === 'zh' ? '婚禮一站式管理' : 'All-in-one wedding management'}
         </p>
       </div>
     </div>
