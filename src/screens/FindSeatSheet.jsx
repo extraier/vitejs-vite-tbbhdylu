@@ -13,8 +13,8 @@
 // the new random token).
 
 import { useState, useEffect } from 'react';
-import { doc, writeBatch } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { doc, setDoc, writeBatch } from 'firebase/firestore';
+import { db, appId } from '../lib/firebase';
 import { renderUrlToPngDataUrl } from '../lib/qrCode';
 import {
   generateFindSeatToken,
@@ -22,6 +22,9 @@ import {
   formatTokenExpiry,
   tokenTimeRemaining,
   buildPublicSnapshot,
+  findSeatAssignmentsPath,
+  publicSeatingPath,
+  seatingPublisherPath,
   buildFindSeatUrl,
   buildRedactedAssignments,
 } from '../lib/findSeatPure';
@@ -48,30 +51,29 @@ function FindSeatSheet({
     try {
       const newToken = generateFindSeatToken();
       const expiry = defaultTokenExpiry();
-      const snap = buildPublicSnapshot(eventId, ownerUid, meta, tables, expiry);
-      // Stamp the chart snapshot (V1) + parent doc + redacted
-      // assignment rows (V2). All three writes go through one
-      // writeBatch so they either all land or none does — guests
-      // never see a half-state where the chart is up but name
-      // search returns 0 results.
+      const snap = buildPublicSnapshot(eventId, meta, tables, expiry);
+      const expiresAtMs = expiry.getTime();
+      // Publisher doc is written first so the public-doc rules can
+      // check the owner without storing ownerUid on the public chart.
+      await setDoc(doc(db, seatingPublisherPath(newToken, appId)), {
+        ownerUid,
+        eventId,
+        expiresAt: expiresAtMs,
+      });
       const guestsById = Object.fromEntries(guests.map((g) => [g.id, g]));
       const tablesById = Object.fromEntries(tables.map((t) => [t.id, t]));
       const redacted = buildRedactedAssignments(assignments, guestsById, tablesById);
       const batch = writeBatch(db);
-      batch.set(doc(db, `publicSeating/${newToken}`), snap);
-      batch.set(
-        doc(db, `findSeatAssignments/${newToken}`),
-        { ownerUid, expiresAt: expiry },
-      );
+      batch.set(doc(db, publicSeatingPath(newToken, appId)), snap);
+      batch.set(doc(db, findSeatAssignmentsPath(newToken, undefined, appId)), {
+        expiresAt: expiresAtMs,
+      });
       for (const row of redacted) {
-        batch.set(
-          doc(db, `findSeatAssignments/${newToken}/${row.guestId}`),
-          {
-            name: row.name,
-            tableId: row.tableId,
-            tableLabel: row.tableLabel,
-          },
-        );
+        batch.set(doc(db, findSeatAssignmentsPath(newToken, row.guestId, appId)), {
+          name: row.name,
+          tableId: row.tableId,
+          tableLabel: row.tableLabel,
+        });
       }
       await batch.commit();
       setToken(newToken);

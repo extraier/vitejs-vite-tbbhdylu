@@ -708,6 +708,7 @@ export const searchVendorsByName = onCall({ cors: true, region: "us-central1" },
 // the "User UID" column for the row matching the email.
 
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { mergeAdminClaim, pageHasAdmin } from './adminClaims';
 
 // Restore 2026-07-02: re-export sendInvitations (defined in invitations.ts)
 export * from './invitations';
@@ -783,7 +784,8 @@ export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (r
   }
 
   const auth = getAdminAuth();
-  await auth.setCustomUserClaims(uid, { admin });
+  const target = await auth.getUser(uid);
+  await auth.setCustomUserClaims(uid, mergeAdminClaim(target.customClaims, admin));
   await auth.revokeRefreshTokens(uid);
   return { ok: true, uid, admin };
 });
@@ -791,20 +793,27 @@ export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (r
 // selfPromoteAdmin — bootstrap call when NO admin exists yet.
 // Hard-gated: only works if there are currently zero admins in the
 // project. Once any admin exists, this function refuses (use grantAdmin).
-export const selfPromoteAdmin = onCall({ cors: true, region: "us-central1" }, async (req) => {
+export const selfPromoteAdmin = onCall({ cors: true, region: "us-central1", timeoutSeconds: 300 }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
 
   const auth = getAdminAuth();
-  // Check if any admin already exists.
-  const list = await auth.listUsers(1000);
-  const anyAdmin = list.users.some((u) => u.customClaims && (u.customClaims as { admin?: boolean }).admin === true);
-  if (anyAdmin) {
-    throw new HttpsError('already-exists', 'An admin already exists. Ask them to grant you admin via grantAdmin.');
-  }
+  // Page through every Auth user. listUsers returns at most 1000,
+  // and anonymous guest sessions make that page easy to fill.
+  let pageToken: string | undefined;
+  do {
+    const list = pageToken
+      ? await auth.listUsers(1000, pageToken)
+      : await auth.listUsers(1000);
+    if (pageHasAdmin(list.users)) {
+      throw new HttpsError('already-exists', 'An admin already exists. Ask them to grant you admin via grantAdmin.');
+    }
+    pageToken = list.pageToken;
+  } while (pageToken);
 
-  await auth.setCustomUserClaims(req.auth.uid, { admin: true });
+  const caller = await auth.getUser(req.auth.uid);
+  await auth.setCustomUserClaims(req.auth.uid, mergeAdminClaim(caller.customClaims, true));
   await auth.revokeRefreshTokens(req.auth.uid);
   return { ok: true, uid: req.auth.uid, bootstrapped: true };
 });

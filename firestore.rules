@@ -384,7 +384,8 @@ match /{path=**}/events/{eventId} {
         guestLink(ownerUid).data.ownerUid == ownerUid &&
         guestLink(ownerUid).data.eventId == eventId &&
         guestLink(ownerUid).data.redeemedByUid == request.auth.uid &&
-        guestLink(ownerUid).data.expiresAt > request.time;
+        guestLink(ownerUid).data.expiresAt > request.time &&
+        guestLink(ownerUid).data.get('revoked', false) != true;
     }
 
     // A helper has been invited to help with (ownerUid, eventId). Returns the
@@ -516,13 +517,27 @@ match /{path=**}/events/{eventId} {
       // signed-in uid. update/delete are disabled (one-shot
       // generation; operators regenerate by stamping a new token
       // rather than overwriting an expired one).
+      // Publisher binding is owner-only. The public chart and the
+      // redacted name rows do not store ownerUid. Writes check this
+      // doc, which is created before the public docs.
+      match /seatingPublishers/{token} {
+        allow read: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+        allow create: if isSignedIn()
+          && request.resource.data.keys().hasAll(['ownerUid', 'eventId', 'expiresAt'])
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.eventId is string
+          && request.resource.data.expiresAt is int;
+        allow update, delete: if false;
+      }
+
       match /publicSeating/{token} {
-        allow read: if resource.data.expiresAt > request.time;
+        allow read: if resource.data.expiresAt is int
+          && resource.data.expiresAt > request.time.toMillis();
         allow create: if request.auth != null
-                       && request.resource.data.keys().hasAll(
-                         ['eventId','ownerUid','expiresAt','canvas','tables']
-                       )
-                       && request.resource.data.ownerUid == request.auth.uid;
+          && request.resource.data.keys().hasAll(['eventId', 'expiresAt', 'canvas', 'tables'])
+          && !request.resource.data.keys().hasAny(['ownerUid'])
+          && request.resource.data.expiresAt is int
+          && get(/databases/$(database)/documents/artifacts/$(appId)/seatingPublishers/$(token)).data.ownerUid == request.auth.uid;
         allow update, delete: if false;
       }
 
@@ -547,25 +562,21 @@ match /{path=**}/events/{eventId} {
       //   Write gate (children): same ownerUid as the parent doc.
       //     We do this client-side via writeBatch in FindSeatSheet.
       match /findSeatAssignments/{token} {
-        allow read: if resource.data.expiresAt > request.time;
+        allow read: if resource.data.expiresAt is int
+          && resource.data.expiresAt > request.time.toMillis();
         allow create: if request.auth != null
-                       && request.resource.data.keys().hasAll(
-                         ['ownerUid','expiresAt']
-                       )
-                       && request.resource.data.ownerUid == request.auth.uid;
+          && request.resource.data.keys().hasAll(['expiresAt'])
+          && !request.resource.data.keys().hasAny(['ownerUid'])
+          && request.resource.data.expiresAt is int
+          && get(/databases/$(database)/documents/artifacts/$(appId)/seatingPublishers/$(token)).data.ownerUid == request.auth.uid;
         allow update, delete: if false;
 
         match /{guestId} {
-          allow read: if get(/databases/$(database)/documents/findSeatAssignments/$(token)).data.expiresAt > request.time;
-          // The owner stamps these from the FindSeatSheet after
-          // writing the publicSeating snapshot. The auth.uid must
-          // match the parent doc's ownerUid.
+          allow read: if get(/databases/$(database)/documents/artifacts/$(appId)/findSeatAssignments/$(token)).data.expiresAt is int
+            && get(/databases/$(database)/documents/artifacts/$(appId)/findSeatAssignments/$(token)).data.expiresAt > request.time.toMillis();
           allow create: if request.auth != null
-                         && request.resource.data.keys().hasAll(
-                           ['name','tableId','tableLabel']
-                         )
-                         && get(/databases/$(database)/documents/findSeatAssignments/$(token)).data.ownerUid
-                            == request.auth.uid;
+            && request.resource.data.keys().hasAll(['name', 'tableId', 'tableLabel'])
+            && get(/databases/$(database)/documents/artifacts/$(appId)/seatingPublishers/$(token)).data.ownerUid == request.auth.uid;
           allow update, delete: if false;
         }
       }
@@ -640,8 +651,10 @@ match /{path=**}/events/{eventId} {
         // events the owner owns (used by co-owner cross-event
         // lookup), unaffected by this change.
         match /events/{eventId} {
-          allow read: if isOwnerOrAnyCoOwner(ownerUid)
-            || hasValidGuestLink(ownerUid, eventId);
+          // Guests do not read the canonical event doc. It carries
+          // budget and coOwners. Their portal uses
+          // guestExperience/public.
+          allow read: if isOwnerOrAnyCoOwner(ownerUid);
           allow create, update, delete: if isOwner(ownerUid);
 
           // 2026-08-23 — Manus P1 hardening (PDF §3.1, §3.2):
@@ -681,9 +694,7 @@ match /{path=**}/events/{eventId} {
           // the wedding, and QRs belong to the wedding not a single event).
           match /redPackets/{redPacketId} {
             allow read: if isOwnerOrAnyCoOwner(ownerUid)
-              || (isSignedIn()
-                && exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid))
-                && get(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid)).data.expiresAt > request.time);
+              || hasValidGuestLink(ownerUid, eventId);
             allow create: if isOwnerOrAnyCoOwner(ownerUid)
               && request.resource.data.keys().hasAll([
                 'provider', 'label', 'qrUrl', 'createdAt', 'eventId'
@@ -1254,9 +1265,16 @@ match /{path=**}/events/{eventId} {
           // (e.g. EntryPassCard needs guest.name, tableNumber,
           // hasAttended). Other guests' docs remain unreadable.
           match /guests/{guestDocId} {
-            allow read: if isOwnerOrAnyCoOwner(ownerUid)
+            // get is per document. A redeemed guest may read only the
+            // guest doc their link names (guestDocId). list stays with
+            // the couple and helpers, so a guest cannot enumerate the
+            // rest of the list or their gift amounts.
+            allow get: if isOwnerOrAnyCoOwner(ownerUid)
               || hasHelperPerm(ownerUid, 'canViewGuestList')
-              || hasValidGuestLink(ownerUid, eventId);
+              || (hasValidGuestLink(ownerUid, eventId)
+                  && guestDocId == guestLink(ownerUid).data.guestDocId);
+            allow list: if isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewGuestList');
             allow create, delete: if isOwnerOrAnyCoOwner(ownerUid);
             // 2026-08-25 — Manus P10: QR regeneration audit fields.
             // The owner / co-owner tier can write any field, so they
@@ -2069,6 +2087,16 @@ match /{path=**}/events/{eventId} {
     // /users/{ownerUid} (see commit TBD). Without this `}`,
     // /artifacts/{appId} would never close and the syntax error
     // would break the entire rules file.
+
+      // CSP reports are written by the Admin SDK at
+      // /artifacts/{appId}/admin/cspReports/reports/{reportId}.
+      // This match has to live inside /artifacts/{appId}; a root
+      // /admin/cspReports match does not cover that path, and the
+      // admin screen then gets permission-denied.
+      match /admin/cspReports/reports/{reportId} {
+        allow read: if isAdmin();
+        allow create, update, delete: if false;
+      }
     }
 
     match /vendors/{vendorUid} {
@@ -2094,12 +2122,11 @@ match /{path=**}/events/{eventId} {
       // one-shot migration in scripts/migrate-vendor-invites-2026-08-13
       // that strips any residual fields from existing docs.
       allow read: if true;
-      // 2026-07-19 — Vendor CSV import (admin batch) writes here with
-      // either: (a) derived ids like 'imp-...', or (b) explicit vendor
-      // uid targets. Both should be permitted for admin callers. Owner
-      // can still write their own profile.
-      allow write: if isAdmin()
-        || (isSignedIn() && request.auth.uid == vendorUid);
+      // Client writes are denied, including a vendor writing their own
+      // doc (rating, popularity, signupStatus, status). Profile edits
+      // go through updateMyVendorProfile. Admin CSV import goes through
+      // adminUpsertVendors. Both use the Admin SDK.
+      allow create, update, delete: if false;
 
       // 2026-07-21 — Couples can record an invite request for a vendor
       // who hasn't joined the platform yet. Each request is its own
@@ -2355,50 +2382,6 @@ match /{path=**}/events/{eventId} {
         && request.resource.data.createdAt is timestamp
         && request.resource.data.viewerUid == request.auth.uid;
       allow update, delete: if false;
-    }
-    // 2026-08-14 — M-06 follow-up: /cspReports/{reportId}.
-    //
-    // The CSP header on savetheday.io is REPORT-ONLY (see
-    // `Content-Security-Policy-Report-Only` in vercel.json) and
-    // specifies `report-uri /api/csp-report`. When a browser sees
-    // a violation, it POSTs the report to the Vercel endpoint at
-    // api/csp-report.js, which writes one row per report here via
-    // the Admin SDK (bypassing these rules).
-    //
-    // Authorization:
-    //   - read: admin only — admins diagnose violations, regular
-    //     users can't see any other user's IP/UA.
-    //   - write: deny. The Admin SDK path is the only writer.
-    //     A client-side write would be a self-serving violation
-    //     log, so we lock it down entirely.
-    // CSP reports are server-written at:
-    // /artifacts/{appId}/admin/cspReports/reports/{reportId}
-    //
-    // The report endpoint uses the Admin SDK and therefore bypasses these
-    // rules. Browser clients must never create, edit, or delete reports.
-    // Only Firebase Auth users carrying the custom claim `admin: true`
-    // may read a single report or list the reports collection.
-    //
-    // A single document-level match ending in `{reportId}` is
-    // intentional. Its `allow read` covers both `get` (getDoc) and
-    // `list` (getDocs(collection(...))): per the Firestore security
-    // rules docs, a list query is evaluated against the rule for
-    // each document it would return, and a document-level
-    // `{reportId}` rule applies to every document the collection
-    // query could yield. We do not split into a sibling
-    // `match /cspReports/reports` rule — that would create a
-    // separate, weaker predicate, and would also be a static
-    // "reports" path that does not authorize `{reportId}`
-    // documents.
-    //
-    // Read access is gated on `isAdmin()` (the existing helper that
-    // checks `request.auth.token.admin == true`). We do NOT use
-    // `isSignedIn()` here: CSP reports can include source URLs,
-    // user agents, and IP-derived data, which would leak to any
-    // signed-in owner, vendor, helper, or guest-linked user.
-    match /admin/cspReports/reports/{reportId} {
-      allow read: if isAdmin();
-      allow create, update, delete: if false;
     }
   }
 }

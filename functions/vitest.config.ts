@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  css: { postcss: { plugins: [] } },
   test: {
     // Long timeout because the Firestore rules emulator has a multi-second
     // startup cost (spawns the JVM).
