@@ -39,6 +39,14 @@ describe('EventsDashboard lobby', () => {
     expect(screen.getByText('預定日期: 未設定')).toBeTruthy();
   });
 
+  it('does not show the empty lobby while the event list is still loading', () => {
+    render(<EventsDashboard {...base} eventsLoading />);
+    expect(screen.getByText('載入婚禮專案中…')).toBeTruthy();
+    expect(screen.queryByText(/你仲未有婚禮專案/)).toBeNull();
+    expect(screen.queryByText('(0)')).toBeNull();
+    expect(screen.queryByText('➕ 建立你的婚禮')).toBeNull();
+  });
+
   it('offers sign-out from the lobby user menu', () => {
     render(
       <EventsDashboard

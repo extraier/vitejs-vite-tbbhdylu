@@ -31,6 +31,7 @@ import { db, appId } from './lib/firebase';
 import { buildNewEventFields } from './lib/newEvent';
 import { nextVendorView } from './lib/vendorRoute';
 import { authEntryState } from './lib/authEntry';
+import { eventsListPending } from './lib/eventsListPending';
 import { legalNoticeKey } from './lib/legalNotice';
 
 // ─── onSnapshot import retention (defensive, no longer load-bearing) ────
@@ -1374,7 +1375,7 @@ export default function App() {
 // ---- Firestore subscriptions (skip when in guest mode) ----
   const targetUid = guest.isGuestMode ? guest.qOwner : user?.uid;
 
-  const { data: ownEvents } = useFirestoreCollection(
+  const { data: ownEvents, loading: ownEventsLoading } = useFirestoreCollection(
     guestDataReady && targetUid && !guest.isGuestMode
       ? collection(db, 'artifacts', appId, 'users', targetUid, 'events')
       : null,
@@ -1393,7 +1394,7 @@ export default function App() {
   // where the rule short-circuits unexpectedly). The error is
   // caught at the App level — see `coOwnedEventsError` below —
   // and we fall back to showing just the user's own events.
-  const { data: coOwnedEvents, error: coOwnedEventsError } = useFirestoreCollection(
+  const { data: coOwnedEvents, loading: coOwnedEventsLoading, error: coOwnedEventsError } = useFirestoreCollection(
     !guest.isGuestMode && user && !user.isAnonymous
       ? query(
           collectionGroup(db, 'events'),
@@ -1417,6 +1418,17 @@ export default function App() {
       );
     }
   }, [coOwnedEventsError]);
+
+  const eventsLoading = eventsListPending({
+    signedIn: Boolean(user),
+    guestMode: Boolean(guest.isGuestMode),
+    guestDataReady,
+    ownLoading: ownEventsLoading,
+    ownCount: (ownEvents || []).filter((event) => !event.deletedAt).length,
+    coOwnedActive: Boolean(!guest.isGuestMode && user && !user.isAnonymous),
+    coOwnedLoading: coOwnedEventsLoading,
+    coOwnedError: coOwnedEventsError,
+  });
 
   // Merge own events + co-owned events. The dashboard doesn't
   // care which is which for the picker — it just shows the
@@ -4703,6 +4715,7 @@ export default function App() {
             {!currentEvent && currentView === 'events-dashboard' && (
               <EventsDashboard
                 events={events}
+                eventsLoading={eventsLoading}
                 newEventName={newEventName}
                 onNewEventNameChange={setNewEventName}
                 onCreate={handleCreateEvent}

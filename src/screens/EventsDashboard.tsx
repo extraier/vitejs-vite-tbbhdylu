@@ -59,6 +59,7 @@ interface EventsDashboardProps {
   // delegate to the parent's `showToast`.
   onToast?: (msg: string) => void;
   onOpenProfile?: () => void;
+  eventsLoading?: boolean;
 }
 
 export function EventsDashboard({
@@ -78,6 +79,7 @@ export function EventsDashboard({
   onOpenEventSettings,
   onToast,
   onOpenProfile,
+  eventsLoading = false,
 }: EventsDashboardProps) {
   // 2026-07-30 — useUserProfile hook replaces the inline
   // unlocks + tier subscriptions added in Phases 2-4. The hook
@@ -153,11 +155,17 @@ export function EventsDashboard({
       <section className="mb-8">
         <h2 className="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">
           📂 你的婚禮專案
-          <span className="text-xs font-bold text-slate-400">
-            ({events.length})
-          </span>
+          {!eventsLoading && (
+            <span className="text-xs font-bold text-slate-400">
+              ({events.length})
+            </span>
+          )}
         </h2>
-        {events.length === 0 ? (
+        {eventsLoading ? (
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 text-center">
+            <p className="text-sm text-slate-500">載入婚禮專案中…</p>
+          </div>
+        ) : events.length === 0 ? (
           <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center">
             <div className="text-2xl mb-1">💌</div>
             <p className="text-sm text-slate-500">你仲未有婚禮專案，喺下面建立一個啦。</p>
@@ -228,7 +236,11 @@ export function EventsDashboard({
               <Plus className="w-5 h-5 text-rose-500" />
             </div>
             <h3 className="text-base font-bold text-slate-800 mb-2">
-              {events.length === 0 ? '➕ 建立你的婚禮' : '➕ 再建立一個婚禮'}
+              {eventsLoading
+                ? '➕ 建立婚禮'
+                : events.length === 0
+                  ? '➕ 建立你的婚禮'
+                  : '➕ 再建立一個婚禮'}
             </h3>
             <input
               type="text"
