@@ -139,6 +139,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
+  const [passwordFocused, setPasswordFocused] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // If defaultEmail/defaultMode change after mount (e.g. preview CF resolved
@@ -395,6 +396,8 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
                 placeholder={mode === 'signup' ? t.passwordSignupPlaceholder : t.passwordPlaceholder}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onFocus={() => setPasswordFocused(true)}
+                onBlur={() => setPasswordFocused(false)}
                 disabled={busy}
                 className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-rose-400 focus:border-rose-400 disabled:opacity-50"
               />
@@ -435,7 +438,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               </div>
             )}
 
-            {mode === 'signup' && password && (
+            {mode === 'signup' && (password || passwordFocused) && (
               <ul className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-left space-y-1">
                 {PASSWORD_RULES.map((rule) => {
                   const evalPwd = evaluatePassword(password, email);

@@ -21,6 +21,7 @@ import {
 import { useAuth } from '../hooks/useAuth';
 import {
   formFromUser,
+  readStashedVendorName,
   validateStep,
 } from '../lib/vendorOnboarding';
 import { Step1Account } from '../components/onboarding/Step1Account';
@@ -39,7 +40,7 @@ const STEPS = [
 
 export function VendorOnboarding({ user, onComplete, onCancel }) {
   const { logout } = useAuth();
-  const [form, setForm] = useState(() => formFromUser(user));
+  const [form, setForm] = useState(() => formFromUser(user, readStashedVendorName()));
   const [step, setStep] = useState(1);
   const [errors, setErrors] = useState({});
   const [submitResult, setSubmitResult] = useState(null);
@@ -88,7 +89,7 @@ export function VendorOnboarding({ user, onComplete, onCancel }) {
             加入商戶
           </h1>
           <p className="text-sm text-slate-500 mt-1">
-            5 步完成。資料會即時寫入平台，新人搜尋後可以睇到。
+            5 步完成。資料會即時儲存。公開商戶指南要等審批後先會顯示。
           </p>
         </div>
         {onCancel && (
@@ -259,9 +260,9 @@ function SuccessScreen({ result, logout, onComplete }) {
           </>
         ) : (
           <p className="text-slate-600 mb-6">
-            你的商戶專頁已建立。請重新登入以啟用商戶權限，
+            你的商戶專頁已建立，暫時未會出現喺公開商戶指南。請重新登入以啟用商戶權限，
             <br />
-            然後就可以接單、管理作品集、回覆新人查詢。
+            審批通過後新人才搜尋到你。登入後可以接單、管理作品集、回覆查詢。
           </p>
         )}
 

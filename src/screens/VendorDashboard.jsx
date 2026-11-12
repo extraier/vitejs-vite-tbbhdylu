@@ -14,6 +14,7 @@
 
 import { useState, useMemo, useEffect, useRef } from 'react';
 import {
+  ClipboardList,
   Briefcase,
   Calendar,
   DollarSign,
@@ -22,10 +23,6 @@ import {
   Inbox,
   Settings,
   AlertCircle,
-  // 2026-08-21 — LogOut removed from imports. The 登出 button
-  // used to live in the dark panel removed in this commit;
-  // <VendorTopBar> now imports LogOut itself.
-  ClipboardList,
   CheckCircle2,
   Circle,
   ChevronDown,
@@ -681,6 +678,7 @@ export function VendorDashboard({
         <button
           type="button"
           onClick={() => setShowAnalytics((s) => !s)}
+          aria-label="作品集瀏覽分析"
           className="w-full bg-white border border-slate-200 hover:border-emerald-300 rounded-2xl px-5 py-3 flex items-center justify-between text-left shadow-sm transition-colors"
         >
           <span className="flex items-center gap-2">
@@ -689,7 +687,7 @@ export function VendorDashboard({
             </span>
             <span>
               <span className="font-black text-slate-800">作品集瀏覽分析</span>
-              <span className="text-xs text-slate-500 ml-2">
+              <span className="text-xs text-slate-500 ml-2" aria-hidden="true">
                 邊張相最多人睇 · 訪客來源
               </span>
             </span>

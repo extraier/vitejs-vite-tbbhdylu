@@ -49,7 +49,7 @@ export function Step3Pricing({ form, update, errors }) {
             <div className="text-xs text-rose-600 mt-1">{errors.priceMin}</div>
           )}
           <div className="text-xs text-slate-500 mt-1">
-            最平一個 package 嘅價錢，新人會見到嘅「由 X 起」
+            最平一套服務嘅價錢，新人會見到嘅「由 X 起」
           </div>
         </div>
 

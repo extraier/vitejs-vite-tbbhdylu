@@ -33,6 +33,7 @@ import { Briefcase, Mail, Lock, Loader2, Globe } from 'lucide-react';
 import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
 import { readUiLang, writeUiLang } from '../lib/uiLang';
 import { authErrorMessage, withAuthTimeout } from '../lib/authErrorMessage';
+import { stashVendorSignupName } from '../lib/vendorOnboarding';
 
 const STRINGS = {
   zh: {
@@ -131,10 +132,12 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
+  const [passwordFocused, setPasswordFocused] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const handleGoogle = async () => {
     setError(null);
+    stashVendorSignupName(displayName);
     setVendorSignupIntent();
     setBusy(true);
     try {
@@ -175,6 +178,7 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
     // onboarding). Stashing it only at commit time prevents the
     // stale-intent routing bug where a normal user who later signs
     // in gets hijacked to vendor onboarding.
+    stashVendorSignupName(displayName);
     setVendorSignupIntent();
     setBusy(true);
     try {
@@ -306,6 +310,8 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
                   autoComplete="new-password"
                   placeholder={t.passwordPlaceholder}
                   value={password}
+                  onFocus={() => setPasswordFocused(true)}
+                  onBlur={() => setPasswordFocused(false)}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={busy}
                   className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 disabled:opacity-50"
@@ -347,7 +353,7 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
               </div>
             </div>
 
-            {password && (
+            {(password || passwordFocused) && (
               <ul className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-left space-y-1">
                 {PASSWORD_RULES.map((rule) => {
                   const pwdEval = evaluatePassword(password, email);

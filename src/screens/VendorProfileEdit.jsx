@@ -33,7 +33,7 @@ import {
   formatMoney,
   parseFormattedNumber,
 } from '../lib/format';
-import { TASK_CATEGORIES, VENDOR_CATEGORIES, getVendorCategoryLabel } from '../lib/config';
+import { TASK_CATEGORIES, VENDOR_CATEGORIES, getVendorCategoryLabel, vendorTradeCategoryEntries } from '../lib/config';
 import { PortfolioEditor } from '../components/PortfolioEditor';
 
 const MAX_TAGS = 10;
@@ -239,7 +239,7 @@ export function VendorProfileEdit({ vendor, user, onBack, onSaved }) {
                 <div className="grid grid-cols-2 gap-2 border border-slate-200 rounded-xl overflow-hidden">
                   {/* Left: top-level categories */}
                   <div className="bg-slate-50 max-h-64 overflow-y-auto">
-                    {Object.entries(VENDOR_CATEGORIES).map(([key, top]) => {
+                    {vendorTradeCategoryEntries().map(([key, top]) => {
                       const isActive = category === key;
                       return (
                         <button

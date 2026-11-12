@@ -8,10 +8,10 @@
 // sub-services. Tapping a sub-service fills both `category` and
 // `subcategory`. Tapping a different top category resets the sub.
 
-import { VENDOR_CATEGORIES } from '../../lib/config';
+import { VENDOR_CATEGORIES, vendorTradeCategoryEntries } from '../../lib/config';
 
 export function Step2Business({ form, update, errors }) {
-  const topEntries = Object.entries(VENDOR_CATEGORIES);
+  const topEntries = vendorTradeCategoryEntries();
   const selectedTop = VENDOR_CATEGORIES[form.category];
   const subEntries = selectedTop ? Object.entries(selectedTop.subs) : [];
 
@@ -47,7 +47,10 @@ export function Step2Business({ form, update, errors }) {
           <div className="text-xs text-rose-600 mt-1">{errors.name}</div>
         )}
         <div className="text-xs text-slate-500 mt-1">
-          會顯示在新人搜尋結果同商戶指南。{form.name.length}/60
+          <div className="text-xs text-slate-500 mt-1 flex justify-between gap-3">
+            <span>會顯示在新人搜尋結果同商戶指南。</span>
+            <span>{form.name.length}/60</span>
+          </div>
         </div>
       </div>
 

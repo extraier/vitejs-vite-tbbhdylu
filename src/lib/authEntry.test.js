@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { authEntryState, parseAuthEntry } from './authEntry';
+import { authEntryState, parseAuthEntry, signedInVendorHashTarget } from './authEntry';
 
 describe('parseAuthEntry', () => {
   it('opens vendor sign-up from the hash, including a slug kept inside the hash', () => {
@@ -28,5 +28,13 @@ describe('authEntryState', () => {
   it('maps a fresh #signup hash onto couple sign-up mode', () => {
     expect(authEntryState('#signup').loginMode).toBe('signup');
     expect(authEntryState('#signup').signingUpAs).toBeNull();
+  });
+});
+
+describe('signedInVendorHashTarget', () => {
+  it('opens onboarding for a signed-in couple and the vendor area for a vendor', () => {
+    expect(signedInVendorHashTarget('vendor', false)).toBe('vendor-onboarding');
+    expect(signedInVendorHashTarget('vendor', true)).toBe('vendor-dashboard');
+    expect(signedInVendorHashTarget('signup', false)).toBeNull();
   });
 });

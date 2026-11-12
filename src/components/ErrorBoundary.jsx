@@ -15,6 +15,8 @@
 // behavioural change for the happy path.
 
 import React from 'react';
+import { signOut } from 'firebase/auth';
+import { auth } from '../lib/firebase';
 
 export class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -93,23 +95,48 @@ export class ErrorBoundary extends React.Component {
                 : ''}
             </pre>
           </details>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            style={{
-              alignSelf: 'flex-start',
-              padding: '8px 16px',
-              borderRadius: '8px',
-              border: 'none',
-              background: '#0f172a',
-              color: '#fff',
-              fontSize: '14px',
-              fontWeight: 600,
-              cursor: 'pointer',
-            }}
-          >
-            強制 Reload
-          </button>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '8px',
+                border: 'none',
+                background: '#0f172a',
+                color: '#fff',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              強制 Reload
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await signOut(auth);
+                } catch (err) {
+                  // eslint-disable-next-line no-console
+                  console.warn('[ErrorBoundary] sign out failed:', err?.message || err);
+                }
+                window.location.assign('/');
+              }}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                background: '#fff',
+                color: '#0f172a',
+                fontSize: '14px',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              登出
+            </button>
+          </div>
         </div>
       );
     }

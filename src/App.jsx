@@ -30,7 +30,7 @@ import {
 import { db, appId } from './lib/firebase';
 import { buildNewEventFields } from './lib/newEvent';
 import { nextVendorView } from './lib/vendorRoute';
-import { authEntryState } from './lib/authEntry';
+import { authEntryState, signedInVendorHashTarget } from './lib/authEntry';
 import { eventsListPending } from './lib/eventsListPending';
 import { legalNoticeKey } from './lib/legalNotice';
 
@@ -297,15 +297,28 @@ export default function App() {
   const [coupleSignupFromHash, setCoupleSignupFromHash] = useState(() => (
     authEntryState(typeof window !== 'undefined' ? window.location.hash : '').loginMode === 'signup'
   ));
+  const vendorHashUidRef = useRef('');
   useEffect(() => {
     const applyAuthEntry = () => {
       const next = authEntryState(window.location.hash);
       setSigningUpAs(next.signingUpAs);
       setCoupleSignupFromHash(next.loginMode === 'signup');
+      if (!authChecked || !user || user.isAnonymous) return;
+      if (next.signingUpAs !== 'vendor') {
+        vendorHashUidRef.current = '';
+        return;
+      }
+      if (vendorHashUidRef.current === user.uid) return;
+      vendorHashUidRef.current = user.uid;
+      const target = signedInVendorHashTarget('vendor', isVendor);
+      setCurrentEvent(null);
+      if (target === 'vendor-dashboard') setUserRole('vendor');
+      setCurrentView(target);
     };
+    applyAuthEntry();
     window.addEventListener('hashchange', applyAuthEntry);
     return () => window.removeEventListener('hashchange', applyAuthEntry);
-  }, []);
+  }, [authChecked, user, isVendor]);
 
   // 2026-07-14 — defensive modal close. If the user signs in (Google or
   // email) WHILE the signup prompt is open, the modal stays open unless
@@ -565,6 +578,21 @@ export default function App() {
 
   // Current selection
   const [currentEvent, setCurrentEvent] = useState(null);
+  const authUidRef = useRef(user?.uid ?? null);
+  if ((user?.uid ?? null) !== authUidRef.current) {
+    const previousUid = authUidRef.current;
+    authUidRef.current = user?.uid ?? null;
+    if (previousUid && previousUid !== (user?.uid ?? null)) {
+      setCurrentEvent(null);
+      if (user?.uid) {
+        setCurrentView((view) => (
+          view === 'vendor-onboarding' || view === 'vendor-dashboard' || view === 'vendor-profile'
+            ? view
+            : 'events-dashboard'
+        ));
+      }
+    }
+  }
   const [activeCategory, setActiveCategory] = useState(null);
 
   // 2026-08-01 (TDZ hotfix) — owner-names subscription moved here

@@ -20,6 +20,11 @@ export function parseAuthEntry(hash) {
   return { kind: null, slug: '' };
 }
 
+export function signedInVendorHashTarget(hashKind, isVendor) {
+  if (hashKind !== 'vendor') return null;
+  return isVendor ? 'vendor-dashboard' : 'vendor-onboarding';
+}
+
 export function authEntryState(hash) {
   const entry = parseAuthEntry(hash);
   return {
