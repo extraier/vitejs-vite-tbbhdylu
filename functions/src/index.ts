@@ -209,6 +209,7 @@ export const revokeGuestLink = onCall({ cors: true, region: "us-central1" }, asy
 // engine then enforces per-tab access based on the perms flags.
 
 import { getAuth } from 'firebase-admin/auth';
+import { resolveHelperInviteAcceptance } from './helperInvitePure';
 
 /**
  * findGuestLink — collectionGroup lookup by document ID.
@@ -398,21 +399,15 @@ export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, 
     throw new HttpsError('invalid-argument', 'Auth user has no email.');
   }
 
-  // Find any owner who invited this email.
+  // Find helper invites addressed to this email.
   //
-  // 2026-08-15 — Helper onboarding audit (P1 — pendingInvites
-  // collision). The collection-group scan used to match every
-  // document named `pendingInvites` by email — including vendor
-  // outreach invitations at /vendors/{slug}/pendingInvites.
-  // A same-email vendor invite would be picked up here, fail to
-  // construct a valid helper doc path, and either 500 or
-  // silently corrupt the helper doc. Two safeguards:
-  //   1. Filter by `kind == 'helper'` (vendor invites either
-  //      stamp `kind: 'vendor'` or remain unset; either way
-  //      excluded).
-  //   2. Defensive: skip docs that lack the required helper
-  //      shape (ownerUid, perms, eventId) so legacy records
-  //      without `kind` still don't poison acceptance.
+  // kind == 'helper' keeps ordinary vendor outreach docs out of
+  // the candidate set. It is not sufficient on its own: a client
+  // can stamp kind: 'helper' on a doc under their own user, or
+  // on /vendors/{slug}/pendingInvites. acceptHelperDocs ignores
+  // body.ownerUid and accepts only docs whose path is
+  // artifacts/{appId}/users/{ownerUid}/pendingInvites/{id} and
+  // whose body ownerUid matches that path owner.
   const pending = await db
     .collectionGroup('pendingInvites')
     .where('email', '==', authEmail)
@@ -420,52 +415,62 @@ export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, 
     .get();
 
   if (pending.empty) {
-    // Fall back to the legacy lookup (no kind field on old
-    // docs) — but only if there's at least one matching
-    // document that ALSO has the helper-shaped fields.
-    const legacy = await db
-      .collectionGroup('pendingInvites')
-      .where('email', '==', authEmail)
-      .get();
-    const legacyHelpers = legacy.docs.filter((d) => {
-      const x = d.data();
-      return (
-        x &&
-        typeof x.ownerUid === 'string' &&
-        x.perms &&
-        typeof x.eventId === 'string' &&
-        x.kind !== 'vendor' // exclude explicit vendor invites
-      );
-    });
-    if (legacyHelpers.length === 0) {
-      throw new HttpsError('not-found', 'No helper invite found for this email.');
-    }
-    return acceptHelperDocs(legacyHelpers, authUid);
+    throw new HttpsError('not-found', 'No helper invite found for this email.');
   }
 
-  return acceptHelperDocs(pending.docs, authUid);
+  return acceptHelperDocs(pending.docs, authUid, authEmail);
 });
 
-// Shared acceptance body — extracted so the kind-filtered and
-// legacy paths share the same migration logic. (2026-08-15)
+// Shared acceptance body. ownerUid always comes from the document
+// path (artifacts/{appId}/users/{ownerUid}/pendingInvites/{id}),
+// never from the body. A body ownerUid that disagrees with the
+// path is a forge and that doc is skipped.
 async function acceptHelperDocs(
   pendingDocs: FirebaseFirestore.QueryDocumentSnapshot[],
   authUid: string,
+  authEmail: string,
 ) {
-  // Accept all matching invites (a helper could be invited by multiple couples).
   const batch = db.batch();
   const accepted: { ownerUid: string; perms: HelperPerms; eventId: string }[] = [];
 
   for (const doc of pendingDocs) {
-    const data = doc.data();
-    const ownerUid = data.ownerUid;
+    const decision = resolveHelperInviteAcceptance({
+      path: doc.ref.path,
+      data: doc.data() as Record<string, unknown>,
+      authEmail,
+      expectedAppId: appId,
+    });
+    if (!decision.ok) {
+      console.warn('[acceptHelperInvite] rejected invite', {
+        reason: decision.reason,
+        path: doc.ref.path,
+      });
+      continue;
+    }
+
+    const eventSnap = await db
+      .collection('artifacts').doc(appId)
+      .collection('users').doc(decision.ownerUid)
+      .collection('events').doc(decision.eventId)
+      .get();
+    if (!eventSnap.exists) {
+      console.warn('[acceptHelperInvite] rejected invite with unknown event', {
+        path: doc.ref.path,
+        eventId: decision.eventId,
+      });
+      continue;
+    }
+
     const newRef = db
       .collection('artifacts').doc(appId)
-      .collection('users').doc(ownerUid)
+      .collection('users').doc(decision.ownerUid)
       .collection('helpers').doc(authUid);
 
     batch.set(newRef, {
-      ...data,
+      ...doc.data(),
+      ownerUid: decision.ownerUid,
+      eventId: decision.eventId,
+      email: decision.email,
       helperUid: authUid,
       status: 'active',
       acceptedAt: FieldValue.serverTimestamp(),
@@ -473,10 +478,14 @@ async function acceptHelperDocs(
     batch.delete(doc.ref);
 
     accepted.push({
-      ownerUid,
-      perms: data.perms as HelperPerms,
-      eventId: data.eventId as string,
+      ownerUid: decision.ownerUid,
+      perms: decision.perms as HelperPerms,
+      eventId: decision.eventId,
     });
+  }
+
+  if (accepted.length === 0) {
+    throw new HttpsError('permission-denied', 'No valid helper invite for this account.');
   }
 
   await batch.commit();
