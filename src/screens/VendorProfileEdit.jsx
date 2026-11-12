@@ -33,7 +33,7 @@ import {
   formatMoney,
   parseFormattedNumber,
 } from '../lib/format';
-import { TASK_CATEGORIES, VENDOR_CATEGORIES, getVendorCategoryLabel, vendorTradeCategoryEntries } from '../lib/config';
+import { VENDOR_CATEGORIES, getVendorCategoryLabel, vendorTradeCategoryEntries } from '../lib/config';
 import { PortfolioEditor } from '../components/PortfolioEditor';
 
 const MAX_TAGS = 10;
