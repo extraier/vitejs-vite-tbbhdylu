@@ -1599,9 +1599,45 @@ match /{path=**}/events/{eventId} {
         // shows them in the "待接受" tab. acceptHelperInvite reads
         // via collectionGroup('pendingInvites') and migrates on first
         // sign-up.
+        // Client writes are schema-locked. inviteHelper itself uses
+        // the Admin SDK and bypasses these rules; the rules exist
+        // so a signed-in user cannot write a pending invite under
+        // their own user that names a different ownerUid, then
+        // call acceptHelperInvite. ownerUid must equal the path
+        // owner, kind must be 'helper', and eventId must be an
+        // event that already exists under that same owner.
         match /pendingInvites/{email} {
           allow read: if isOwnerOrAnyCoOwner(ownerUid);
-          allow create, update, delete: if isOwnerOrAnyCoOwner(ownerUid);
+
+          allow create: if isOwnerOrAnyCoOwner(ownerUid)
+            && request.resource.data.keys().hasAll([
+              'email', 'displayName', 'ownerUid', 'eventId', 'kind', 'perms', 'status'
+            ])
+            && request.resource.data.ownerUid == ownerUid
+            && request.resource.data.kind == 'helper'
+            && request.resource.data.status == 'invited'
+            && request.resource.data.email is string
+            && request.resource.data.email.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')
+            && request.resource.data.email.size() <= 200
+            && request.resource.data.displayName is string
+            && request.resource.data.displayName.size() > 0
+            && request.resource.data.displayName.size() <= 80
+            && request.resource.data.eventId is string
+            && request.resource.data.eventId.size() > 0
+            && request.resource.data.eventId.size() <= 128
+            && request.resource.data.perms is map
+            && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(request.resource.data.eventId));
+
+          allow update: if isOwnerOrAnyCoOwner(ownerUid)
+            && request.resource.data.ownerUid == ownerUid
+            && request.resource.data.ownerUid == resource.data.ownerUid
+            && request.resource.data.kind == 'helper'
+            && request.resource.data.eventId == resource.data.eventId
+            && request.resource.data.email == resource.data.email
+            && request.resource.data.perms is map
+            && exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(ownerUid)/events/$(request.resource.data.eventId));
+
+          allow delete: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
         // 2026-08-17 — Big Day comment alerts (Manus step 11).
@@ -1886,10 +1922,13 @@ match /{path=**}/events/{eventId} {
       // ---- Public marketplace (vendor discovery) -----------------------
 
       match /jobRequests/{jobId} {
-        allow read: if isSignedIn();
-        allow create: if isSignedIn()
+        // Owner-scoped copy. Reads are the path owner only so a
+        // collection-group scan cannot harvest coupleUid from
+        // another account's posts. The public board is /jobBoard.
+        allow read: if isOwner(ownerUid);
+        allow create: if isOwner(ownerUid)
           && request.resource.data.coupleUid == request.auth.uid;
-        allow update, delete: if isSignedIn()
+        allow update, delete: if isOwner(ownerUid)
           && resource.data.coupleUid == request.auth.uid;
       }
 
@@ -1903,7 +1942,11 @@ match /{path=**}/events/{eventId} {
         // post-existing block; this only adds the create-time
         // body check. No client writes exist for this collection
         // today, so the rule change is forward-only.
-        allow read: if isSignedIn();
+        allow read: if isSignedIn() && (
+          resource.data.coupleUid == request.auth.uid
+          || resource.data.vendorUid == request.auth.uid
+          || isAdmin()
+        );
         allow create: if isSignedIn()
           && request.resource.data.keys().hasAll(['vendorUid', 'coupleUid'])
           && request.resource.data.vendorUid == request.auth.uid
@@ -2290,29 +2333,40 @@ match /{path=**}/events/{eventId} {
     //   allow read, write: if false;
     // }
 
-    // ---- Top-level public collections --------------------------------
-    // The codebase writes to and reads from /jobRequests at the
-    // FIRESTORE TOP LEVEL (collection(db, 'jobRequests') → /jobRequests/*),
-    // not /artifacts/{appId}/jobRequests. The matching rule above
-    // is under /artifacts/{appId} and never matches the actual path,
-    // so direct client reads fall through to the catch-all deny.
-    // Mirroring the rule at the top level makes both reads and
-    // writes work for signed-in users. Writes additionally require
-    // coupleUid == auth.uid so couples can only create posts in
-    // their own name.
+    // ---- Top-level job board -----------------------------------------
+    // Couples post through postJobRequest, which writes two docs:
+    //   /jobRequests/{id}  owner record, includes coupleUid
+    //   /jobBoard/{id}     public record, same id, no coupleUid
+    //
+    // Vendors list /jobBoard (status == open). That query stays
+    // open to any signed-in user, and the documents do not carry
+    // coupleUid, so listing the board is not an account-uid oracle.
+    //
+    // Couples list /jobRequests where coupleUid == their uid.
+    // A status-only or unfiltered read is denied, including for
+    // legacy docs that still have coupleUid on /jobRequests.
     match /jobRequests/{jobId} {
-      allow read: if isSignedIn();
+      allow read: if isSignedIn()
+        && resource.data.coupleUid == request.auth.uid;
       allow create: if isSignedIn()
         && request.resource.data.coupleUid == request.auth.uid;
       allow update, delete: if isSignedIn()
         && resource.data.coupleUid == request.auth.uid;
     }
-    match /proposals/{proposalId} {
-      // 2026-07-27 — top-level mirror of the /artifacts/{appId}/proposals
-      // rule above. Both blocks need the same vendorUid auth check
-      // because /proposals/* at root and /artifacts/{appId}/proposals
-      // are looked up by different code paths.
+    match /jobBoard/{jobId} {
       allow read: if isSignedIn();
+      allow create, update, delete: if false;
+    }
+    match /proposals/{proposalId} {
+      // Party-only. A couple queries where coupleUid == auth.uid.
+      // A vendor queries where vendorUid == auth.uid. An unfiltered
+      // list is denied, so coupleUid is not harvestable from the
+      // whole collection. Admin retains read for moderation.
+      allow read: if isSignedIn() && (
+        resource.data.coupleUid == request.auth.uid
+        || resource.data.vendorUid == request.auth.uid
+        || isAdmin()
+      );
       allow create: if isSignedIn()
         && request.resource.data.keys().hasAll(['vendorUid', 'coupleUid'])
         && request.resource.data.vendorUid == request.auth.uid

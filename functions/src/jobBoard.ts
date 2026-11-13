@@ -2,32 +2,24 @@
  * Cloud Functions — Public Job Board (徵求報價)
  * ==============================================
  *
- * postJobRequest — couple posts a new job request to /jobRequests.
+ * postJobRequest — couple posts a job.
+ *   /jobRequests/{id} keeps coupleUid and is readable only by that couple.
+ *   /jobBoard/{id} is the same post without coupleUid, listed by vendors.
  *
  * Why this is a Cloud Function (not direct Firestore)
  * ----------------------------------------------------
- * The /jobRequests collection lives at the FIRESTORE TOP LEVEL
- * (not under /artifacts/{appId}), but the firestore.rules only
- * define a match block under /artifacts/{appId}/jobRequests/{jobId}.
- * Without a rule on the top-level path, direct client writes fail
- * with "Missing or insufficient permissions".
- *
- * Routing through this callable sidesteps the rules entirely:
- * Cloud Functions run with the Firebase Admin SDK, which uses the
- * service account and bypasses rules. We still enforce the same
- * auth checks client-side (coupleUid == auth.uid) so the security
- * posture matches.
- *
- * Reads still go through the live client-side Firestore query —
- * those use the top-level path too, but they hit the same
- * catch-all deny. To make reads work for vendors, we add a
- * top-level match in firestore.rules (separate PR).
+ * Writes go through the Admin SDK. /jobRequests keeps coupleUid
+ * and is readable only by that couple. /jobBoard is the vendor
+ * list and does not include coupleUid. See firestore.rules.
  */
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { buildJobRecords } from './jobBoardPure';
 
 const db = getFirestore();
+
+export { buildJobRecords } from './jobBoardPure';
 
 const ALLOWED_SERVICE_CATEGORIES = new Set([
   '場地佈置',
@@ -114,8 +106,10 @@ export const postJobRequest = onCall(
     }
 
     // ---- Write ----
-    const docRef = db.collection('jobRequests').doc();
-    await docRef.set({
+    // coupleUid stays on /jobRequests, which only the posting
+    // couple can read. /jobBoard/{sameId} is the vendor-visible
+    // copy and must not include coupleUid.
+    const records = buildJobRecords({
       coupleUid: uid,
       coupleName: eventName || '新人',
       weddingDate: weddingDate || '',
@@ -123,11 +117,18 @@ export const postJobRequest = onCall(
       venues: venuesArr,
       budget: budget.trim(),
       details: (details || '').trim(),
-      status: 'open',
-      proposalsCount: 0,
-      postedAt: '剛剛',
+    });
+    const docRef = db.collection('jobRequests').doc();
+    const batch = db.batch();
+    batch.set(docRef, {
+      ...records.ownerRecord,
       createdAt: FieldValue.serverTimestamp(),
     });
+    batch.set(db.collection('jobBoard').doc(docRef.id), {
+      ...records.publicRecord,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
 
     return {
       id: docRef.id,
@@ -260,7 +261,11 @@ export const submitProposal = onCall(
 
     // Atomic write: persist the proposal + increment the job's count
     // in a single batch so the count never drifts from the truth.
+    // The public board copy is updated only when it exists (jobs
+    // posted before the coupleUid split have no /jobBoard doc).
     const proposalRef = db.collection('proposals').doc();
+    const boardRef = db.collection('jobBoard').doc(jobId);
+    const boardSnap = await boardRef.get();
     const batch = db.batch();
     batch.set(proposalRef, {
       jobId,
@@ -276,6 +281,11 @@ export const submitProposal = onCall(
     batch.update(jobRef, {
       proposalsCount: FieldValue.increment(1),
     });
+    if (boardSnap.exists) {
+      batch.update(boardRef, {
+        proposalsCount: FieldValue.increment(1),
+      });
+    }
     await batch.commit();
 
     // Read back the new count (could be slightly stale under concurrent
