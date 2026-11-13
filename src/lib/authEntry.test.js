@@ -3,20 +3,26 @@ import { authEntryState, parseAuthEntry, signedInVendorHashTarget } from './auth
 
 describe('parseAuthEntry', () => {
   it('opens vendor sign-up from the hash, including a slug kept inside the hash', () => {
-    expect(parseAuthEntry('#signup-as-vendor')).toEqual({ kind: 'vendor', slug: '' });
+    expect(parseAuthEntry('#signup-as-vendor')).toEqual({ kind: 'vendor', slug: '', token: '' });
     expect(parseAuthEntry('#signup-as-vendor?slug=abc-studio')).toEqual({
       kind: 'vendor',
       slug: 'abc-studio',
+      token: '',
+    });
+    expect(parseAuthEntry('#signup-as-vendor?slug=abc-studio&token=secret')).toEqual({
+      kind: 'vendor',
+      slug: 'abc-studio',
+      token: 'secret',
     });
   });
 
   it('opens couple sign-up from #signup', () => {
-    expect(parseAuthEntry('#signup')).toEqual({ kind: 'signup', slug: '' });
+    expect(parseAuthEntry('#signup')).toEqual({ kind: 'signup', slug: '', token: '' });
   });
 
   it('leaves the sign-in card alone for an empty or unknown hash', () => {
-    expect(parseAuthEntry('')).toEqual({ kind: null, slug: '' });
-    expect(parseAuthEntry('#login')).toEqual({ kind: null, slug: '' });
+    expect(parseAuthEntry('')).toEqual({ kind: null, slug: '', token: '' });
+    expect(parseAuthEntry('#login')).toEqual({ kind: null, slug: '', token: '' });
   });
 });
 
