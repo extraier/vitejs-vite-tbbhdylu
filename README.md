@@ -8,7 +8,7 @@ A wedding planning web app for Hong Kong + Taiwan couples — guest list, photo 
 ## Stack
 
 - Frontend: React + TypeScript + Vite
-- Backend: Firebase Auth + Firestore + Cloud Functions (Gen 2, Node 20, us-central1)
+- Backend: Firebase Auth + Firestore + Cloud Functions (Gen 2, Node 22, us-central1)
 - Email: SendGrid v3 (custom branded transactional email)
 - Hosting: Vercel (front-end, CDN + edge cache)
 
