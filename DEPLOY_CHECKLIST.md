@@ -1,6 +1,6 @@
 # Deploy Checklist — savetheday.io
 
-> Last revised: 2026-08-06 (after the photo-delete deploy-gaps incident)
+> Last revised: 2026-11-13 (cloudflared section matches the in-repo ingress config)
 > Read this BEFORE touching any production runtime. Skipping a step has cost us hours twice.
 
 ## TL;DR — what can fail silently
@@ -59,27 +59,35 @@ curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token --project=sa
 
 ### Cloudflare tunnel (ingress)
 
-The ingress config is at `~/.cloudflared/config.yml` on the NAS. **It is NOT in source control today** — every change is hand-edited on the box. This is footgun #1 from the deploy-gaps plan; the fix is to move it into `deploy/cloudflared/config.yml` (TODO).
+The source of truth is `deploy/cloudflared/config.yml` (moved into the repo on 2026-08-05). The NAS copy at `~/.cloudflared/config.yml` is what cloudflared reads. This repo does not include a cloudflared deploy script. Update the in-repo file, then copy it and restart the tunnel.
 
-**To check what's currently routed:**
+`scripts/test-cloudflared-ingress.test.mjs` checks that every `cdn.savetheday.io` path used by `api/*.js` has a matching ingress rule. Run it before copying a route change to the NAS:
+
 ```bash
-ssh openclaw@nas "cat ~/.cloudflared/config.yml"
+npx vitest run scripts/test-cloudflared-ingress.test.mjs
 ```
 
-**To add a new route:**
-1. Edit `~/.cloudflared/config.yml` on the NAS
-2. Restart cloudflared so it picks up the new config:
-   ```bash
-   ssh openclaw@nas "pkill -f 'cloudflared tunnel' && sleep 5"
-   # The watchdog at /tmp/ts-autostart.watchdog.log restarts it within ~60s
-   sleep 70
-   ssh openclaw@nas "ps aux | grep cloudflared | grep -v grep"
-   ```
+**To publish a route change:**
+```bash
+rsync deploy/cloudflared/config.yml openclaw@nas:~/.cloudflared/config.yml
+ssh openclaw@nas 'pkill -f "cloudflared tunnel" && sleep 5'
+# The watchdog noted in deploy/cloudflared/config.yml restarts cloudflared within ~60s
+sleep 70
+ssh openclaw@nas "ps aux | grep cloudflared | grep -v grep"
+```
+
+The credentials file stays on the NAS. It is not in this repo and is not part of the rsync above.
 
 **Verify after change:**
 ```bash
-curl -sS -X OPTIONS https://cdn.savetheday.io/<new-path> -i | head -5
-# Expect: 204 + access-control-allow-* headers
+for path in /upload /photos /delete; do
+  curl -sS -o /dev/null -w "%{http_code}" \
+    -X OPTIONS -H "Origin: https://savetheday.io" \
+    "https://cdn.savetheday.io${path}/test/test/test"
+  echo " $path"
+done
+# Each line should be "204 <path>".
+curl -sI https://cdn.savetheday.io/deals/all_dates.json | head -1
 ```
 
 ### Vercel env vars
@@ -151,7 +159,8 @@ If you're about to deploy a cross-runtime feature and you haven't read this chec
 ## Cross-references
 
 - `scripts/deploy-functions.sh` — CF deploy with half-state auto-recovery
-- `scripts/deploy-cloudflared.sh` — TODO (Footgun 1 fix)
+- `deploy/cloudflared/config.yml` — tunnel ingress source of truth (rsync + restart; no deploy script)
+- `scripts/test-cloudflared-ingress.test.mjs` — ingress coverage for `cdn.savetheday.io` paths
 - `scripts/deploy-nas.sh` — TODO (Footgun 4 fix)
 - `scripts/vercel-env-sync.sh` — Vercel env + auto-redeploy
 - `scripts/ship-feature.sh` — TODO (Footgun 1 orchestrator)
