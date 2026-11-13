@@ -27,6 +27,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import * as crypto from 'crypto';
 import { sendViaSendgrid } from './sendgridMailer';
+import { buildCanonicalVendorInviteUrl } from './vendorInviteUrl';
 // 2026-08-13 — C-01 (CRITICAL) fix. Invitation state used to live on
 // the public /vendors/{slug} doc, which let anyone read the token
 // via the open `allow read: if true` rule. Now minted into
@@ -197,7 +198,7 @@ async function processPendingInvite(
   const token = genToken(INVITE_TOKEN_LEN);
   const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
   const baseUrl = (process.env.APP_BASE_URL || '').replace(/\/+$/, '');
-  const signupUrl = `${baseUrl || 'https://savetheday.io'}/?signup&venue=${encodeURIComponent(slug)}&token=${token}`;
+  const signupUrl = buildCanonicalVendorInviteUrl(baseUrl, slug, token);
 
   await issueInvite({
     slug,

@@ -42,6 +42,7 @@ import {
   signInAnonymously,
   signInWithEmailAndPassword,
   signInWithEmailLink,
+  sendPasswordResetEmail,
   signInWithPopup,
   signInWithCustomToken,
   signOut,
@@ -49,6 +50,7 @@ import {
   updateProfile,
 } from 'firebase/auth';
 import { resolveHelperInviteEmail } from '../lib/helperInviteLink';
+import { passwordResetActionCodeSettings } from '../lib/passwordReset';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '../lib/firebase';
 
@@ -336,6 +338,23 @@ export function useAuth() {
     return cred.user;
   };
 
+  // Public forgot-password. Distinct from changePassword, which is the
+  // signed-in modal. Firebase Auth sends the message; the continue URL
+  // host must be an authorized domain.
+  const sendPasswordReset = async (email) => {
+    const trimmed = String(email || '').trim();
+    if (!trimmed) {
+      const err = new Error('請先輸入電郵地址');
+      err.code = 'auth/invalid-email';
+      throw err;
+    }
+    await sendPasswordResetEmail(
+      auth,
+      trimmed,
+      passwordResetActionCodeSettings(window.location.origin),
+    );
+  };
+
   const continueAsGuest = async () => {
     setAllowAnonymous(true);
     await signInAnonymously(auth);
@@ -478,6 +497,7 @@ export function useAuth() {
     loginWithGoogle,
     loginWithEmail,
     registerWithEmail,
+    sendPasswordReset,
     continueAsGuest,
     linkAnonymousWithEmail,
     changePassword,
