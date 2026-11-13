@@ -2437,5 +2437,16 @@ match /{path=**}/events/{eventId} {
         && request.resource.data.viewerUid == request.auth.uid;
       allow update, delete: if false;
     }
+
+    // Mailgun inbound mail. Written only by the inboundEmail function
+    // (Admin SDK). No client path reads these; support uses the admin claim.
+    match /inbound_threads/{threadId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+    match /inbound_messages/{messageId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
   }
 }
