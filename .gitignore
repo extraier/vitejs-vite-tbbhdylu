@@ -17,6 +17,7 @@ functions/lib/
 functions/node_modules/
 functions/.env
 functions/.env.local
+.env.deploy
 
 # Editor directories and files
 .vscode/*
