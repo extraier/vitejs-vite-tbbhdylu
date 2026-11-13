@@ -632,3 +632,41 @@ export const autoLinkVendorContactsV2 = onCall(
     };
   },
 );
+
+/**
+ * Admin CSV import. Clients cannot write /vendors directly.
+ * Each row is { vendorId, doc, merge }. Timestamps are stamped here
+ * so the browser does not send FieldValue sentinels.
+ */
+export const adminUpsertVendors = onCall(
+  { cors: true, region: 'us-central1', timeoutSeconds: 120 },
+  async (req) => {
+    if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+    if (req.auth.token.admin !== true) {
+      throw new HttpsError('permission-denied', 'Admin only.');
+    }
+    const rows = (req.data as { rows?: unknown })?.rows;
+    if (!Array.isArray(rows) || rows.length === 0 || rows.length > 400) {
+      throw new HttpsError('invalid-argument', 'rows must be a non-empty array of at most 400.');
+    }
+    const batch = db.batch();
+    for (const row of rows) {
+      const vendorId = (row as { vendorId?: unknown }).vendorId;
+      const docBody = (row as { doc?: unknown }).doc;
+      const merge = (row as { merge?: unknown }).merge === true;
+      if (typeof vendorId !== 'string' || !vendorId.trim() || !docBody || typeof docBody !== 'object' || Array.isArray(docBody)) {
+        throw new HttpsError('invalid-argument', 'each row needs vendorId and doc.');
+      }
+      const payload = { ...(docBody as Record<string, unknown>) };
+      delete payload.appliedAt;
+      delete payload.importedAt;
+      delete payload.lastEditedViaImport;
+      payload.importedAt = FieldValue.serverTimestamp();
+      payload.updatedAt = FieldValue.serverTimestamp();
+      if (!merge) payload.appliedAt = FieldValue.serverTimestamp();
+      batch.set(db.collection('vendors').doc(vendorId), payload, { merge });
+    }
+    await batch.commit();
+    return { ok: true, written: rows.length };
+  },
+);

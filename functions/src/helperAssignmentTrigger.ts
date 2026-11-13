@@ -79,6 +79,7 @@ import {
   AssignmentAction,
   BigDayParentKind,
   buildAssignmentNotificationId,
+  diffKeys,
   resolveAssignmentRecipient,
   sourceVersion,
   validateTriggerPath,
@@ -551,16 +552,6 @@ function safeTitle(value: unknown, parentKind: string): string {
   const t = safeString(value);
   if (t) return t;
   return parentKind === 'rundown' ? '大日流程' : '物資';
-}
-
-function diffKeys(
-  beforeData: Record<string, unknown> | null,
-  afterData: Record<string, unknown>,
-): string[] {
-  const keys = new Set<string>();
-  for (const k of Object.keys(beforeData || {})) keys.add(k);
-  for (const k of Object.keys(afterData || {})) keys.add(k);
-  return Array.from(keys);
 }
 
 // ---- Cloud Functions v2 wrappers ----

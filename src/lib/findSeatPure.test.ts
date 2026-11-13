@@ -83,13 +83,12 @@ describe('buildPublicSnapshot', () => {
   it('strips guest assignments (only metadata)', () => {
     const snap = buildPublicSnapshot(
       'event-1',
-      'owner-1',
       { canvasWidth: 1200, canvasHeight: 800, background: 'banquet' },
       [{ id: 'T-1', label: 'T-01', shape: 'round', capacity: 10, x: 100, y: 100, rotation: 0, tableCategory: 'friends' }],
       new Date('2026-09-18T23:59:59'),
     );
     expect(snap.eventId).toBe('event-1');
-    expect(snap.ownerUid).toBe('owner-1');
+    expect((snap as { ownerUid?: string }).ownerUid).toBeUndefined();
     expect(snap.canvas.width).toBe(1200);
     expect(snap.canvas.background).toBe('banquet');
     expect(snap.tables[0].label).toBe('T-01');
@@ -99,7 +98,7 @@ describe('buildPublicSnapshot', () => {
   });
   it('handles missing fields with sensible defaults', () => {
     const snap = buildPublicSnapshot(
-      'e', 'o',
+      'e',
       {},
       [{ id: 'T-1' }],
       new Date(),

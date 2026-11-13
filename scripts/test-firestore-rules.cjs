@@ -63,12 +63,12 @@ const BOB_EVENT = 'bob-event-1';
 async function seedAliceData() {
   const ctx = alice();
   const db = ctx.firestore();
-  await setDoc(doc(db, 'artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT'), {
+  await setDoc(doc(db, `artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT`), {
     name: 'Alice Wedding',
     date: '2026-12-31',
     tier: 'free',
   });
-  await setDoc(doc(db, 'artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST'), {
+  await setDoc(doc(db, `artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST`), {
     eventId: ALICE_EVENT,
     guestId: 'ALICE_GUEST',
     name: 'Bob The Guest',
@@ -76,7 +76,7 @@ async function seedAliceData() {
   });
   // Issue a guest link that's been redeemed by 'guest-uid' for ALICE_EVENT
   await setDoc(
-    doc(db, 'artifacts/${APP_ID}/users/alice-uid/guestLinks/guest-uid'),
+    doc(db, `artifacts/${APP_ID}/users/alice-uid/guestLinks/guest-uid`),
     {
       ownerUid: 'alice-uid',
       eventId: ALICE_EVENT,
@@ -90,7 +90,7 @@ async function seedAliceData() {
 async function seedBobData() {
   const ctx = bob();
   const db = ctx.firestore();
-  await setDoc(doc(db, 'artifacts/${APP_ID}/users/bob-uid/events/BOB_EVENT'), {
+  await setDoc(doc(db, `artifacts/${APP_ID}/users/bob-uid/events/BOB_EVENT`), {
     name: 'Bob Wedding',
     tier: 'free',
   });
@@ -115,14 +115,14 @@ async function runTests() {
 
   // Owner can read their own event
   await assertSucceeds(
-    getDoc(doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT')),
+    getDoc(doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT`)),
   );
   log('Owner can read own event', true);
 
   // Owner can write their own event
   await assertSucceeds(
     setDoc(
-      doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/events/new-evt'),
+      doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/events/new-evt`),
       { name: 'New' },
     ),
   );
@@ -132,14 +132,14 @@ async function runTests() {
 
   // Alice CANNOT read Bob's event
   let res = await assertFails(
-    getDoc(doc(alice().firestore(), 'artifacts/${APP_ID}/users/bob-uid/events/BOB_EVENT')),
+    getDoc(doc(alice().firestore(), `artifacts/${APP_ID}/users/bob-uid/events/BOB_EVENT`)),
   );
   log("Alice CANNOT read Bob's event", true, res.code || '');
 
   // Alice CANNOT write to Bob's space
   res = await assertFails(
     setDoc(
-      doc(alice().firestore(), 'artifacts/${APP_ID}/users/bob-uid/events/pwned'),
+      doc(alice().firestore(), `artifacts/${APP_ID}/users/bob-uid/events/pwned`),
       { name: 'Pwned' },
     ),
   );
@@ -147,7 +147,7 @@ async function runTests() {
 
   // Anonymous cannot read anything
   res = await assertFails(
-    getDoc(doc(anonymous().firestore(), 'artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT')),
+    getDoc(doc(anonymous().firestore(), `artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT`)),
   );
   log('Anonymous CANNOT read events', true, res.code || '');
 
@@ -156,26 +156,26 @@ async function runTests() {
   // Guest (with valid redeemed link) CAN read the linked event
   const guestCtx = env.authenticatedContext('guest-uid');
   await assertSucceeds(
-    getDoc(doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT')),
+    getDoc(doc(guestCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT`)),
   );
   log('Guest with valid link CAN read linked event', true);
 
   // Guest CANNOT read a DIFFERENT owner's event
   await assertFails(
-    getDoc(doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/bob-uid/events/BOB_EVENT')),
+    getDoc(doc(guestCtx.firestore(), `artifacts/${APP_ID}/users/bob-uid/events/BOB_EVENT`)),
   );
   log("Guest CANNOT read another owner's event", true);
 
   // Guest CANNOT read the guests list (PII)
   await assertFails(
-    getDoc(doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST')),
+    getDoc(doc(guestCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST`)),
   );
   log('Guest CANNOT read guest list (PII protection)', true);
 
   // Guest CAN create a photo under their linked event
   await assertSucceeds(
     setDoc(
-      doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/photos/photo-1'),
+      doc(guestCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/photos/photo-1`),
       {
         eventId: ALICE_EVENT,
         url: 'https://nas.example/photo.jpg',
@@ -190,7 +190,7 @@ async function runTests() {
   // Guest CANNOT create a photo under an unrelated owner
   await assertFails(
     setDoc(
-      doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/bob-uid/photos/pwned'),
+      doc(guestCtx.firestore(), `artifacts/${APP_ID}/users/bob-uid/photos/pwned`),
       {
         eventId: BOB_EVENT,
         url: 'https://nas.example/x.jpg',
@@ -207,7 +207,7 @@ async function runTests() {
   // Seed an expired link
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(
-      doc(ctx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/guestLinks/expired-uid'),
+      doc(ctx.firestore(), `artifacts/${APP_ID}/users/alice-uid/guestLinks/expired-uid`),
       {
         ownerUid: 'alice-uid',
         eventId: ALICE_EVENT,
@@ -219,7 +219,7 @@ async function runTests() {
   });
   const expiredCtx = env.authenticatedContext('expired-uid');
   await assertFails(
-    getDoc(doc(expiredCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT')),
+    getDoc(doc(expiredCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT`)),
   );
   log('Expired-link guest CANNOT read linked event', true);
 
@@ -228,7 +228,7 @@ async function runTests() {
   // jobRequests: any signed-in user can read
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(
-      doc(ctx.firestore(), 'artifacts/${APP_ID}/jobRequests/job-1'),
+      doc(ctx.firestore(), `artifacts/${APP_ID}/jobRequests/job-1`),
       {
         coupleUid: 'alice-uid',
         title: 'Need a florist',
@@ -236,13 +236,13 @@ async function runTests() {
     );
   });
   await assertSucceeds(
-    getDoc(doc(alice().firestore(), 'artifacts/${APP_ID}/jobRequests/job-1')),
+    getDoc(doc(alice().firestore(), `artifacts/${APP_ID}/jobRequests/job-1`)),
   );
   log('Signed-in user CAN read public jobRequests', true);
 
   // Anonymous cannot read jobRequests (we required signed-in)
   await assertFails(
-    getDoc(doc(anonymous().firestore(), 'artifacts/${APP_ID}/jobRequests/job-1')),
+    getDoc(doc(anonymous().firestore(), `artifacts/${APP_ID}/jobRequests/job-1`)),
   );
   log('Anonymous CANNOT read jobRequests', true);
 
@@ -251,7 +251,7 @@ async function runTests() {
   // Seed a helper with canScan only
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(
-      doc(ctx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/helpers/scan-helper'),
+      doc(ctx.firestore(), `artifacts/${APP_ID}/users/alice-uid/helpers/scan-helper`),
       {
         ownerUid: 'alice-uid',
         email: 'scan@example.com',
@@ -274,19 +274,19 @@ async function runTests() {
 
   // canScan helper can read their own helper doc
   await assertSucceeds(
-    getDoc(doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/helpers/scan-helper')),
+    getDoc(doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/helpers/scan-helper`)),
   );
   log('Helper CAN read own helper doc', true);
 
   // Helper CANNOT read other helpers (privacy)
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(
-      doc(ctx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/helpers/other-helper'),
+      doc(ctx.firestore(), `artifacts/${APP_ID}/users/alice-uid/helpers/other-helper`),
       { ownerUid: 'alice-uid', status: 'active', perms: { canScan: true } },
     );
   });
   await assertFails(
-    getDoc(doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/helpers/other-helper')),
+    getDoc(doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/helpers/other-helper`)),
   );
   log('Helper CANNOT read other helpers', true);
 
@@ -294,21 +294,21 @@ async function runTests() {
   // for the scan flow) -- actually, rules require canViewGuestList explicit.
   // Test the negative case first: canScan alone cannot read guests.
   await assertFails(
-    getDoc(doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST')),
+    getDoc(doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST`)),
   );
   log('canScan helper (no canViewGuestList) CANNOT read guests', true);
 
   // canScan helper CAN update hasAttended on a guest (audit fields only)
   await assertSucceeds(
     setDoc(
-      doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST'),
+      doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST`),
       { hasAttended: true, lastScannedBy: 'scan-helper', lastScannedAt: Date.now() },
       { merge: true },
     ).catch(async () => {
       // setDoc with merge might not be in the test util — try updateDoc instead.
       const { updateDoc, update } = await import('firebase/firestore');
       return updateDoc(
-        doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST'),
+        doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST`),
         { hasAttended: true, lastScannedBy: 'scan-helper', lastScannedAt: Date.now() },
       );
     }),
@@ -320,7 +320,7 @@ async function runTests() {
   try {
     const { updateDoc } = await import('firebase/firestore');
     await updateDoc(
-      doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST'),
+      doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST`),
       { tableNumber: 'Table 99' },
     );
   } catch (e) {
@@ -331,25 +331,25 @@ async function runTests() {
   // canScan helper CANNOT read tasks (no canViewChecklist)
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(
-      doc(ctx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/tasks/task-1'),
+      doc(ctx.firestore(), `artifacts/${APP_ID}/users/alice-uid/tasks/task-1`),
       { title: 'Decorations', eventId: ALICE_EVENT },
     );
   });
   await assertFails(
-    getDoc(doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/tasks/task-1')),
+    getDoc(doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/tasks/task-1`)),
   );
   log('canScan helper CANNOT read tasks', true);
 
   // canScan helper CAN read events (hasAnyHelperViewPerm includes canScan)
   await assertSucceeds(
-    getDoc(doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT')),
+    getDoc(doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT`)),
   );
   log('canScan helper CAN read events (needs to know event context)', true);
 
   // Helper with NO perms at all CANNOT read events
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(
-      doc(ctx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/helpers/useless-helper'),
+      doc(ctx.firestore(), `artifacts/${APP_ID}/users/alice-uid/helpers/useless-helper`),
       {
         ownerUid: 'alice-uid',
         status: 'active',
@@ -368,14 +368,14 @@ async function runTests() {
   });
   const uselessCtx = env.authenticatedContext('useless-helper');
   await assertFails(
-    getDoc(doc(uselessCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT')),
+    getDoc(doc(uselessCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/events/ALICE_EVENT`)),
   );
   log('Helper with zero perms CANNOT read events', true);
 
   // Revoked helper CANNOT do anything
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(
-      doc(ctx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/helpers/revoked-helper'),
+      doc(ctx.firestore(), `artifacts/${APP_ID}/users/alice-uid/helpers/revoked-helper`),
       {
         ownerUid: 'alice-uid',
         status: 'revoked',
@@ -385,14 +385,14 @@ async function runTests() {
   });
   const revokedCtx = env.authenticatedContext('revoked-helper');
   await assertFails(
-    getDoc(doc(revokedCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST')),
+    getDoc(doc(revokedCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST`)),
   );
   log('Revoked helper CANNOT read guests', true);
 
   // Helper CANNOT write their own doc (owner-only)
   await assertFails(
     setDoc(
-      doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/helpers/scan-helper'),
+      doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/helpers/scan-helper`),
       { status: 'active', perms: { canScan: true, canEditGuests: true } },
       { merge: true },
     ),
@@ -402,7 +402,7 @@ async function runTests() {
   // Owner CAN grant any perm
   await assertSucceeds(
     setDoc(
-      doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/helpers/scan-helper'),
+      doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/helpers/scan-helper`),
       { perms: { canEditGuests: true } },
       { merge: true },
     ),
@@ -413,7 +413,7 @@ async function runTests() {
   const { updateDoc } = await import('firebase/firestore');
   await assertSucceeds(
     updateDoc(
-      doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST'),
+      doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/guests/ALICE_GUEST`),
       { tableNumber: 'Table 5' },
     ),
   );
@@ -424,7 +424,7 @@ async function runTests() {
   // Helper CAN write scanLog entries
   await assertSucceeds(
     setDoc(
-      doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/scanLog/scan-1'),
+      doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/scanLog/scan-1`),
       {
         guestId: 'ALICE_GUEST',
         helperUid: 'scan-helper',
@@ -438,7 +438,7 @@ async function runTests() {
   // Helper CANNOT forge another helper's UID in scanLog
   await assertFails(
     setDoc(
-      doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/scanLog/forged'),
+      doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/scanLog/forged`),
       {
         guestId: 'ALICE_GUEST',
         helperUid: 'some-other-helper',
@@ -451,20 +451,20 @@ async function runTests() {
 
   // Helper CANNOT read scanLog (owner-only)
   await assertFails(
-    getDoc(doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/scanLog/scan-1')),
+    getDoc(doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/scanLog/scan-1`)),
   );
   log('Helper CANNOT read scanLog (owner-only)', true);
 
   // Owner CAN read scanLog
   await assertSucceeds(
-    getDoc(doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/scanLog/scan-1')),
+    getDoc(doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/scanLog/scan-1`)),
   );
   log('Owner CAN read scanLog', true);
 
   // Helper CANNOT update or delete scanLog (immutable)
   await assertFails(
     setDoc(
-      doc(scanCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/scanLog/scan-1'),
+      doc(scanCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/scanLog/scan-1`),
       { scannedAt: 0 },
       { merge: true },
     ),
@@ -479,7 +479,7 @@ async function runTests() {
   // Seed a redPacket owned by alice
   await env.withSecurityRulesDisabled(async (ctx) => {
     await setDoc(
-      doc(ctx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1'),
+      doc(ctx.firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1`),
       {
         provider: 'payme',
         label: 'PayMe - Jenny',
@@ -495,14 +495,14 @@ async function runTests() {
 
   // Owner CAN read their own QR
   await assertSucceeds(
-    getDoc(doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+    getDoc(doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1`)),
   );
   log('Owner CAN read own redPackets', true);
 
   // Owner CAN create a new QR
   await assertSucceeds(
     setDoc(
-      doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/fps-1'),
+      doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/fps-1`),
       {
         provider: 'fps',
         label: 'FPS',
@@ -516,20 +516,20 @@ async function runTests() {
 
   // Guest with valid link CAN read owner's QRs
   await assertSucceeds(
-    getDoc(doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+    getDoc(doc(guestCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1`)),
   );
   log('Valid-link guest CAN read redPackets', true);
 
   // Cross-tenant: bob (different owner) CANNOT read alice's QRs
   await assertFails(
-    getDoc(doc(bob().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+    getDoc(doc(bob().firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1`)),
   );
   log("Cross-tenant: bob CANNOT read alice's redPackets", true);
 
   // Cross-tenant: bob CANNOT write to alice's QRs
   await assertFails(
     setDoc(
-      doc(bob().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/evil'),
+      doc(bob().firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/evil`),
       {
         provider: 'payme',
         label: 'Hijack',
@@ -544,7 +544,7 @@ async function runTests() {
   // Guest with valid link CANNOT write
   await assertFails(
     setDoc(
-      doc(guestCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/hostile'),
+      doc(guestCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/hostile`),
       {
         provider: 'payme',
         label: 'Hostile',
@@ -559,7 +559,7 @@ async function runTests() {
   // Owner CAN update metadata but NOT qrUrl (image swap must delete+recreate)
   await assertSucceeds(
     setDoc(
-      doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1'),
+      doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1`),
       { label: 'PayMe - Jenny & Tom', suggested: 1000 },
       { merge: true },
     ),
@@ -568,7 +568,7 @@ async function runTests() {
 
   await assertFails(
     setDoc(
-      doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1'),
+      doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1`),
       { qrUrl: 'https://firebasestorage.googleapis.com/v0/b/test/o/swapped.png' },
       { merge: true },
     ),
@@ -577,14 +577,14 @@ async function runTests() {
 
   // Owner CAN delete
   await assertSucceeds(
-    deleteDoc(doc(alice().firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/fps-1')),
+    deleteDoc(doc(alice().firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/fps-1`)),
   );
   log('Owner CAN delete redPackets', true);
 
   // Expired-link guest CANNOT read
   const guestExpiredCtx = env.authenticatedContext('expired-uid');
   await assertFails(
-    getDoc(doc(guestExpiredCtx.firestore(), 'artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1')),
+    getDoc(doc(guestExpiredCtx.firestore(), `artifacts/${APP_ID}/users/alice-uid/redPackets/payme-1`)),
   );
   log('Expired-link guest CANNOT read redPackets', true);
 

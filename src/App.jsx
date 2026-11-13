@@ -2575,12 +2575,6 @@ export default function App() {
       ownerUid: guest.qOwner,
       eventId: guest.qEvent,
     });
-  const { data: guestModeEvent } = useFirestoreDoc(
-    guest.isGuestMode && guest.qOwner && guest.qEvent
-      ? doc(db, 'artifacts', appId, 'users', guest.qOwner, 'events', guest.qEvent)
-      : null,
-    [guest.isGuestMode, guest.qOwner, guest.qEvent],
-  );
 
   // 2026-08-23 — Manus P2b: fetch the BOUND guest via the
   // getGuestPortalBootstrap callable (PDF §3.2). Replaces the
@@ -4263,7 +4257,7 @@ export default function App() {
           // both.
           eventName={
             guest.isGuestMode
-              ? guestExperience?.hero?.coupleNames || guestModeEvent?.name || null
+              ? guestExperience?.hero?.coupleNames || null
               : currentEvent?.name
           }
           isUploading={isUploading}
@@ -4304,7 +4298,7 @@ export default function App() {
           // props is a pure additive change to the contract.
           eventDate={
             guest.isGuestMode
-              ? guestExperience?.hero?.dateLabel || guestModeEvent?.date || null
+              ? guestExperience?.hero?.dateLabel || null
               : currentEvent?.date || null
           }
           eventTime={
@@ -4313,18 +4307,17 @@ export default function App() {
                 // published slot. Falls through to legacy event
                 // time when no projection (still allowed by P1 rules).
                 guestExperience?.schedule?.[0]?.startsAt?.toDate?.()?.toISOString?.()
-                  || guestModeEvent?.time
                   || null
               : currentEvent?.time || null
           }
           eventVenue={
             guest.isGuestMode
-              ? guestExperience?.venues?.[0]?.name || guestModeEvent?.venue || null
+              ? guestExperience?.venues?.[0]?.name || null
               : currentEvent?.venue || null
           }
           eventAddress={
             guest.isGuestMode
-              ? guestExperience?.venues?.[0]?.address || guestModeEvent?.address || null
+              ? guestExperience?.venues?.[0]?.address || null
               : currentEvent?.address || null
           }
           onSaveGuestMessage={handleSaveGuestMessage}
