@@ -1434,3 +1434,8 @@ export {
   listPaymentReceipts,
   computeEntitlement,
 } from './entitlementResolver';
+
+// Mailgun catch-all for *@savetheday.io. Writes inbound_threads and
+// inbound_messages with the Admin SDK. Clients cannot read those
+// collections; see firestore.rules.
+export { inboundEmail } from './inboundEmail';

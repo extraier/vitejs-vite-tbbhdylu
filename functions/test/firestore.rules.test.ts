@@ -1162,3 +1162,22 @@ describe.skipIf(skipEmulator)('firestore.rules — helper pendingInvites and cou
     await assertFails(getDocs(collection(stranger!, 'proposals')));
   });
 });
+
+describe.skipIf(skipEmulator)('firestore.rules — inbound mail', () => {
+  it('lets an admin read inbound threads and messages, and denies everyone else', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await setDoc(doc(adminDb, 'inbound_threads', 'thread-1'), { subject: 'Help', status: 'open' });
+      await setDoc(doc(adminDb, 'inbound_messages', 'msg-1'), { threadId: 'thread-1', from: 'a@example.com' });
+    });
+    const admin = env.authenticatedContext('admin-mail', { admin: true }).firestore();
+    await assertSucceeds(getDoc(doc(admin, 'inbound_threads', 'thread-1')));
+    await assertSucceeds(getDocs(collection(admin, 'inbound_messages')));
+    const stranger = await asUser('stranger-mail');
+    await assertFails(getDoc(doc(stranger!, 'inbound_threads', 'thread-1')));
+    await assertFails(getDocs(collection(stranger!, 'inbound_messages')));
+    const anon = env.unauthenticatedContext().firestore();
+    await assertFails(getDoc(doc(anon, 'inbound_messages', 'msg-1')));
+    await assertFails(setDoc(doc(admin, 'inbound_threads', 'forged'), { subject: 'nope' }));
+  });
+});
