@@ -221,13 +221,24 @@ describe('buildAssignmentNotificationId — idempotency', () => {
 });
 
 describe('diffKeys', () => {
-  it('returns the union of keys from both snapshots', () => {
-    expect(diffKeys({ a: 1, b: 2 }, { a: 1, c: 3 })).toEqual(
-      expect.arrayContaining(['a', 'b', 'c']),
-    );
+  it('returns only keys whose values changed', () => {
+    expect(diffKeys({ a: 1, b: 2 }, { a: 1, c: 3 }).sort()).toEqual(['b', 'c']);
   });
   it('handles both snapshots null', () => {
     expect(diffKeys(null, null)).toEqual([]);
+  });
+  it('does not treat an unchanged title as a change when only updatedAt moves', () => {
+    const before = { title: '茶敘', assignedHelperUid: 'helper-a', updatedAt: 1 };
+    const after = { title: '茶敘', assignedHelperUid: 'helper-a', updatedAt: 2 };
+    const changedKeys = diffKeys(before, after);
+    expect(changedKeys).toEqual(['updatedAt']);
+    expect(resolveAssignmentRecipient({
+      beforeData: before,
+      afterData: after,
+      changedKeys,
+      previousHelperUid: 'helper-a',
+      currentHelperUid: 'helper-a',
+    })).toEqual({ recipient: null, action: 'updated' });
   });
 });
 

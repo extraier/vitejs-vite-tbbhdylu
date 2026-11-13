@@ -22,15 +22,15 @@
 import {
   addDoc,
   collection,
-  doc,
   getDocs,
   getFirestore,
   limit,
   query,
   serverTimestamp,
-  writeBatch,
 } from 'firebase/firestore';
 import { getApps } from 'firebase/app';
+import { httpsCallable } from 'firebase/functions';
+import { functions } from './firebase';
 
 import { parseCsv } from './csv';
 import { VENDOR_CATEGORIES } from './config';
@@ -78,7 +78,7 @@ export type CommitSummary = {
 };
 
 const MAX_TAGS = 5;
-const BATCH_SIZE = 450; // Firestore hard cap is 500; leave headroom.
+const BATCH_SIZE = 400; // Callable cap. Admin SDK batch still stays under 500.
 
 // ─── Helper ───────────────────────────────────────────────────────────────
 
@@ -270,14 +270,10 @@ export async function buildImportPlan(csvText: string): Promise<VendorImportPlan
             rating: 0,
             ratingCount: 0,
             status: 'approved',
-            appliedAt: serverTimestamp(),
-            importedAt: serverTimestamp(),
             importedVia: 'admin-csv',
           }
         : {
-            importedAt: serverTimestamp(),
             importedVia: 'admin-csv',
-            lastEditedViaImport: serverTimestamp(),
           }),
     };
 
@@ -394,13 +390,11 @@ export async function commitImportPlan(
   let lastError: string | null = null;
 
   const perRowLog: { lineNumber: number; vendorId: string; action: 'create' | 'update' }[] = [];
+  const upsert = httpsCallable(functions, 'adminUpsertVendors');
 
   for (let i = 0; i < accepted.length; i += BATCH_SIZE) {
     const chunk = accepted.slice(i, i + BATCH_SIZE);
-    const batch = writeBatch(db);
     for (const row of chunk) {
-      const ref = doc(db, 'vendors', row.vendorId);
-      batch.set(ref, row.doc, { merge: row.action === 'update' });
       perRowLog.push({
         lineNumber: row.lineNumber,
         vendorId: row.vendorId,
@@ -408,7 +402,13 @@ export async function commitImportPlan(
       });
     }
     try {
-      await batch.commit();
+      await upsert({
+        rows: chunk.map((row) => ({
+          vendorId: row.vendorId,
+          doc: row.doc,
+          merge: row.action === 'update',
+        })),
+      });
       written += chunk.length;
       onProgress?.({ total: accepted.length, done: written, failed, lastError });
     } catch (err: unknown) {

@@ -68,11 +68,8 @@ export function normalizeLiveVendor(
   raw: Record<string, unknown> | null | undefined,
 ): MergedVendor | null {
   if (!raw) return null;
-  // Filter out rejected/suspended vendors — they shouldn't
-  // appear in the public catalog. Default to 'approved' for
-  // legacy docs (pre-onboarding vendors without a status
-  // field are treated as approved per existing
-  // AdminVendors logic).
+  // Only status == 'approved' is shown. Pending applications
+  // and docs with no status stay out of the public catalog.
   if (!isVendorVisible(raw)) return null;
   return {
     // doc id (vendorUid/slug) — also used as numeric fallback
@@ -129,8 +126,7 @@ export function normalizeLiveVendor(
 export function isVendorVisible(
   raw: Record<string, unknown> | null | undefined,
 ): boolean {
-  const status = (raw?.status as string) || 'approved';
-  return status !== 'rejected' && status !== 'suspended';
+  return raw?.status === 'approved';
 }
 
 // Merge live vendors with the hardcoded demo set.

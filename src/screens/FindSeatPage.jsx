@@ -7,11 +7,12 @@
 // matches are returned + the matched table pulses on the canvas.
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, getDoc, getDocs, collection } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { doc, getDocs, collection } from 'firebase/firestore';
+import { db, appId } from '../lib/firebase';
 import {
   validatePublicUrl,
   fetchPublicSnapshot,
+  findSeatAssignmentsPath,
   matchGuestName,
   readRedactedAssignmentsCache,
   cacheRedactedAssignments,
@@ -44,7 +45,7 @@ function FindSeatPage() {
     }
     let cancelled = false;
     (async () => {
-      const out = await fetchPublicSnapshot({ doc: (p) => doc(db, p) }, token);
+      const out = await fetchPublicSnapshot({ doc: (p) => doc(db, p) }, token, Date.now(), appId);
       if (cancelled) return;
       if (out.ok) {
         setSnap(out.snap);
@@ -92,7 +93,7 @@ function FindSeatPage() {
 
     (async () => {
       try {
-        const snap = await getDocs(collection(db, `findSeatAssignments/${token}`));
+        const snap = await getDocs(collection(db, findSeatAssignmentsPath(token, undefined, appId)));
         if (cancelled) return;
         const rows = snap.docs.map((d) => {
           const data = d.data() || {};

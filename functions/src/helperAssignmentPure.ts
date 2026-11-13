@@ -177,24 +177,41 @@ export function resolveAssignmentRecipient(opts: {
  * 2026-08-31 — Manus P11: compute the diff between two doc
  * snapshots for the trigger's changedKeys list.
  *
- * Uses Firestore's `affectedKeys()` semantics (keys present in
- * either snapshot, excluding pure deletions whose counterpart
- * is also gone). For our purposes — change detection — we just
- * union the keys, then narrow to meaningful ones downstream.
- *
- * NOTE: The trigger uses the real `request.resource.data.diff(
- * resource.data).affectedKeys()` from the Firestore event. This
- * helper is for unit tests and for the synthetic-event path the
- * tests drive; the production trigger does NOT call this.
+ * Returns only keys whose values differ. Unchanged fields, including
+ * a title that is still present, are not included. The assignment
+ * trigger uses this list, so an updatedAt-only write does not notify.
  */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return false;
+  if (typeof a === 'object') {
+    try {
+      return JSON.stringify(a) === JSON.stringify(b);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 export function diffKeys(
   beforeData: Record<string, unknown> | null,
   afterData: Record<string, unknown> | null,
 ): string[] {
-  const keys = new Set<string>();
-  for (const k of Object.keys(beforeData || {})) keys.add(k);
-  for (const k of Object.keys(afterData || {})) keys.add(k);
-  return Array.from(keys);
+  const keys = new Set<string>([
+    ...Object.keys(beforeData || {}),
+    ...Object.keys(afterData || {}),
+  ]);
+  const changed: string[] = [];
+  for (const key of keys) {
+    const inBefore = !!beforeData && Object.prototype.hasOwnProperty.call(beforeData, key);
+    const inAfter = !!afterData && Object.prototype.hasOwnProperty.call(afterData, key);
+    if (!inBefore || !inAfter || !sameValue(beforeData?.[key], afterData?.[key])) {
+      changed.push(key);
+    }
+  }
+  return changed;
 }
 
 /**

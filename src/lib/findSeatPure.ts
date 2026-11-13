@@ -112,7 +112,6 @@ export function tokenTimeRemaining(
  */
 export interface PublicSeatingSnapshot {
   eventId: string;
-  ownerUid: string;
   expiresAt: number; // ms epoch
   canvas: {
     width: number;
@@ -134,9 +133,27 @@ export interface PublicTableSnapshot {
 }
 
 /** Build a public snapshot from the owner's raw seating state. */
+export const FIND_SEAT_APP_ID = 'savetheday-production';
+
+export function publicSeatingPath(token: string, appId: string = FIND_SEAT_APP_ID): string {
+  return `artifacts/${appId}/publicSeating/${token}`;
+}
+
+export function findSeatAssignmentsPath(
+  token: string,
+  guestId?: string,
+  appId: string = FIND_SEAT_APP_ID,
+): string {
+  const base = `artifacts/${appId}/findSeatAssignments/${token}`;
+  return guestId ? `${base}/${guestId}` : base;
+}
+
+export function seatingPublisherPath(token: string, appId: string = FIND_SEAT_APP_ID): string {
+  return `artifacts/${appId}/seatingPublishers/${token}`;
+}
+
 export function buildPublicSnapshot(
   eventId: string,
-  ownerUid: string,
   meta: { canvasWidth?: number; canvasHeight?: number; background?: string },
   tables: ReadonlyArray<{
     id: string;
@@ -152,7 +169,6 @@ export function buildPublicSnapshot(
 ): PublicSeatingSnapshot {
   return {
     eventId,
-    ownerUid,
     expiresAt: expiresAt.getTime(),
     canvas: {
       width: meta.canvasWidth ?? 1200,
@@ -211,12 +227,13 @@ export async function fetchPublicSnapshot(
   db: { doc: (path: string) => { get: () => Promise<{ exists: boolean; data: () => unknown }> } },
   token: string,
   now: number = Date.now(),
+  appId: string = FIND_SEAT_APP_ID,
 ): Promise<
   | { ok: true; snap: PublicSeatingSnapshot }
   | { ok: false; reason: 'not_found' | 'expired' | 'malformed_token' }
 > {
   if (!token || token.length < 16) return { ok: false, reason: 'malformed_token' };
-  const ref = db.doc(`publicSeating/${token}`);
+  const ref = db.doc(publicSeatingPath(token, appId));
   const snap = await ref.get();
   if (!snap.exists) return { ok: false, reason: 'not_found' };
   const data = snap.data() as PublicSeatingSnapshot;

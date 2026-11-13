@@ -7,10 +7,11 @@ import {
 
 // ---------- isVendorVisible ----------
 describe('isVendorVisible', () => {
-  it('returns true when status is missing (legacy docs default to approved)', () => {
-    expect(isVendorVisible({})).toBe(true);
-    expect(isVendorVisible(null)).toBe(true);
-    expect(isVendorVisible(undefined)).toBe(true);
+  it('hides docs with no status and pending applications', () => {
+    expect(isVendorVisible({})).toBe(false);
+    expect(isVendorVisible(null)).toBe(false);
+    expect(isVendorVisible(undefined)).toBe(false);
+    expect(isVendorVisible({ status: 'pending' })).toBe(false);
   });
 
   it('returns true for approved', () => {
@@ -61,6 +62,7 @@ describe('normalizeLiveVendor', () => {
       createdAt: { toMillis: () => 1700000000000 },
       signupStatus: 'invited',
       source: 'heychoices',
+      status: 'approved',
     };
     const result = normalizeLiveVendor('studio-a', raw);
     expect(result).toEqual({
@@ -88,33 +90,33 @@ describe('normalizeLiveVendor', () => {
   });
 
   it('falls back name → doc id when name is missing', () => {
-    const result = normalizeLiveVendor('doc-42', {});
+    const result = normalizeLiveVendor('doc-42', { status: 'approved' });
     expect(result?.name).toBe('doc-42');
   });
 
   it('defaults rating to 0 when not a number', () => {
-    expect(normalizeLiveVendor('x', { rating: '4.5' })?.rating).toBe(0);
-    expect(normalizeLiveVendor('x', { rating: null })?.rating).toBe(0);
+    expect(normalizeLiveVendor('x', { status: 'approved', rating: '4.5' })?.rating).toBe(0);
+    expect(normalizeLiveVendor('x', { status: 'approved', rating: null })?.rating).toBe(0);
   });
 
   it('falls back price → 請查詢 when missing', () => {
-    expect(normalizeLiveVendor('x', {})?.price).toBe('請查詢');
+    expect(normalizeLiveVendor('x', { status: 'approved',})?.price).toBe('請查詢');
   });
 
   it('defaults category → other when missing', () => {
-    expect(normalizeLiveVendor('x', {})?.category).toBe('other');
+    expect(normalizeLiveVendor('x', { status: 'approved',})?.category).toBe('other');
   });
 
   it('defaults tags → [] when not an array', () => {
-    expect(normalizeLiveVendor('x', { tags: 'not-an-array' })?.tags).toEqual([]);
+    expect(normalizeLiveVendor('x', { status: 'approved', tags: 'not-an-array' })?.tags).toEqual([]);
   });
 
   it('defaults portfolio → [] when not an array', () => {
-    expect(normalizeLiveVendor('x', { portfolio: null })?.portfolio).toEqual([]);
+    expect(normalizeLiveVendor('x', { status: 'approved', portfolio: null })?.portfolio).toEqual([]);
   });
 
   it('prefers explicit portfolioCount over portfolio.length', () => {
-    const result = normalizeLiveVendor('x', {
+    const result = normalizeLiveVendor('x', { status: 'approved',
       portfolio: ['a', 'b', 'c'],
       portfolioCount: 99,
     });
@@ -122,29 +124,29 @@ describe('normalizeLiveVendor', () => {
   });
 
   it('falls back portfolioCount → portfolio.length when missing', () => {
-    const result = normalizeLiveVendor('x', { portfolio: ['a', 'b'] });
+    const result = normalizeLiveVendor('x', { status: 'approved', portfolio: ['a', 'b'] });
     expect(result?.portfolioCount).toBe(2);
   });
 
   it('falls back portfolioCount → 0 when both missing', () => {
-    expect(normalizeLiveVendor('x', {})?.portfolioCount).toBe(0);
+    expect(normalizeLiveVendor('x', { status: 'approved',})?.portfolioCount).toBe(0);
   });
 
   it('viewCount prefers 7d, falls back to 30d, then total', () => {
-    expect(normalizeLiveVendor('x', {
+    expect(normalizeLiveVendor('x', { status: 'approved',
       popularity: { viewCount7d: 10, viewCount30d: 50, viewCountTotal: 1000 },
     })?.viewCount).toBe(10);
-    expect(normalizeLiveVendor('x', {
+    expect(normalizeLiveVendor('x', { status: 'approved',
       popularity: { viewCount30d: 50, viewCountTotal: 1000 },
     })?.viewCount).toBe(50);
-    expect(normalizeLiveVendor('x', {
+    expect(normalizeLiveVendor('x', { status: 'approved',
       popularity: { viewCountTotal: 1000 },
     })?.viewCount).toBe(1000);
-    expect(normalizeLiveVendor('x', {})?.viewCount).toBe(0);
+    expect(normalizeLiveVendor('x', { status: 'approved',})?.viewCount).toBe(0);
   });
 
   it('createdAt handles Firestore Timestamp with toMillis()', () => {
-    const result = normalizeLiveVendor('x', {
+    const result = normalizeLiveVendor('x', { status: 'approved',
       createdAt: { toMillis: () => 1700000000000 },
     });
     expect(result?.createdAt).toBe(1700000000000);
@@ -152,35 +154,35 @@ describe('normalizeLiveVendor', () => {
 
   it('createdAt handles ISO string', () => {
     const iso = '2024-01-15T10:00:00.000Z';
-    const result = normalizeLiveVendor('x', { createdAt: iso });
+    const result = normalizeLiveVendor('x', { status: 'approved', createdAt: iso });
     expect(result?.createdAt).toBe(Date.parse(iso));
   });
 
   it('createdAt handles raw number', () => {
-    expect(normalizeLiveVendor('x', { createdAt: 1700000000000 })?.createdAt)
+    expect(normalizeLiveVendor('x', { status: 'approved', createdAt: 1700000000000 })?.createdAt)
       .toBe(1700000000000);
   });
 
   it('createdAt falls back to 0 when missing or invalid', () => {
-    expect(normalizeLiveVendor('x', {})?.createdAt).toBe(0);
-    expect(normalizeLiveVendor('x', { createdAt: 'not-a-date' })?.createdAt).toBe(0);
+    expect(normalizeLiveVendor('x', { status: 'approved',})?.createdAt).toBe(0);
+    expect(normalizeLiveVendor('x', { status: 'approved', createdAt: 'not-a-date' })?.createdAt).toBe(0);
     // Timestamp.toMillis() throwing also falls back to 0
-    expect(normalizeLiveVendor('x', {
+    expect(normalizeLiveVendor('x', { status: 'approved',
       createdAt: { toMillis: () => { throw new Error('boom'); } },
     })?.createdAt).toBe(0);
   });
 
   it('flags featured as boolean', () => {
-    expect(normalizeLiveVendor('x', { featured: 1 })?.featured).toBe(true);
-    expect(normalizeLiveVendor('x', { featured: 0 })?.featured).toBe(false);
+    expect(normalizeLiveVendor('x', { status: 'approved', featured: 1 })?.featured).toBe(true);
+    expect(normalizeLiveVendor('x', { status: 'approved', featured: 0 })?.featured).toBe(false);
   });
 
   it('defaults signupStatus → uninvited', () => {
-    expect(normalizeLiveVendor('x', {})?.signupStatus).toBe('uninvited');
+    expect(normalizeLiveVendor('x', { status: 'approved',})?.signupStatus).toBe('uninvited');
   });
 
   it('marks normalized live vendors with isLive: true', () => {
-    expect(normalizeLiveVendor('x', {})?.isLive).toBe(true);
+    expect(normalizeLiveVendor('x', { status: 'approved',})?.isLive).toBe(true);
   });
 });
 

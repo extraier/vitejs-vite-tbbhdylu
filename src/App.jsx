@@ -2601,17 +2601,20 @@ export default function App() {
     vendorDocRef,
     [user?.uid, userRole],
   );
-  // 2026-07-23 — Run for all signed-in users, not just vendors.
-  // Previously the query was gated on `userRole === 'vendor'`, which
-  // meant couples saw an empty list and couldn't find their own
-  // posts in 我發佈過嘅求救記錄. The couple-side UI filters to
-  // `j.coupleUid === user.uid` itself, so the query result is safe
-  // to share — a couple never sees another couple's posts.
+  // Vendors list /jobBoard, which has no coupleUid. Couples list
+  // their own /jobRequests (coupleUid == auth.uid). A single
+  // status==open query of /jobRequests used to return every
+  // couple's uid to any signed-in user.
+  const jobListQuery = !user
+    ? null
+    : userRole === 'vendor'
+      ? query(collection(db, 'jobBoard'), where('status', '==', 'open'))
+      : userRole === 'owner'
+        ? query(collection(db, 'jobRequests'), where('coupleUid', '==', user.uid))
+        : null;
   const { data: liveJobRequests, loading: jobRequestsLoading } = useFirestoreCollection(
-    user
-      ? query(collection(db, 'jobRequests'), where('status', '==', 'open'))
-      : null,
-    [user?.uid],
+    jobListQuery,
+    [user?.uid, userRole],
   );
 
   // Sync current event from URL params when in guest mode
@@ -2638,12 +2641,6 @@ export default function App() {
       ownerUid: guest.qOwner,
       eventId: guest.qEvent,
     });
-  const { data: guestModeEvent } = useFirestoreDoc(
-    guest.isGuestMode && guest.qOwner && guest.qEvent
-      ? doc(db, 'artifacts', appId, 'users', guest.qOwner, 'events', guest.qEvent)
-      : null,
-    [guest.isGuestMode, guest.qOwner, guest.qEvent],
-  );
 
   // 2026-08-23 — Manus P2b: fetch the BOUND guest via the
   // getGuestPortalBootstrap callable (PDF §3.2). Replaces the
@@ -4333,7 +4330,7 @@ export default function App() {
           // both.
           eventName={
             guest.isGuestMode
-              ? guestExperience?.hero?.coupleNames || guestModeEvent?.name || null
+              ? guestExperience?.hero?.coupleNames || null
               : currentEvent?.name
           }
           isUploading={isUploading}
@@ -4374,7 +4371,7 @@ export default function App() {
           // props is a pure additive change to the contract.
           eventDate={
             guest.isGuestMode
-              ? guestExperience?.hero?.dateLabel || guestModeEvent?.date || null
+              ? guestExperience?.hero?.dateLabel || null
               : currentEvent?.date || null
           }
           eventTime={
@@ -4383,18 +4380,17 @@ export default function App() {
                 // published slot. Falls through to legacy event
                 // time when no projection (still allowed by P1 rules).
                 guestExperience?.schedule?.[0]?.startsAt?.toDate?.()?.toISOString?.()
-                  || guestModeEvent?.time
                   || null
               : currentEvent?.time || null
           }
           eventVenue={
             guest.isGuestMode
-              ? guestExperience?.venues?.[0]?.name || guestModeEvent?.venue || null
+              ? guestExperience?.venues?.[0]?.name || null
               : currentEvent?.venue || null
           }
           eventAddress={
             guest.isGuestMode
-              ? guestExperience?.venues?.[0]?.address || guestModeEvent?.address || null
+              ? guestExperience?.venues?.[0]?.address || null
               : currentEvent?.address || null
           }
           onSaveGuestMessage={handleSaveGuestMessage}

@@ -35,6 +35,8 @@ import {
   setDoc,
   getDoc,
   getDocs,
+  query,
+  where,
   collection,
   updateDoc,
   setLogLevel,
@@ -670,33 +672,84 @@ describe.skipIf(skipEmulator)('firestore.rules — guest link + privacy (Manus P
     );
   });
 
-  it('(3a) redeemed guest CANNOT list all /guests/* (guest enumeration blocked)', async () => {
-    // P1 NOTE: we DO close the enumeration vector here — `list` is
-    // gated by the read rule, which falls through to hasValidGuestLink
-    // (signed-in + valid link). For ANY signed-in user without a
-    // valid link, the list should fail.
-    //
-    // For a REDEEMED guest, the pre-existing rule does allow list on
-    // the event's guests collection (the guest portal enumerates its
-    // own guests today, even though it doesn't surface them). Tightening
-    // list-on-guests to "own guest only" requires passing link.guestId
-    // through the rule — that's a P2 change because P2 needs the
-    // guestExperience/public projection anyway. For now: a signed-in
-    // attacker with NO link must NOT be able to list /guests/*.
-    const attacker = await asUser('attacker-with-no-link');
+  it('(3a) redeemed guest CANNOT list all /guests/*', async () => {
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
     await assertFails(
-      getDocs(collection(attacker!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests`)),
+      getDocs(collection(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests`)),
     );
   });
 
-  it('(3b) redeemed guest CANNOT get another guest\'s /guests/{id} doc', async () => {
-    // P1 NOTE: deferred to P2. The PDF's strict spec removes guest read
-    // entirely; P1 keeps the read path because the projection doesn't
-    // exist yet (see top-of-file comment). For now, an attacker with NO
-    // link must NOT be able to read another guest's doc.
-    const attacker = await asUser('attacker-with-no-link');
+  it('(3a-own) redeemed guest CAN get only their own guest doc', async () => {
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
+    await assertSucceeds(
+      getDoc(doc(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-1`)),
+    );
+  });
+
+  it('(3b) redeemed guest CANNOT get another guest doc', async () => {
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
     await assertFails(
-      getDoc(doc(attacker!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-2`)),
+      getDoc(doc(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-2`)),
+    );
+  });
+
+  it('(3b-event) redeemed guest CANNOT read the event doc (budget stays private)', async () => {
+    await seedRedeemedLink(guestUid);
+    const guestDb = await asUser(guestUid);
+    await assertFails(
+      getDoc(doc(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}`)),
+    );
+  });
+
+  it('(3b-revoked) a revoked link cannot read the guest doc or a red packet', async () => {
+    await seedRedeemedLink(guestUid);
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/guestLinks/${guestUid}`),
+        { revoked: true },
+        { merge: true },
+      );
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/redPackets/payme`),
+        { provider: 'payme', label: 'PayMe' },
+      );
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/other-event/redPackets/payme`),
+        { provider: 'payme', label: 'other' },
+      );
+    });
+    const guestDb = await asUser(guestUid);
+    await assertFails(
+      getDoc(doc(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-1`)),
+    );
+    await assertFails(
+      getDoc(doc(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/redPackets/payme`)),
+    );
+  });
+
+  it('(3b-redpacket) a valid link reads this event\'s QR and not another event', async () => {
+    await seedRedeemedLink(guestUid);
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/redPackets/payme`),
+        { provider: 'payme', label: 'PayMe' },
+      );
+      await setDoc(
+        doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/events/other-event/redPackets/payme`),
+        { provider: 'payme', label: 'other' },
+      );
+    });
+    const guestDb = await asUser(guestUid);
+    await assertSucceeds(
+      getDoc(doc(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/redPackets/payme`)),
+    );
+    await assertFails(
+      getDoc(doc(guestDb!, `artifacts/savetheday-production/users/${ownerUid}/events/other-event/redPackets/payme`)),
     );
   });
 
@@ -755,6 +808,58 @@ describe.skipIf(skipEmulator)('firestore.rules — guest link + privacy (Manus P
     await assertFails(
       getDoc(doc(guestDb, `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}/guests/g-1`)),
     );
+  });
+});
+
+describe.skipIf(skipEmulator)('firestore.rules — vendors, seating, CSP path', () => {
+  it('rejects a vendor client write to their own /vendors doc', async () => {
+    const db = await asUser('vendor-1');
+    await assertFails(setDoc(doc(db!, 'vendors', 'vendor-1'), {
+      name: 'Self',
+      status: 'approved',
+      rating: 5,
+      signupStatus: 'claimed',
+    }));
+  });
+
+  it('lets an admin read a CSP report under artifacts/{appId}', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/admin/cspReports/reports/report-1'),
+        { violatedDirective: 'script-src' },
+      );
+    });
+    const adminDb = env.authenticatedContext('admin-user', { admin: true }).firestore();
+    await assertSucceeds(
+      getDoc(doc(adminDb, 'artifacts/savetheday-production/admin/cspReports/reports/report-1')),
+    );
+    const member = await asUser('ordinary');
+    await assertFails(
+      getDoc(doc(member!, 'artifacts/savetheday-production/admin/cspReports/reports/report-1')),
+    );
+  });
+
+  it('publishes a find-seat chart without ownerUid and lets an anonymous guest read it', async () => {
+    const owner = await asUser('owner-seat');
+    const token = 'tok123456789012345678';
+    const expiresAt = Date.now() + 60 * 60 * 1000;
+    await assertSucceeds(setDoc(
+      doc(owner!, 'artifacts/savetheday-production/seatingPublishers', token),
+      { ownerUid: 'owner-seat', eventId: 'event-1', expiresAt },
+    ));
+    await assertSucceeds(setDoc(
+      doc(owner!, 'artifacts/savetheday-production/publicSeating', token),
+      {
+        eventId: 'event-1',
+        expiresAt,
+        canvas: { width: 100, height: 100 },
+        tables: [],
+      },
+    ));
+    const anon = env.unauthenticatedContext().firestore();
+    const snap = await getDoc(doc(anon, 'artifacts/savetheday-production/publicSeating', token));
+    expect(snap.data()?.ownerUid).toBeUndefined();
+    expect(snap.data()?.eventId).toBe('event-1');
   });
 });
 
@@ -915,5 +1020,145 @@ describe.skipIf(skipEmulator)('firestore.rules — CSP reports', () => {
         createdAt: Timestamp.fromMillis(1),
       }),
     );
+  });
+});
+
+const pendingInvite = (ownerUid: string, eventId = 'event-1') => ({
+  email: 'helper@example.com',
+  displayName: '幫手',
+  ownerUid,
+  eventId,
+  kind: 'helper',
+  perms: { canViewGuestList: true },
+  status: 'invited',
+});
+
+describe.skipIf(skipEmulator)('firestore.rules — helper pendingInvites and coupleUid', () => {
+  const ownerUid = 'owner-1';
+  const eventId = 'event-1';
+
+  beforeEach(async () => {
+    await seedEvent(ownerUid, eventId, [ownerUid]);
+  });
+
+  it('lets the owner create a real helper pending invite', async () => {
+    const db = await asUser(ownerUid);
+    await assertSucceeds(
+      setDoc(
+        doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      ),
+    );
+  });
+
+  it('lets a co-owner create a real helper pending invite', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', ownerUid, 'coOwners', 'partner-1'),
+        { status: 'active' },
+      );
+    });
+    const db = await asUser('partner-1');
+    await assertSucceeds(
+      setDoc(
+        doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      ),
+    );
+  });
+
+  it('rejects a client pending invite whose ownerUid is not the path owner', async () => {
+    const db = await asUser('attacker-1');
+    await assertFails(
+      setDoc(
+        doc(db!, 'artifacts/savetheday-production/users', 'attacker-1', 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      ),
+    );
+  });
+
+  it('rejects a client writing a pending invite directly under another owner', async () => {
+    const db = await asUser('attacker-1');
+    await assertFails(
+      setDoc(
+        doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite('attacker-1'),
+      ),
+    );
+  });
+
+  it('rejects changing ownerUid on an existing pending invite', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      );
+    });
+    const db = await asUser(ownerUid);
+    await assertFails(
+      updateDoc(
+        doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        { ownerUid: 'victim-2' },
+      ),
+    );
+  });
+
+  it('lets a couple read only their own jobRequests and lets anyone read jobBoard', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const admin = ctx.firestore();
+      await setDoc(doc(admin, 'jobRequests', 'job-owner'), {
+        coupleUid: ownerUid,
+        serviceNeeded: '攝影服務',
+        status: 'open',
+      });
+      await setDoc(doc(admin, 'jobRequests', 'job-other'), {
+        coupleUid: 'other-couple',
+        serviceNeeded: '司儀',
+        status: 'open',
+      });
+      await setDoc(doc(admin, 'jobBoard', 'job-owner'), {
+        serviceNeeded: '攝影服務',
+        status: 'open',
+      });
+    });
+
+    const couple = await asUser(ownerUid);
+    await assertSucceeds(
+      getDocs(query(collection(couple!, 'jobRequests'), where('coupleUid', '==', ownerUid))),
+    );
+    await assertFails(
+      getDocs(query(collection(couple!, 'jobRequests'), where('status', '==', 'open'))),
+    );
+
+    const stranger = await asUser('stranger-1');
+    await assertFails(getDoc(doc(stranger!, 'jobRequests', 'job-owner')));
+    const board = await getDocs(
+      query(collection(stranger!, 'jobBoard'), where('status', '==', 'open')),
+    );
+    expect(board.docs.map((d) => d.id)).toEqual(['job-owner']);
+    expect(board.docs[0].data().coupleUid).toBeUndefined();
+  });
+
+  it('lets only the couple, the vendor, or an admin read a proposal', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'proposals', 'p-1'), {
+        coupleUid: ownerUid,
+        vendorUid: 'vendor-1',
+        jobId: 'job-owner',
+        message: '報價',
+      });
+    });
+
+    const couple = await asUser(ownerUid);
+    await assertSucceeds(
+      getDocs(query(collection(couple!, 'proposals'), where('coupleUid', '==', ownerUid))),
+    );
+    const vendor = await asUser('vendor-1');
+    await assertSucceeds(
+      getDocs(query(collection(vendor!, 'proposals'), where('vendorUid', '==', 'vendor-1'))),
+    );
+    const stranger = await asUser('stranger-1');
+    await assertFails(getDoc(doc(stranger!, 'proposals', 'p-1')));
+    await assertFails(getDocs(collection(stranger!, 'proposals')));
   });
 });

@@ -28,6 +28,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { shareTokenReuse } from './shareTokenPure';
 // 2026-08-14 — mergeOverride is the pure-logic helper for invitation
 // metadata overrides. Lives in its own file so test code can import
 // it without pulling in firebase-admin.
@@ -721,12 +722,24 @@ export const verifyShareToken = onCall(
 
     // Bind link → authUid. The doc id is the caller's auth.uid by design
     // (firestore.rules match /guestLinks/{linkDocId} keys reads by uid).
-    const linkRef = db
+    const links = db
       .collection('artifacts').doc(APP_ID).collection('users').doc(ownerUid)
-      .collection('guestLinks').doc(authUid);
+      .collection('guestLinks');
+    const prior = await links.where('guestId', '==', guestId).get();
+    if (shareTokenReuse(
+      prior.docs.map((d) => ({ id: d.id, redeemedByUid: d.data().redeemedByUid })),
+      authUid,
+    ) === 'taken') {
+      throw new HttpsError('already-exists', 'This invitation was already redeemed on another device.');
+    }
+
+    const linkRef = links.doc(authUid);
     const existing = await linkRef.get();
     if (existing.exists) {
       const data = existing.data()!;
+      if (data.revoked === true) {
+        throw new HttpsError('permission-denied', 'Link revoked.');
+      }
       // Idempotent — same (eventId, guestId) pair means same invite.
       if (data.eventId === eventId && data.guestId === guestId) {
         // If guestDocId wasn't set on the previous redeem (older callers),

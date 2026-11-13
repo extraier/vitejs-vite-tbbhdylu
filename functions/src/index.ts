@@ -209,6 +209,7 @@ export const revokeGuestLink = onCall({ cors: true, region: "us-central1" }, asy
 // engine then enforces per-tab access based on the perms flags.
 
 import { getAuth } from 'firebase-admin/auth';
+import { resolveHelperInviteAcceptance } from './helperInvitePure';
 
 /**
  * findGuestLink — collectionGroup lookup by document ID.
@@ -398,21 +399,15 @@ export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, 
     throw new HttpsError('invalid-argument', 'Auth user has no email.');
   }
 
-  // Find any owner who invited this email.
+  // Find helper invites addressed to this email.
   //
-  // 2026-08-15 — Helper onboarding audit (P1 — pendingInvites
-  // collision). The collection-group scan used to match every
-  // document named `pendingInvites` by email — including vendor
-  // outreach invitations at /vendors/{slug}/pendingInvites.
-  // A same-email vendor invite would be picked up here, fail to
-  // construct a valid helper doc path, and either 500 or
-  // silently corrupt the helper doc. Two safeguards:
-  //   1. Filter by `kind == 'helper'` (vendor invites either
-  //      stamp `kind: 'vendor'` or remain unset; either way
-  //      excluded).
-  //   2. Defensive: skip docs that lack the required helper
-  //      shape (ownerUid, perms, eventId) so legacy records
-  //      without `kind` still don't poison acceptance.
+  // kind == 'helper' keeps ordinary vendor outreach docs out of
+  // the candidate set. It is not sufficient on its own: a client
+  // can stamp kind: 'helper' on a doc under their own user, or
+  // on /vendors/{slug}/pendingInvites. acceptHelperDocs ignores
+  // body.ownerUid and accepts only docs whose path is
+  // artifacts/{appId}/users/{ownerUid}/pendingInvites/{id} and
+  // whose body ownerUid matches that path owner.
   const pending = await db
     .collectionGroup('pendingInvites')
     .where('email', '==', authEmail)
@@ -420,52 +415,62 @@ export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, 
     .get();
 
   if (pending.empty) {
-    // Fall back to the legacy lookup (no kind field on old
-    // docs) — but only if there's at least one matching
-    // document that ALSO has the helper-shaped fields.
-    const legacy = await db
-      .collectionGroup('pendingInvites')
-      .where('email', '==', authEmail)
-      .get();
-    const legacyHelpers = legacy.docs.filter((d) => {
-      const x = d.data();
-      return (
-        x &&
-        typeof x.ownerUid === 'string' &&
-        x.perms &&
-        typeof x.eventId === 'string' &&
-        x.kind !== 'vendor' // exclude explicit vendor invites
-      );
-    });
-    if (legacyHelpers.length === 0) {
-      throw new HttpsError('not-found', 'No helper invite found for this email.');
-    }
-    return acceptHelperDocs(legacyHelpers, authUid);
+    throw new HttpsError('not-found', 'No helper invite found for this email.');
   }
 
-  return acceptHelperDocs(pending.docs, authUid);
+  return acceptHelperDocs(pending.docs, authUid, authEmail);
 });
 
-// Shared acceptance body — extracted so the kind-filtered and
-// legacy paths share the same migration logic. (2026-08-15)
+// Shared acceptance body. ownerUid always comes from the document
+// path (artifacts/{appId}/users/{ownerUid}/pendingInvites/{id}),
+// never from the body. A body ownerUid that disagrees with the
+// path is a forge and that doc is skipped.
 async function acceptHelperDocs(
   pendingDocs: FirebaseFirestore.QueryDocumentSnapshot[],
   authUid: string,
+  authEmail: string,
 ) {
-  // Accept all matching invites (a helper could be invited by multiple couples).
   const batch = db.batch();
   const accepted: { ownerUid: string; perms: HelperPerms; eventId: string }[] = [];
 
   for (const doc of pendingDocs) {
-    const data = doc.data();
-    const ownerUid = data.ownerUid;
+    const decision = resolveHelperInviteAcceptance({
+      path: doc.ref.path,
+      data: doc.data() as Record<string, unknown>,
+      authEmail,
+      expectedAppId: appId,
+    });
+    if (!decision.ok) {
+      console.warn('[acceptHelperInvite] rejected invite', {
+        reason: decision.reason,
+        path: doc.ref.path,
+      });
+      continue;
+    }
+
+    const eventSnap = await db
+      .collection('artifacts').doc(appId)
+      .collection('users').doc(decision.ownerUid)
+      .collection('events').doc(decision.eventId)
+      .get();
+    if (!eventSnap.exists) {
+      console.warn('[acceptHelperInvite] rejected invite with unknown event', {
+        path: doc.ref.path,
+        eventId: decision.eventId,
+      });
+      continue;
+    }
+
     const newRef = db
       .collection('artifacts').doc(appId)
-      .collection('users').doc(ownerUid)
+      .collection('users').doc(decision.ownerUid)
       .collection('helpers').doc(authUid);
 
     batch.set(newRef, {
-      ...data,
+      ...doc.data(),
+      ownerUid: decision.ownerUid,
+      eventId: decision.eventId,
+      email: decision.email,
       helperUid: authUid,
       status: 'active',
       acceptedAt: FieldValue.serverTimestamp(),
@@ -473,10 +478,14 @@ async function acceptHelperDocs(
     batch.delete(doc.ref);
 
     accepted.push({
-      ownerUid,
-      perms: data.perms as HelperPerms,
-      eventId: data.eventId as string,
+      ownerUid: decision.ownerUid,
+      perms: decision.perms as HelperPerms,
+      eventId: decision.eventId,
     });
+  }
+
+  if (accepted.length === 0) {
+    throw new HttpsError('permission-denied', 'No valid helper invite for this account.');
   }
 
   await batch.commit();
@@ -708,6 +717,7 @@ export const searchVendorsByName = onCall({ cors: true, region: "us-central1" },
 // the "User UID" column for the row matching the email.
 
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { mergeAdminClaim, pageHasAdmin } from './adminClaims';
 
 // Restore 2026-07-02: re-export sendInvitations (defined in invitations.ts)
 export * from './invitations';
@@ -783,7 +793,8 @@ export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (r
   }
 
   const auth = getAdminAuth();
-  await auth.setCustomUserClaims(uid, { admin });
+  const target = await auth.getUser(uid);
+  await auth.setCustomUserClaims(uid, mergeAdminClaim(target.customClaims, admin));
   await auth.revokeRefreshTokens(uid);
   return { ok: true, uid, admin };
 });
@@ -791,20 +802,27 @@ export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (r
 // selfPromoteAdmin — bootstrap call when NO admin exists yet.
 // Hard-gated: only works if there are currently zero admins in the
 // project. Once any admin exists, this function refuses (use grantAdmin).
-export const selfPromoteAdmin = onCall({ cors: true, region: "us-central1" }, async (req) => {
+export const selfPromoteAdmin = onCall({ cors: true, region: "us-central1", timeoutSeconds: 300 }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
 
   const auth = getAdminAuth();
-  // Check if any admin already exists.
-  const list = await auth.listUsers(1000);
-  const anyAdmin = list.users.some((u) => u.customClaims && (u.customClaims as { admin?: boolean }).admin === true);
-  if (anyAdmin) {
-    throw new HttpsError('already-exists', 'An admin already exists. Ask them to grant you admin via grantAdmin.');
-  }
+  // Page through every Auth user. listUsers returns at most 1000,
+  // and anonymous guest sessions make that page easy to fill.
+  let pageToken: string | undefined;
+  do {
+    const list = pageToken
+      ? await auth.listUsers(1000, pageToken)
+      : await auth.listUsers(1000);
+    if (pageHasAdmin(list.users)) {
+      throw new HttpsError('already-exists', 'An admin already exists. Ask them to grant you admin via grantAdmin.');
+    }
+    pageToken = list.pageToken;
+  } while (pageToken);
 
-  await auth.setCustomUserClaims(req.auth.uid, { admin: true });
+  const caller = await auth.getUser(req.auth.uid);
+  await auth.setCustomUserClaims(req.auth.uid, mergeAdminClaim(caller.customClaims, true));
   await auth.revokeRefreshTokens(req.auth.uid);
   return { ok: true, uid: req.auth.uid, bootstrapped: true };
 });
