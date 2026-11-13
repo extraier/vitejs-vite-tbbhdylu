@@ -52,6 +52,32 @@ describe('useUploadPreferencesToken (P1.4.a quota surfacing)', () => {
     expect(callFirebaseFnMock).not.toHaveBeenCalled();
   });
 
+  it('fetches the enforced counter even without watermark-removed', async () => {
+    callFirebaseFnMock.mockResolvedValueOnce({
+      token: 'quota-only',
+      expiresAt: Date.now() + 60 * 60 * 1000,
+      watermarkDisabled: false,
+      storageUsageBytes: 12 * 1024 * 1024,
+      storageQuotaBytes: 200 * 1024 * 1024,
+    });
+    const { result } = renderHook(() =>
+      useUploadPreferencesToken({
+        ownerUid: 'couple-1',
+        eventId: 'event-1',
+        unlocks: [],
+      }),
+    );
+    await waitFor(() => {
+      expect(result.current.storageUsageBytes).toBe(12 * 1024 * 1024);
+    });
+    expect(result.current.prefsToken).toBe('quota-only');
+    expect(result.current.watermarkDisabled).toBe(false);
+    expect(callFirebaseFnMock).toHaveBeenCalledWith(
+      'getUploadPreferencesToken',
+      { ownerUid: 'couple-1', eventId: 'event-1' },
+    );
+  });
+
   it('surfaces quota + usage fields from a current CF response', async () => {
     const expiresAt = Date.now() + 60 * 60 * 1000;
     callFirebaseFnMock.mockResolvedValueOnce({

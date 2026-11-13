@@ -72,18 +72,14 @@ export function useUploadPreferencesToken({ ownerUid, eventId, unlocks }) {
       return;
     }
 
-    const hasUnlock = Array.isArray(unlocks) && unlocks.includes('watermark-removed');
-
-    // Default: watermark ON, no token. Matches the NAS behavior.
+    // Default: watermark ON, no token, until the callable returns.
+    // Quota is read from privateUsage/storage even when the owner
+    // does not have watermark-removed — that unlock used to be the
+    // only reason we called the token issuer, which left the meter
+    // on the owner-writable event field (or stuck at zero).
     setWatermarkDisabled(false);
     setPrefsToken(null);
     mintedForRef.current = null;
-
-    if (!hasUnlock) {
-      // The owner doesn't have the unlock — no need to mint a
-      // token. Every upload gets default-on watermark. Done.
-      return;
-    }
 
     // Fire-and-forget. The CF call is async; we don't await
     // here because useEffect should be sync to avoid the React

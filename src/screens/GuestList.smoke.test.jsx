@@ -61,6 +61,17 @@ describe('GuestList smoke — App.jsx line 860 render', () => {
     expect(screen.getAllByText(/尚未加入任何嘉賓/).length).toBeGreaterThan(0);
   });
 
+  it('hides the gift amount from a helper without canViewGiftAmount', () => {
+    render(
+      <GuestList
+        {...baseProps}
+        helperPerms={{ canViewGuestList: true, canViewGiftAmount: false }}
+      />,
+    );
+    expect(screen.queryByText(/🧧 1000/)).toBeNull();
+    expect(screen.getAllByText('陳大文').length).toBeGreaterThan(0);
+  });
+
   it('renders identically for owner userRole', () => {
     const { container: a } = render(<GuestList {...baseProps} />);
     // Count both table rows AND cards (since both render in JSDOM)

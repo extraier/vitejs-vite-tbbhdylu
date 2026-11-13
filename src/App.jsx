@@ -29,6 +29,8 @@ import {
 
 import { db, appId } from './lib/firebase';
 import { buildNewEventFields } from './lib/newEvent';
+import { guestListCollectionName, mergeGuestGifts } from './lib/guestGifts';
+import { requestGuestGiftSplit } from './lib/splitGuestGifts';
 import { nextVendorView } from './lib/vendorRoute';
 import { authEntryState, signedInVendorHashTarget } from './lib/authEntry';
 import { captureVendorInvite, pendingInviteRecord } from './lib/vendorInviteLink';
@@ -1623,12 +1625,31 @@ export default function App() {
      // callable (PDF §3.2). The subscription still serves the owner
      // GuestList path. Same path string + same event-scoping rules,
      // only the gate condition changed.
+     const guestCollectionName = guestListCollectionName(helperPerms);
+     const canReadGiftAmounts = !helperPerms || helperPerms.canViewGiftAmount === true;
      const { data: allGuests } = useFirestoreCollection(
          !guest.isGuestMode && guestDataReady && dataOwnerUid && currentEvent
-           ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'guests')
+           ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, guestCollectionName)
            : null,
-         [!guest.isGuestMode, targetUid, guestDataReady, guest.qEvent, currentEvent?.id],
+         [!guest.isGuestMode, targetUid, guestDataReady, guest.qEvent, currentEvent?.id, guestCollectionName],
        );
+     const { data: guestGiftDocs } = useFirestoreCollection(
+         canReadGiftAmounts && !guest.isGuestMode && guestDataReady && dataOwnerUid && currentEvent
+           ? collection(db, 'artifacts', appId, 'users', dataOwnerUid, 'events', currentEvent.id, 'guestGifts')
+           : null,
+         [canReadGiftAmounts, !guest.isGuestMode, guestDataReady, dataOwnerUid, currentEvent?.id],
+       );
+     useEffect(() => {
+       if (guest.isGuestMode || !dataOwnerUid || !currentEvent?.id) return undefined;
+       let cancelled = false;
+       requestGuestGiftSplit(dataOwnerUid, currentEvent.id).catch(() => {
+         if (cancelled) return undefined;
+         return undefined;
+       });
+       return () => {
+         cancelled = true;
+       };
+     }, [guest.isGuestMode, dataOwnerUid, currentEvent?.id]);
 
      // 2026-07-15 — scanLog subscription for the reception scanner's
      // "最近掃描" list. Bounded by eventId so we don't fetch scans from
@@ -2745,8 +2766,12 @@ export default function App() {
     [tasks, currentEvent],
   );
   const eventGuests = useMemo(
-    () => allGuests.filter((g) => g.eventId === currentEvent?.id),
-    [allGuests, currentEvent],
+    () => mergeGuestGifts(
+      allGuests.filter((g) => g.eventId === currentEvent?.id),
+      canReadGiftAmounts ? guestGiftDocs : [],
+      helperPerms,
+    ),
+    [allGuests, guestGiftDocs, currentEvent, helperPerms, canReadGiftAmounts],
   );
   const eventPhotos = useMemo(
     () =>
@@ -3359,8 +3384,6 @@ export default function App() {
       ...newGuestForm,
       tableNumber,
       hasAttended: false,
-      hasGifted: false,
-      giftAmount: 0,
     };
     // 2026-08-03 — Diagnostic for "unable to add guest" report.
     // Logs the actual values the rule will see (path-ownerUid,
@@ -3428,8 +3451,6 @@ export default function App() {
       tableNumber: f.tableNumber,
       headCount: memberNames.length + 1,
       hasAttended: false,
-      hasGifted: false,
-      giftAmount: 0,
       createdAt: Date.now(),
     });
 
@@ -3446,8 +3467,6 @@ export default function App() {
         tableNumber: f.tableNumber,
         headCount: 1,
         hasAttended: false,
-        hasGifted: false,
-        giftAmount: 0,
         createdAt: Date.now(),
       });
     }

@@ -18,8 +18,8 @@
 //
 // PDF §3.2 also requires moving the red-packet UI to a payment-intent
 // / confirmation callable. That's P2c (commit `confirmRedPacket`).
-// This file does NOT touch hasGifted / giftAmount — those writes still
-// go through the rules-blocked client path until P2c lands.
+// Gift amounts are not copied off the guest doc. Bootstrap reads the
+// caller's own guestGifts/{guestDocId} record (rules: that guest only).
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
@@ -35,6 +35,7 @@ import {
   sanitizeGuestMessage,
   buildBootstrapGuest,
 } from './guestExperience.pure';
+import { attachOwnGiftStatus } from './guestGifts.pure';
 
 const db = getFirestore();
 const APP_ID = 'savetheday-production';
@@ -167,7 +168,10 @@ export const getGuestPortalBootstrap = onCall(
       throw new HttpsError('not-found', 'guest record not found');
     }
 
-    return { guest };
+    const giftSnap = await db.doc(
+      `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}/guestGifts/${guestDocId}`,
+    ).get();
+    return { guest: attachOwnGiftStatus(guest, giftSnap.data()) };
   },
 );
 

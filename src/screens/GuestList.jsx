@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { sanitizeGuestForHelper } from '../lib/helpers';
 import {
   Users,
   Search,
@@ -32,22 +33,24 @@ export function GuestList({
 }) {
   const [addMode, setAddMode] = useState('single'); // 'single' | 'family'
   const [expandedHouseholds, setExpandedHouseholds] = useState(new Set());
-  // Helpers can see gift presence but not amounts unless canViewGiftAmount.
-  // We don't strip here (server returns full data anyway) — instead GuestRow
-  // checks helperPerms.canViewGiftAmount before rendering the amount.
-  const filtered = guests.filter((g) => g.name.includes(searchQuery));
+  // Rules hide /guestGifts from helpers without canViewGiftAmount.
+  // Strip again here so a legacy guest doc cannot leave the amount
+  // in component state if a caller forgot to sanitize the list.
+  const safeGuests = helperPerms && helperPerms.canViewGiftAmount !== true
+    ? guests.map((g) => sanitizeGuestForHelper(g, helperPerms))
+    : guests;
 
   // Hide child rows whose parent is already shown (collapse into household view).
   const childIdsHidden = new Set(
-    guests
+    safeGuests
       .filter((g) => g.householdId && g.householdId !== g.guestId && !g.isHouseholdParent)
       .filter((g) => {
         // Hide only if parent exists in current guest list
-        return guests.some((p) => p.guestId === g.householdId && p.isHouseholdParent);
+        return safeGuests.some((p) => p.guestId === g.householdId && p.isHouseholdParent);
       })
       .map((g) => g.id),
   );
-  const visibleGuests = guests.filter((g) => !childIdsHidden.has(g.id));
+  const visibleGuests = safeGuests.filter((g) => !childIdsHidden.has(g.id));
 
   const toggleHousehold = (householdId) => {
     setExpandedHouseholds((prev) => {
@@ -101,7 +104,7 @@ export function GuestList({
                 <GuestCard
                   key={guest.id}
                   guest={guest}
-                  allGuests={guests}
+                  allGuests={safeGuests}
                   userRole={userRole}
                   helperPerms={helperPerms}
                   onPreviewAsGuest={onPreviewAsGuest}
@@ -136,7 +139,7 @@ export function GuestList({
                     <GuestTableFragment
                       key={guest.id}
                       guest={guest}
-                      allGuests={guests}
+                      allGuests={safeGuests}
                       userRole={userRole}
                       helperPerms={helperPerms}
                       onPreviewAsGuest={onPreviewAsGuest}

@@ -58,10 +58,13 @@ service firebase.storage {
     // it; the read ACL on the doc itself is the moderation gate.
     match /vendors/{vendorId}/portfolio/{fileName} {
       allow read: if true;
-      allow write: if request.auth != null
+      allow create, update: if request.auth != null
         && (request.auth.uid == vendorId || isAdmin())
         && request.resource.size < 8 * 1024 * 1024  // matches client-side MAX
         && request.resource.contentType.matches('image/.*');
+      // delete has no request.resource; size/type checks would deny it.
+      allow delete: if request.auth != null
+        && (request.auth.uid == vendorId || isAdmin());
     }
 
     // 2026-07-21 — payment receipts (PayMe/FPS screenshots). Couples
@@ -70,10 +73,12 @@ service firebase.storage {
     match /payment-receipts/{ownerUid}/{fileName} {
       allow read: if request.auth != null
         && (request.auth.uid == ownerUid || isAdmin());
-      allow write: if request.auth != null
+      allow create, update: if request.auth != null
         && request.auth.uid == ownerUid
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth != null
+        && request.auth.uid == ownerUid;
     }
 
     // 2026-08-10 — social proof screenshots. Couples upload an
@@ -85,10 +90,12 @@ service firebase.storage {
     match /social-proofs/{ownerUid}/{fileName} {
       allow read: if request.auth != null
         && (request.auth.uid == ownerUid || isAdmin());
-      allow write: if request.auth != null
+      allow create, update: if request.auth != null
         && request.auth.uid == ownerUid
         && request.resource.size < 5 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth != null
+        && request.auth.uid == ownerUid;
     }
 
     // 2026-07-21 — custom invitation design uploads (premium feature
@@ -97,13 +104,15 @@ service firebase.storage {
     match /invitation-uploads/{ownerUid}/{fileName} {
       allow read: if request.auth != null
         && (request.auth.uid == ownerUid || isAdmin());
-      allow write: if request.auth != null
+      allow create, update: if request.auth != null
         && request.auth.uid == ownerUid
         && request.resource.size < 2 * 1024 * 1024
         && (
           request.resource.contentType.matches('image/.*')
           || request.resource.contentType == 'image/svg+xml'
         );
+      allow delete: if request.auth != null
+        && request.auth.uid == ownerUid;
     }
 
     // 2026-07-27 — 電子人情 (e-Red-Packet) QR code images. The couple

@@ -5,7 +5,7 @@
 // with a non-empty reason.
 
 import { describe, it, expect } from 'vitest';
-import { deriveExpectedAmount, PREMIUM_BUNDLE_PRICE } from '../src/unlocks';
+import { deriveExpectedAmount, PREMIUM_BUNDLE_PRICE, resolvePaymentOverride } from '../src/unlocks';
 
 describe('deriveExpectedAmount (P1.1 server-side price derivation)', () => {
   it('returns 49 for custom-template at exact price', () => {
@@ -92,6 +92,13 @@ describe('deriveExpectedAmount (P1.1 server-side price derivation)', () => {
     // submits a receipt for 0 (refund form). The server must
     // NOT auto-approve; the admin path is required.
     expect(() => deriveExpectedAmount('custom-template', 0, false, undefined)).toThrow(/does not match/);
+  });
+
+  it('rejects adminOverride from a caller who is not an admin', () => {
+    expect(() => resolvePaymentOverride({ adminOverride: true, callerIsAdmin: false })).toThrow(/admins/);
+    expect(resolvePaymentOverride({ adminOverride: false, callerIsAdmin: false })).toBe(false);
+    expect(resolvePaymentOverride({ adminOverride: true, callerIsAdmin: true })).toBe(true);
+    expect(resolvePaymentOverride({ adminOverride: false, callerIsAdmin: true })).toBe(false);
   });
 
   it('adminOverride=true with non-empty reason accepts any amount', () => {

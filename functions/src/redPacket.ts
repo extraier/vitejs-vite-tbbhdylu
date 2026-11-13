@@ -16,7 +16,9 @@
 //   2. Validates the amount (pure helper, clamps HK$88–100,000).
 //   3. In ONE Firestore transaction:
 //      a. Writes a payment/{paymentId} audit record
-//      b. Merges hasGifted/giftAmount/lastGiftedAt onto the guest doc
+//      b. Writes hasGifted/giftAmount/lastGiftedAt on guestGifts/{guestDocId}
+//         and deletes those fields from the guest doc (helpers must not
+//         read amounts off the guest list)
 //   4. Returns { ok: true, paymentId, amount }.
 //
 // P2c deliberately does NOT integrate with a payment processor —
@@ -44,6 +46,7 @@ import {
   LinkInvalidError,
   validateLinkShape,
 } from './guestExperience.pure';
+import { previousGiftAmount } from './guestGifts.pure';
 
 const db = getFirestore();
 const APP_ID = 'savetheday-production';
@@ -65,6 +68,11 @@ const linkRef = (ownerUid: string, authUid: string) =>
 const guestRef = (ownerUid: string, eventId: string, guestDocId: string) =>
   db.doc(
     `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}/guests/${guestDocId}`,
+  );
+
+const giftRef = (ownerUid: string, eventId: string, guestDocId: string) =>
+  db.doc(
+    `artifacts/${APP_ID}/users/${ownerUid}/events/${eventId}/guestGifts/${guestDocId}`,
   );
 
 const paymentRef = (ownerUid: string, eventId: string, paymentId: string) =>
@@ -127,10 +135,8 @@ export const confirmRedPacket = onCall({ region: REGION }, async (req) => {
     // shouldn't happen unless data is corrupted.
     throw new HttpsError('failed-precondition', 'guest identity mismatch');
   }
-  const previousAmount =
-    typeof existing.giftAmount === 'number' && existing.hasGifted === true
-      ? existing.giftAmount
-      : null;
+  const giftSnap = await giftRef(ownerUid, eventId, guestDocId).get();
+  const previousAmount = previousGiftAmount(giftSnap.data(), existing);
 
   // P2c policy: updates are allowed (people fat-finger). The audit
   // record captures previousAmount for transparency.
@@ -172,10 +178,18 @@ export const confirmRedPacket = onCall({ region: REGION }, async (req) => {
       // client-supplied timestamp.
       confirmedAt: FieldValue.serverTimestamp(),
     });
-    tx.set(guestRef(ownerUid, eventId, guestDocId), {
-      ...guestMerge,
+    const giftWrite = giftRef(ownerUid, eventId, guestDocId);
+    tx.set(giftWrite, {
+      hasGifted: guestMerge.hasGifted,
+      giftAmount: guestMerge.giftAmount,
       lastGiftedAt: FieldValue.serverTimestamp(),
+      guestId,
     }, { merge: true });
+    tx.update(guestRef(ownerUid, eventId, guestDocId), {
+      giftAmount: FieldValue.delete(),
+      hasGifted: FieldValue.delete(),
+      lastGiftedAt: FieldValue.delete(),
+    });
   });
 
   return { ok: true, paymentId, amount, status: PAYMENT_STATUS_CONFIRMED };

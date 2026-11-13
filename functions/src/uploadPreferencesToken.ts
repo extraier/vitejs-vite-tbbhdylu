@@ -76,6 +76,7 @@ import {
   type EventEntitlement,
 } from './storageQuota';
 import { computeEntitlement } from './entitlementResolver';
+import { enforcedStorageUsageBytes } from './storageUsage';
 
 // Lazy-init admin (singleton — matches vendorInviteTrigger.ts
 // pattern). getApps() avoids the "already initialized" warning
@@ -203,25 +204,13 @@ export const getUploadPreferencesToken = onCall(
       }),
     );
     const watermarkDisabled = entitlement.features.watermarkRemoved === true;
-    const eventData = eventSnap.data() || {};
-    const storageUsageBytes = Number.isFinite(eventData.storageUsageBytes)
-      ? eventData.storageUsageBytes
-      : 0;
+    // Quota enforcement lives on privateUsage/storage (deny-all for
+    // clients). event.storageUsageBytes is owner-writable and is not
+    // read here. Usage is usedBytes + reservedBytes, matching the
+    // proxy's within-quota check.
+    const usageSnap = await eventDocRef.collection('privateUsage').doc('storage').get();
+    const storageUsageBytes = enforcedStorageUsageBytes(usageSnap.data());
     const storageQuotaBytes = resolveStorageQuota(entitlement);
-    if (eventData.storageQuotaBytes !== storageQuotaBytes) {
-      try {
-        await eventDocRef.update({
-          storageQuotaBytes,
-          storageQuotaSetAt: FieldValue.serverTimestamp(),
-        });
-      } catch (seedErr) {
-        // 2026-08-19 — Don't fail the upload-prefs call if the
-        // seed write loses a race to a concurrent unlock grant.
-        // The proxy will fall back to reading the entitlement
-        // directly when quota is missing. Log + continue.
-        console.warn('[uploadPreferencesToken] storageQuotaBytes seed failed:', seedErr);
-      }
-    }
 
     const issuedAt = Date.now();
     const expiresAt = issuedAt + TOKEN_TTL_MS;
@@ -259,7 +248,8 @@ export const getUploadPreferencesToken = onCall(
 /**
  * recordUploadBytesUsed — 2026-08-19 — Manus P1.4.a: callable
  * the proxy hits AFTER a successful NAS upload to atomically
- * increment the storageUsageBytes counter.
+ * increment the deny-all privateUsage/storage counter.
+ * It does not write event.storageUsageBytes.
  *
  * Auth: caller MUST be the event owner (cross-checked against
  * the event ref). Co-owners / assigned vendors use a different
@@ -297,9 +287,22 @@ export const recordUploadBytesUsed = onCall(
       throw new HttpsError('permission-denied', 'caller is not this event owner.');
     }
     const inc = buildStorageIncrement(addBytes as number);
-    await eventRef(ownerUid, eventId).update({
-      storageUsageBytes: FieldValue.increment(inc.storageUsageBytes),
-      storageUsageUpdatedAt: FieldValue.serverTimestamp(),
+    const eventDocRef = eventRef(ownerUid, eventId);
+    const eventSnap = await eventDocRef.get();
+    if (!eventSnap.exists) {
+      throw new HttpsError('not-found', 'event not found.');
+    }
+    const usageRef = eventDocRef.collection('privateUsage').doc('storage');
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(usageRef);
+      const current = snap.exists ? (snap.data() || {}) : {};
+      const used = typeof current.usedBytes === 'number' && Number.isFinite(current.usedBytes)
+        ? Math.max(current.usedBytes, 0)
+        : 0;
+      tx.set(usageRef, {
+        usedBytes: used + inc.storageUsageBytes,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
     });
     return { ok: true, addedBytes: inc.storageUsageBytes };
   },
