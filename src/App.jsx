@@ -33,6 +33,7 @@ import { guestListCollectionName, mergeGuestGifts } from './lib/guestGifts';
 import { requestGuestGiftSplit } from './lib/splitGuestGifts';
 import { nextVendorView } from './lib/vendorRoute';
 import { authEntryState, signedInVendorHashTarget } from './lib/authEntry';
+import { captureVendorInvite, pendingInviteRecord } from './lib/vendorInviteLink';
 import { eventsListPending } from './lib/eventsListPending';
 import { legalNoticeKey } from './lib/legalNotice';
 
@@ -231,6 +232,7 @@ export default function App() {
     loginWithGoogle,
     loginWithEmail,
     registerWithEmail,
+    sendPasswordReset,
     continueAsGuest,
     linkAnonymousWithEmail,
     logout,
@@ -293,9 +295,23 @@ export default function App() {
   // card. A fresh load of #signup-as-vendor (including ?slug= inside the
   // hash) must open that card before paint. Later hash changes, including
   // the in-page links, follow the same mapping.
-  const [signingUpAs, setSigningUpAs] = useState(() => (
-    authEntryState(typeof window !== 'undefined' ? window.location.hash : '').signingUpAs
-  ));
+  const [vendorInvite, setVendorInvite] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    return captureVendorInvite({
+      search: window.location.search,
+      hash: window.location.hash,
+    }).invite;
+  });
+  const [signingUpAs, setSigningUpAs] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const invite = captureVendorInvite({
+        search: window.location.search,
+        hash: window.location.hash,
+      }).invite;
+      if (invite?.slug) return 'vendor';
+    }
+    return authEntryState(typeof window !== 'undefined' ? window.location.hash : '').signingUpAs;
+  });
   const [coupleSignupFromHash, setCoupleSignupFromHash] = useState(() => (
     authEntryState(typeof window !== 'undefined' ? window.location.hash : '').loginMode === 'signup'
   ));
@@ -303,7 +319,19 @@ export default function App() {
   useEffect(() => {
     const applyAuthEntry = () => {
       const next = authEntryState(window.location.hash);
-      setSigningUpAs(next.signingUpAs);
+      const fromUrl = captureVendorInvite({
+        search: window.location.search,
+        hash: window.location.hash,
+      }).invite;
+      let stored = null;
+      try {
+        stored = JSON.parse(sessionStorage.getItem('pendingVendorInvite') || 'null');
+      } catch {
+        stored = null;
+      }
+      const invite = fromUrl?.slug ? fromUrl : (stored?.slug ? stored : null);
+      setVendorInvite(invite);
+      setSigningUpAs(invite?.slug ? 'vendor' : next.signingUpAs);
       setCoupleSignupFromHash(next.loginMode === 'signup');
       if (!authChecked || !user || user.isAnonymous) return;
       if (next.signingUpAs !== 'vendor') {
@@ -423,23 +451,23 @@ export default function App() {
   // them in if a pending invite is stashed.
   useEffect(() => {
     try {
-      const sp = new URLSearchParams(window.location.search);
-      if (sp.get('signup') !== '1') return;
-      const venue = sp.get('venue');
-      const token = sp.get('token');
-      if (!venue || !token) return;
-      sessionStorage.setItem(
-        'pendingVendorInvite',
-        JSON.stringify({ slug: venue, token, capturedAt: Date.now() }),
-      );
-      // Strip the query so the URL doesn't keep advertising the
-      // token on every nav. history.replaceState keeps the page
-      // from reloading.
-      const url = new URL(window.location.href);
-      url.searchParams.delete('signup');
-      url.searchParams.delete('venue');
-      url.searchParams.delete('token');
-      window.history.replaceState({}, '', url.toString());
+      const captured = captureVendorInvite({
+        search: window.location.search,
+        hash: window.location.hash,
+      });
+      if (captured.invite?.slug) {
+        sessionStorage.setItem(
+          'pendingVendorInvite',
+          JSON.stringify(pendingInviteRecord(captured.invite)),
+        );
+        setVendorInvite(captured.invite);
+        setSigningUpAs('vendor');
+      }
+      const nextUrl = `${window.location.pathname}${captured.nextSearch}${captured.nextHash}`;
+      const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (nextUrl !== currentUrl) {
+        window.history.replaceState({}, '', nextUrl);
+      }
     } catch {
       // ignore — query string capture is a soft path. If sessionStorage
       // is disabled the user can still manually navigate to the wizard.
@@ -454,8 +482,7 @@ export default function App() {
       const raw = sessionStorage.getItem('pendingVendorInvite');
       if (!raw) return;
       const pending = JSON.parse(raw);
-      if (!pending?.slug || !pending?.token) {
-        // stale or malformed — drop it
+      if (!pending?.slug) {
         sessionStorage.removeItem('pendingVendorInvite');
         return;
       }
@@ -4157,10 +4184,15 @@ export default function App() {
     if (signingUpAs === 'vendor') {
       return (
         <VendorSignupCard
+          inviteSlug={vendorInvite?.slug || ''}
           onGoogleLogin={loginWithGoogle}
           onEmailRegister={registerWithEmail}
           onBack={() => {
-            try { sessionStorage.removeItem('postLoginIntent'); } catch {}
+            try {
+              sessionStorage.removeItem('postLoginIntent');
+              sessionStorage.removeItem('pendingVendorInvite');
+            } catch {}
+            setVendorInvite(null);
             const next = window.location.pathname + window.location.search;
             window.history.pushState(null, '', next);
             setSigningUpAs(null);
@@ -4174,6 +4206,7 @@ export default function App() {
         onGoogleLogin={loginWithGoogle}
         onEmailLogin={loginWithEmail}
         onEmailRegister={registerWithEmail}
+        onPasswordReset={sendPasswordReset}
         onContinueAsGuest={continueAsGuest}
         onVendorSignup={() => setSigningUpAs('vendor')}
         defaultEmail={partnerInvite?.partnerEmail}

@@ -62,6 +62,9 @@ const STRINGS = {
     emailLinkBody: '請輸入收到邀請嘅電郵，以完成登入。',
     emailLinkCta: '完成邀請登入',
     errEmailLink: '邀請連結登入失敗，請確認電郵同連結仍然有效',
+    forgotPassword: '忘記密碼？',
+    resetSent: '重設連結已寄出，請查收電郵。',
+    resetNeedEmail: '請先輸入電郵地址',
   },
   en: {
     tagline:
@@ -104,6 +107,9 @@ const STRINGS = {
     emailLinkBody: 'Enter the email address that received the invite to finish signing in.',
     emailLinkCta: 'Finish invite sign-in',
     errEmailLink: 'Invite sign-in failed. Check the email and that the link is still valid.',
+    forgotPassword: 'Forgot password?',
+    resetSent: 'Reset link sent. Please check your email.',
+    resetNeedEmail: 'Enter your email address first',
   },
 };
 
@@ -126,7 +132,7 @@ const STRINGS = {
 //   readOnlyEmail     — when true, the email input is read-only
 //                       (prevents typos from creating a wrong account)
 
-export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup, defaultEmail, defaultMode, inviteMessage, readOnlyEmail, emailLinkPending, onCompleteEmailLink }) {
+export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onPasswordReset, onContinueAsGuest, onVendorSignup, defaultEmail, defaultMode, inviteMessage, readOnlyEmail, emailLinkPending, onCompleteEmailLink }) {
   const [lang, setLang] = useState(readUiLang); // 'zh' | 'en'
   const t = STRINGS[lang];
   const chooseLang = (next) => {
@@ -141,6 +147,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
   const [error, setError] = useState(null);
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
 
   // If defaultEmail/defaultMode change after mount (e.g. preview CF resolved
   // late), update the form state to match. This handles the race where the
@@ -232,6 +239,25 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     handleVendorCta();
     if (window.location.hash !== '#signup-as-vendor') {
       window.location.hash = '#signup-as-vendor';
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    setError(null);
+    setResetSent(false);
+    if (!email || !email.includes('@')) {
+      setError(t.resetNeedEmail);
+      return;
+    }
+    if (!onPasswordReset) return;
+    setBusy(true);
+    try {
+      await withAuthTimeout(onPasswordReset(email));
+      setResetSent(true);
+    } catch (err) {
+      setError(authErrorMessage(err, lang));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -456,6 +482,22 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
                   );
                 })}
               </ul>
+            )}
+
+            {mode === 'signin' && onPasswordReset && (
+              <div className="text-right">
+                <button
+                  type="button"
+                  onClick={handlePasswordReset}
+                  disabled={busy}
+                  className="text-xs font-bold text-rose-600 hover:text-rose-700 disabled:opacity-50"
+                >
+                  {t.forgotPassword}
+                </button>
+                {resetSent && (
+                  <p className="mt-1 text-xs font-bold text-emerald-700 text-left">{t.resetSent}</p>
+                )}
+              </div>
             )}
 
             {error && (

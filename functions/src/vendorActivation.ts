@@ -33,6 +33,7 @@ import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import * as crypto from 'crypto';
 import { sendViaSendgrid } from './sendgridMailer';
+import { buildCanonicalVendorInviteUrl } from './vendorInviteUrl';
 // 2026-08-13 — H-03 audit fix. Vendor activation paths now
 // funnel through the canonical `setVendorClaim` chokepoint
 // (defined in vendors.ts). Previously only `applyAsVendor`
@@ -188,7 +189,7 @@ export const activateSeededVendor = onCall(
     });
 
     const baseUrl = (process.env.APP_BASE_URL || '').replace(/\/+$/, '');
-    const signupUrl = `${baseUrl || 'https://savetheday.io'}/?signup&venue=${encodeURIComponent(slug)}&token=${encodeURIComponent(token)}`;
+    const signupUrl = buildCanonicalVendorInviteUrl(baseUrl, slug, token);
 
     return {
       ok: true,
@@ -731,7 +732,7 @@ export const sendVendorInviteEmail = onCall(
         source: 'send_vendor_invite',
       });
       const baseUrl = (process.env.APP_BASE_URL || '').replace(/\/+$/, '');
-      signupUrl = `${baseUrl || 'https://savetheday.io'}/?signup&venue=${encodeURIComponent(slug)}&token=${token}`;
+      signupUrl = buildCanonicalVendorInviteUrl(baseUrl, slug, token);
     }
 
     const data = found.data as any;
@@ -932,7 +933,7 @@ export const bulkActivateSeededVendors = onCall(
           invitedBy: req.auth!.uid,
           source: 'bulk_activate',
         });
-        const signupUrl = `${fallbackBase}/?signup&venue=${encodeURIComponent(item.slug)}&token=${encodeURIComponent(token)}`;
+        const signupUrl = buildCanonicalVendorInviteUrl(fallbackBase, item.slug, token);
         minted++;
 
         // Log the token_issued event so the activation history
