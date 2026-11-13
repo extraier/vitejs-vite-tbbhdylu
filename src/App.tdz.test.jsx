@@ -42,9 +42,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const SRC_DIR = '/Users/roger/projects/vitejs-vite-tbbhdylu/src';
+// This file lives in src/, so the directory under test is its own folder.
+// A machine-absolute path fails in CI.
+const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
 // Walk src/ and collect every source file.
 function walk(dir) {

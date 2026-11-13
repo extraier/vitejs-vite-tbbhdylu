@@ -35,6 +35,8 @@ import {
   setDoc,
   getDoc,
   getDocs,
+  query,
+  where,
   collection,
   updateDoc,
   setLogLevel,
@@ -1018,5 +1020,145 @@ describe.skipIf(skipEmulator)('firestore.rules — CSP reports', () => {
         createdAt: Timestamp.fromMillis(1),
       }),
     );
+  });
+});
+
+const pendingInvite = (ownerUid: string, eventId = 'event-1') => ({
+  email: 'helper@example.com',
+  displayName: '幫手',
+  ownerUid,
+  eventId,
+  kind: 'helper',
+  perms: { canViewGuestList: true },
+  status: 'invited',
+});
+
+describe.skipIf(skipEmulator)('firestore.rules — helper pendingInvites and coupleUid', () => {
+  const ownerUid = 'owner-1';
+  const eventId = 'event-1';
+
+  beforeEach(async () => {
+    await seedEvent(ownerUid, eventId, [ownerUid]);
+  });
+
+  it('lets the owner create a real helper pending invite', async () => {
+    const db = await asUser(ownerUid);
+    await assertSucceeds(
+      setDoc(
+        doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      ),
+    );
+  });
+
+  it('lets a co-owner create a real helper pending invite', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', ownerUid, 'coOwners', 'partner-1'),
+        { status: 'active' },
+      );
+    });
+    const db = await asUser('partner-1');
+    await assertSucceeds(
+      setDoc(
+        doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      ),
+    );
+  });
+
+  it('rejects a client pending invite whose ownerUid is not the path owner', async () => {
+    const db = await asUser('attacker-1');
+    await assertFails(
+      setDoc(
+        doc(db!, 'artifacts/savetheday-production/users', 'attacker-1', 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      ),
+    );
+  });
+
+  it('rejects a client writing a pending invite directly under another owner', async () => {
+    const db = await asUser('attacker-1');
+    await assertFails(
+      setDoc(
+        doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite('attacker-1'),
+      ),
+    );
+  });
+
+  it('rejects changing ownerUid on an existing pending invite', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      );
+    });
+    const db = await asUser(ownerUid);
+    await assertFails(
+      updateDoc(
+        doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        { ownerUid: 'victim-2' },
+      ),
+    );
+  });
+
+  it('lets a couple read only their own jobRequests and lets anyone read jobBoard', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const admin = ctx.firestore();
+      await setDoc(doc(admin, 'jobRequests', 'job-owner'), {
+        coupleUid: ownerUid,
+        serviceNeeded: '攝影服務',
+        status: 'open',
+      });
+      await setDoc(doc(admin, 'jobRequests', 'job-other'), {
+        coupleUid: 'other-couple',
+        serviceNeeded: '司儀',
+        status: 'open',
+      });
+      await setDoc(doc(admin, 'jobBoard', 'job-owner'), {
+        serviceNeeded: '攝影服務',
+        status: 'open',
+      });
+    });
+
+    const couple = await asUser(ownerUid);
+    await assertSucceeds(
+      getDocs(query(collection(couple!, 'jobRequests'), where('coupleUid', '==', ownerUid))),
+    );
+    await assertFails(
+      getDocs(query(collection(couple!, 'jobRequests'), where('status', '==', 'open'))),
+    );
+
+    const stranger = await asUser('stranger-1');
+    await assertFails(getDoc(doc(stranger!, 'jobRequests', 'job-owner')));
+    const board = await getDocs(
+      query(collection(stranger!, 'jobBoard'), where('status', '==', 'open')),
+    );
+    expect(board.docs.map((d) => d.id)).toEqual(['job-owner']);
+    expect(board.docs[0].data().coupleUid).toBeUndefined();
+  });
+
+  it('lets only the couple, the vendor, or an admin read a proposal', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'proposals', 'p-1'), {
+        coupleUid: ownerUid,
+        vendorUid: 'vendor-1',
+        jobId: 'job-owner',
+        message: '報價',
+      });
+    });
+
+    const couple = await asUser(ownerUid);
+    await assertSucceeds(
+      getDocs(query(collection(couple!, 'proposals'), where('coupleUid', '==', ownerUid))),
+    );
+    const vendor = await asUser('vendor-1');
+    await assertSucceeds(
+      getDocs(query(collection(vendor!, 'proposals'), where('vendorUid', '==', 'vendor-1'))),
+    );
+    const stranger = await asUser('stranger-1');
+    await assertFails(getDoc(doc(stranger!, 'proposals', 'p-1')));
+    await assertFails(getDocs(collection(stranger!, 'proposals')));
   });
 });
