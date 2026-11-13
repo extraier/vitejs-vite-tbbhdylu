@@ -31,7 +31,7 @@ cd ~/projects/vitejs-vite-tbbhdylu
 ```bash
 gcloud functions describe <fn> --region=us-central1 --gen2 --project=savetheday-2377a \
   --format='get(state,buildConfig.runtime,updateTime)'
-# Expect: state=ACTIVE, runtime=nodejs20, updateTime=today
+# Expect: state=ACTIVE, runtime=nodejs22, updateTime=today
 ```
 
 **If `state=ACTIVE` but `buildConfig.runtime` is empty:** half-state. Auto-recovered by the script, or manually:
