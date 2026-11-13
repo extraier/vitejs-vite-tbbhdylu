@@ -7,17 +7,18 @@
 
 export function parseAuthEntry(hash) {
   const raw = String(hash || '').replace(/^#/, '');
-  if (!raw) return { kind: null, slug: '' };
+  if (!raw) return { kind: null, slug: '', token: '' };
   const queryAt = raw.indexOf('?');
   const path = (queryAt === -1 ? raw : raw.slice(0, queryAt)).replace(/\/+$/, '');
   const params = new URLSearchParams(queryAt === -1 ? '' : raw.slice(queryAt + 1));
+  const token = params.get('token') || '';
   if (path === 'signup-as-vendor') {
-    return { kind: 'vendor', slug: params.get('slug') || '' };
+    return { kind: 'vendor', slug: params.get('slug') || '', token };
   }
   if (path === 'signup') {
-    return { kind: 'signup', slug: '' };
+    return { kind: 'signup', slug: '', token };
   }
-  return { kind: null, slug: '' };
+  return { kind: null, slug: '', token };
 }
 
 export function signedInVendorHashTarget(hashKind, isVendor) {
@@ -31,5 +32,6 @@ export function authEntryState(hash) {
     signingUpAs: entry.kind === 'vendor' ? 'vendor' : null,
     loginMode: entry.kind === 'signup' ? 'signup' : null,
     slug: entry.slug,
+    token: entry.token,
   };
 }
