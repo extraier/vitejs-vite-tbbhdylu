@@ -101,7 +101,11 @@ export function OwnerNamesEditor({ currentUser, eventId, onToast }) {
       </div>
       <div className="mt-4 flex items-center justify-between">
         <p className="text-[11px] text-slate-400">
-          {bothEmpty ? '請至少填寫其中一個名' : '儲存後可以喺大日流程指派俾自己'}
+          {bothEmpty
+            ? '請至少填寫其中一個名'
+            : anyChanged
+              ? '儲存後可以喺大日流程指派俾自己'
+              : '已儲存。可以喺大日流程指派俾自己'}
         </p>
         <button
           type="button"
@@ -110,7 +114,7 @@ export function OwnerNamesEditor({ currentUser, eventId, onToast }) {
           className="flex items-center gap-1.5 bg-rose-500 text-white text-sm font-bold px-4 py-2 rounded-lg hover:bg-rose-600 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
         >
           {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-          儲存
+          {!busy && !anyChanged && !bothEmpty ? '已儲存' : '儲存'}
         </button>
       </div>
     </div>

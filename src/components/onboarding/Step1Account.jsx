@@ -58,7 +58,7 @@ export function Step1Account({ form, user, update, onSignInClick }) {
             {form.email || '（無電郵）'}
           </div>
           <div className="text-xs text-slate-500 mt-1">
-            如需修改請到「帳號設定」（稍後加入）。申請提交後此電郵會用作聯絡。
+            申請提交後此電郵會用作登入同聯絡。呢度改唔到電郵。
           </div>
         </div>
 

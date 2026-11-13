@@ -33,16 +33,22 @@ import { onSnapshot } from 'firebase/firestore';
 
 export function useFirestoreCollection(collectionRef, deps = []) {
   const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(Boolean(collectionRef));
   const [error, setError] = useState(null);
+  // `settledKey` is the deps key whose first snapshot (or error, or
+  // "no query") has arrived. Comparing it during render means a new
+  // signed-in user is `loading` on the same paint as the query, not
+  // one frame later after the effect — that frame was the empty lobby.
+  const depsKey = JSON.stringify(deps ?? []);
+  const [settledKey, setSettledKey] = useState(() => (collectionRef ? null : depsKey));
+  const loading = Boolean(collectionRef) && settledKey !== depsKey;
 
   useEffect(() => {
     if (!collectionRef) {
       setData([]);
-      setLoading(false);
+      setError(null);
+      setSettledKey(depsKey);
       return undefined;
     }
-    setLoading(true);
     // 2026-07-27 — cancelled-flag pattern. Firestore can resolve
     // onSnapshot AFTER the component unmounts (race between the
     // subscription's first tick and our cleanup). The previous
@@ -58,14 +64,15 @@ export function useFirestoreCollection(collectionRef, deps = []) {
       (snapshot) => {
         if (cancelled) return;
         setData(snapshot.docs.map((d) => ({ id: d.id, ref: d.ref, ...d.data() })));
-        setLoading(false);
+        setError(null);
+        setSettledKey(depsKey);
       },
       (err) => {
         if (cancelled) return;
         // eslint-disable-next-line no-console
         console.error('useFirestoreCollection error:', err);
         setError(err);
-        setLoading(false);
+        setSettledKey(depsKey);
       },
     );
     return () => {

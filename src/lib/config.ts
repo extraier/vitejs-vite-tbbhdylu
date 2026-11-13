@@ -61,6 +61,8 @@ export const VENDOR_CATEGORIES: Record<string, {
   label: string;
   icon: string; // emoji
   subs: Record<string, string>;
+  // Couple budget lines that are not a trade a vendor can offer.
+  vendorTrade?: boolean;
 }> = {
   venue: {
     label: '婚宴場地',
@@ -174,8 +176,9 @@ export const VENDOR_CATEGORIES: Record<string, {
   miscellaneous: {
     label: '雜項',
     icon: '💰',
+    vendorTrade: false,
     subs: {
-      cash_buffer: '預備金 (Buffer 10%)',
+      cash_buffer: '預備金 (10%)',
     },
   },
 };
@@ -193,6 +196,10 @@ export function getVendorCategoryLabel(category: string, subcategory?: string): 
     return `${top.label} · ${top.subs[subcategory]}`;
   }
   return top.label;
+}
+
+export function vendorTradeCategoryEntries(): Array<[string, (typeof VENDOR_CATEGORIES)[string]]> {
+  return Object.entries(VENDOR_CATEGORIES).filter(([, top]) => top.vendorTrade !== false);
 }
 
 // Lookup helper for the task picker. Resolves:

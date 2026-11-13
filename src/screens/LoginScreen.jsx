@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
+import { readUiLang, writeUiLang } from '../lib/uiLang';
+import { authErrorMessage, withAuthTimeout } from '../lib/authErrorMessage';
 import {
   Heart,
   Mail,
@@ -23,6 +25,7 @@ const STRINGS = {
     tagline:
       '婚禮一站式管理：實時 QR Code 入席、賓客相片收集箱、預算管理。新人、兄弟姊妹、商戶通用平台。',
     googleCta: '使用 Google 帳號登入',
+    googleSignupCta: '使用 Google 帳號註冊',
     emailPlaceholder: '電郵地址',
     passwordPlaceholder: '密碼',
     passwordSignupPlaceholder: '設定密碼 (至少 8 字元，至少 3 種字元)',
@@ -55,11 +58,16 @@ const STRINGS = {
     errGeneric: '登入失敗, 請稍後再試',
     errGoogle: 'Google 登入失敗',
     errGuest: '訪客登入失敗',
+    emailLinkTitle: '邀請連結',
+    emailLinkBody: '請輸入收到邀請嘅電郵，以完成登入。',
+    emailLinkCta: '完成邀請登入',
+    errEmailLink: '邀請連結登入失敗，請確認電郵同連結仍然有效',
   },
   en: {
     tagline:
       "One bilingual (中文 + English) wedding platform for Hong Kong and Taiwan. Live QR check-in, photo drop, and budget tracking for couples, helpers, and vendors.",
     googleCta: 'Sign in with Google',
+    googleSignupCta: 'Sign up with Google',
     emailPlaceholder: 'Email address',
     passwordPlaceholder: 'Password',
     passwordSignupPlaceholder: 'Min 8 chars, 3 of 4 categories',
@@ -92,6 +100,10 @@ const STRINGS = {
     errGeneric: 'Sign-in failed. Please try again.',
     errGoogle: 'Google sign-in failed',
     errGuest: 'Guest sign-in failed',
+    emailLinkTitle: 'Invitation link',
+    emailLinkBody: 'Enter the email address that received the invite to finish signing in.',
+    emailLinkCta: 'Finish invite sign-in',
+    errEmailLink: 'Invite sign-in failed. Check the email and that the link is still valid.',
   },
 };
 
@@ -114,15 +126,20 @@ const STRINGS = {
 //   readOnlyEmail     — when true, the email input is read-only
 //                       (prevents typos from creating a wrong account)
 
-export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup, defaultEmail, defaultMode, inviteMessage, readOnlyEmail }) {
-  const [lang, setLang] = useState('zh'); // 'zh' | 'en'
+export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onContinueAsGuest, onVendorSignup, defaultEmail, defaultMode, inviteMessage, readOnlyEmail, emailLinkPending, onCompleteEmailLink }) {
+  const [lang, setLang] = useState(readUiLang); // 'zh' | 'en'
   const t = STRINGS[lang];
+  const chooseLang = (next) => {
+    writeUiLang(next);
+    setLang(next);
+  };
 
   const [mode, setMode] = useState(defaultMode || 'signin'); // 'signin' | 'signup'
   const [email, setEmail] = useState(defaultEmail || '');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
+  const [passwordFocused, setPasswordFocused] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // If defaultEmail/defaultMode change after mount (e.g. preview CF resolved
@@ -156,23 +173,29 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     setBusy(true);
     try {
       if (mode === 'signin') {
-        await onEmailLogin(email, password);
+        await withAuthTimeout(onEmailLogin(email, password));
       } else {
-        await onEmailRegister(email, password);
+        await withAuthTimeout(onEmailRegister(email, password));
       }
     } catch (err) {
-      const code = err?.code || '';
-      if (code.includes('user-not-found') || code.includes('wrong-password') || code.includes('invalid-credential')) {
-        setError(t.errWrongCreds);
-      } else if (code.includes('email-already-in-use')) {
-        setError(t.errEmailInUse);
-      } else if (code.includes('weak-password')) {
-        setError(t.errWeakPassword);
-      } else if (code.includes('invalid-email')) {
-        setError(t.errInvalidEmail);
-      } else {
-        setError(err?.message || t.errGeneric);
-      }
+      setError(authErrorMessage(err, lang));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitEmailLink = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (!email || !email.includes('@')) {
+      setError(t.errInvalidEmail);
+      return;
+    }
+    setBusy(true);
+    try {
+      await withAuthTimeout(onCompleteEmailLink(email));
+    } catch (err) {
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -182,9 +205,9 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     setError(null);
     setBusy(true);
     try {
-      await onGoogleLogin();
+      await withAuthTimeout(onGoogleLogin());
     } catch (err) {
-      setError(err?.message || t.errGoogle);
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -205,14 +228,21 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
     if (onVendorSignup) onVendorSignup();
   };
 
+  const openVendorSignup = () => {
+    handleVendorCta();
+    if (window.location.hash !== '#signup-as-vendor') {
+      window.location.hash = '#signup-as-vendor';
+    }
+  };
+
   const handleGuest = async () => {
     if (!onContinueAsGuest) return;
     setError(null);
     setBusy(true);
     try {
-      await onContinueAsGuest();
+      await withAuthTimeout(onContinueAsGuest());
     } catch (err) {
-      setError(err?.message || t.errGuest);
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -243,7 +273,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
         <div className="inline-flex bg-white rounded-full shadow-sm border border-slate-200 p-1 text-xs font-bold">
           <button
             type="button"
-            onClick={() => setLang('zh')}
+            onClick={() => chooseLang('zh')}
             aria-pressed={lang === 'zh'}
             className={`px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
               lang === 'zh' ? 'bg-rose-500 text-white' : 'text-slate-500 hover:text-slate-700'
@@ -253,7 +283,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           </button>
           <button
             type="button"
-            onClick={() => setLang('en')}
+            onClick={() => chooseLang('en')}
             aria-pressed={lang === 'en'}
             className={`px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
               lang === 'en' ? 'bg-rose-500 text-white' : 'text-slate-500 hover:text-slate-700'
@@ -282,7 +312,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               mobile still see the brand subtitle — just at the
               bottom where there's room. */}
           <p className="hidden sm:block text-sm font-bold text-slate-500 tracking-widest uppercase mb-6">
-            Save The Day · 婚禮一站式管理
+            {lang === 'zh' ? 'Save The Day · 婚禮一站式管理' : 'Save The Day · All-in-one wedding management'}
           </p>
           <p className="text-slate-500 mb-6 text-sm leading-relaxed">{t.tagline}</p>
 
@@ -294,6 +324,31 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
             </div>
           )}
 
+          {emailLinkPending && onCompleteEmailLink && (
+            <form onSubmit={submitEmailLink} className="mb-5 bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 text-left space-y-2">
+              <div className="text-xs font-bold text-emerald-800">{t.emailLinkTitle}</div>
+              <p className="text-sm text-emerald-900 leading-relaxed">{t.emailLinkBody}</p>
+              <input
+                type="email"
+                required
+                autoComplete="email"
+                aria-label={t.emailLinkTitle}
+                placeholder={t.emailPlaceholder}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={busy}
+                className="w-full px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-400"
+              />
+              <button
+                type="submit"
+                disabled={busy}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold py-2.5 rounded-lg text-sm"
+              >
+                {t.emailLinkCta}
+              </button>
+            </form>
+          )}
+
           {/* Google button */}
           <button
             onClick={handleGoogle}
@@ -303,9 +358,10 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
             <img
               src="https://www.svgrepo.com/show/475656/google-color.svg"
               className="w-5 h-5"
-              alt="Google"
+              alt=""
+              aria-hidden="true"
             />
-            {t.googleCta}
+            {mode === 'signup' ? t.googleSignupCta : t.googleCta}
           </button>
 
           {/* OR divider */}
@@ -340,6 +396,8 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
                 placeholder={mode === 'signup' ? t.passwordSignupPlaceholder : t.passwordPlaceholder}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onFocus={() => setPasswordFocused(true)}
+                onBlur={() => setPasswordFocused(false)}
                 disabled={busy}
                 className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-rose-400 focus:border-rose-400 disabled:opacity-50"
               />
@@ -380,7 +438,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               </div>
             )}
 
-            {mode === 'signup' && password && (
+            {mode === 'signup' && (password || passwordFocused) && (
               <ul className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-left space-y-1">
                 {PASSWORD_RULES.map((rule) => {
                   const evalPwd = evaluatePassword(password, email);
@@ -497,7 +555,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
           </div>
           <a
             href="#signup-as-vendor"
-            onClick={(e) => { e.preventDefault(); handleVendorCta(); }}
+            onClick={openVendorSignup}
             className="w-full inline-flex items-center justify-between gap-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 font-bold py-3 px-4 rounded-xl transition-colors text-sm"
           >
             <span className="flex items-center gap-2">
@@ -515,7 +573,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
               obvious path for existing accounts. */}
           <p className="mt-2 text-[11px] text-slate-500 text-center leading-snug">
             {lang === 'zh'
-              ? '已有商戶帳號?請用上面 email + 密碼 直接登入。'
+              ? '已有商戶帳號? 請用上面 email + 密碼 直接登入。'
               : 'Already a vendor? Sign in above with your email + password.'}
           </p>
         </div>
@@ -559,8 +617,8 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
                   : 'Join the directory to reach HK couples. Sign up first, then complete your vendor profile.'}
               </p>
               <a
-                href="#signup"
-                onClick={(e) => { e.preventDefault(); setMode('signup'); }}
+                href="#signup-as-vendor"
+                onClick={openVendorSignup}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-white text-xs font-bold transition-colors"
               >
                 {lang === 'zh' ? '建立商戶帳號 →' : 'Create vendor account →'}
@@ -591,7 +649,7 @@ export function LoginScreen({ onGoogleLogin, onEmailLogin, onEmailRegister, onCo
         </section>
 
         <p className="text-center text-xs text-slate-400 mt-8">
-          © 2026 Save The Day · 婚禮一站式管理
+          © 2026 Save The Day · {lang === 'zh' ? '婚禮一站式管理' : 'All-in-one wedding management'}
         </p>
       </div>
     </div>

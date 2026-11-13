@@ -201,16 +201,31 @@ export async function submitVendorApplication(form) {
  * still edit both fields independently if they want a different name
  * in each context.
  */
-export function formFromUser(user) {
-  if (!user) return EMPTY_FORM;
-  const displayName = user.displayName || '';
+export function formFromUser(user, stashedName = '') {
+  if (!user && !stashedName) return EMPTY_FORM;
+  const displayName = String(stashedName || user?.displayName || '').trim();
   return {
     ...EMPTY_FORM,
-    email: user.email || '',
+    email: user?.email || '',
     displayName,
-    // 2026-07-14 — pre-fill name from displayName. Only do this when
-    // name is currently empty (don't overwrite a value the user has
-    // already started editing).
-    name: EMPTY_FORM.name || displayName,
+    name: displayName,
   };
+}
+
+export function readStashedVendorName() {
+  try {
+    return sessionStorage.getItem('vendorSignupName') || '';
+  } catch {
+    return '';
+  }
+}
+
+export function stashVendorSignupName(name) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return;
+  try {
+    sessionStorage.setItem('vendorSignupName', trimmed);
+  } catch {
+    /* private mode */
+  }
 }

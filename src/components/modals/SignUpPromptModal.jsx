@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Heart, X, Mail, Lock, Loader2 } from 'lucide-react';
+import { authErrorMessage, withAuthTimeout } from '../../lib/authErrorMessage';
 
 /**
  * SignUpPromptModal — appears when an anonymous (guest) user attempts
@@ -67,24 +68,17 @@ export function SignUpPromptModal({ isOpen = true, onClose, onLink, onSignIn, li
     setBusy(true);
     try {
       if (mode === 'signup') {
-        await onLink(email, password);
-        // Parent unmounts us on success (isAnonymous flips to false).
+        await withAuthTimeout(onLink(email, password));
       } else {
-        await onSignIn(email, password);
+        await withAuthTimeout(onSignIn(email, password));
       }
     } catch (err) {
       const code = err?.code || '';
       if (code.includes('email-already-in-use')) {
         setError('此電郵已註冊。請切換到「登入現有帳號」繼續。');
         setMode('signin');
-      } else if (code.includes('weak-password')) {
-        setError('密碼太弱 — 至少 8 個字，建議英數混合');
-      } else if (code.includes('invalid-email')) {
-        setError('電郵格式不正確');
-      } else if (code.includes('user-not-found') || code.includes('wrong-password') || code.includes('invalid-credential')) {
-        setError('電郵或密碼錯誤');
       } else {
-        setError(err?.message || '註冊失敗，請稍後再試');
+        setError(authErrorMessage(err, 'zh'));
       }
     } finally {
       setBusy(false);

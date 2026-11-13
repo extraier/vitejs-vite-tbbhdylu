@@ -31,6 +31,9 @@
 import { useState } from 'react';
 import { Briefcase, Mail, Lock, Loader2, Globe } from 'lucide-react';
 import { evaluatePassword, PASSWORD_RULES } from '../lib/passwordValidation';
+import { readUiLang, writeUiLang } from '../lib/uiLang';
+import { authErrorMessage, withAuthTimeout } from '../lib/authErrorMessage';
+import { stashVendorSignupName } from '../lib/vendorOnboarding';
 
 const STRINGS = {
   zh: {
@@ -118,27 +121,30 @@ function clearVendorSignupIntent() {
 }
 
 export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
-  const [lang, setLang] = useState('zh');
+  const [lang, setLang] = useState(readUiLang);
   const t = STRINGS[lang];
+  const chooseLang = (next) => {
+    writeUiLang(next);
+    setLang(next);
+  };
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState(null);
+  const [passwordFocused, setPasswordFocused] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const handleGoogle = async () => {
     setError(null);
+    stashVendorSignupName(displayName);
     setVendorSignupIntent();
     setBusy(true);
     try {
-      await onGoogleLogin();
+      await withAuthTimeout(onGoogleLogin());
     } catch (err) {
-      // 2026-08-08 — clear the stashed intent on Google signup failure
-      // so the user can fall back to the regular LoginScreen without
-      // being routed to vendor onboarding on the next sign-in.
       clearVendorSignupIntent();
-      setError(err?.message || t.errGoogle);
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -172,25 +178,14 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
     // onboarding). Stashing it only at commit time prevents the
     // stale-intent routing bug where a normal user who later signs
     // in gets hijacked to vendor onboarding.
+    stashVendorSignupName(displayName);
     setVendorSignupIntent();
     setBusy(true);
     try {
-      await onEmailRegister(email, password, displayName.trim());
+      await withAuthTimeout(onEmailRegister(email, password, displayName.trim()));
     } catch (err) {
-      // 2026-08-08 — clear the stashed intent on submit failure so
-      // the user can fall back to the regular LoginScreen via the
-      // back link without the next sign-in being hijacked.
       clearVendorSignupIntent();
-      const code = err?.code || '';
-      if (code.includes('email-already-in-use')) {
-        setError(t.errEmailInUse);
-      } else if (code.includes('weak-password')) {
-        setError(t.errWeakPassword);
-      } else if (code.includes('invalid-email')) {
-        setError(t.errInvalidEmail);
-      } else {
-        setError(err?.message || t.errGeneric);
-      }
+      setError(authErrorMessage(err, lang));
     } finally {
       setBusy(false);
     }
@@ -203,7 +198,7 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
         <div className="inline-flex bg-white rounded-full shadow-sm border border-slate-200 p-1 text-xs font-bold">
           <button
             type="button"
-            onClick={() => setLang('zh')}
+            onClick={() => chooseLang('zh')}
             aria-pressed={lang === 'zh'}
             className={`px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
               lang === 'zh' ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:text-slate-700'
@@ -213,7 +208,7 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
           </button>
           <button
             type="button"
-            onClick={() => setLang('en')}
+            onClick={() => chooseLang('en')}
             aria-pressed={lang === 'en'}
             className={`px-3 py-1 rounded-full flex items-center gap-1 transition-colors ${
               lang === 'en' ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:text-slate-700'
@@ -247,7 +242,8 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
             <img
               src="https://www.svgrepo.com/show/475656/google-color.svg"
               className="w-5 h-5"
-              alt="Google"
+              alt=""
+              aria-hidden="true"
             />
             {t.googleCta}
           </button>
@@ -314,6 +310,8 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
                   autoComplete="new-password"
                   placeholder={t.passwordPlaceholder}
                   value={password}
+                  onFocus={() => setPasswordFocused(true)}
+                  onBlur={() => setPasswordFocused(false)}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={busy}
                   className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-400 focus:border-emerald-400 disabled:opacity-50"
@@ -355,7 +353,7 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
               </div>
             </div>
 
-            {password && (
+            {(password || passwordFocused) && (
               <ul className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-left space-y-1">
                 {PASSWORD_RULES.map((rule) => {
                   const pwdEval = evaluatePassword(password, email);
@@ -407,9 +405,23 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
         </div>
 
         <p className="text-center text-xs text-slate-500 mt-6">
-          {lang === 'zh'
-            ? '註冊即代表你同意儲存你的商戶資料。'
-            : 'By signing up you agree to our storing your business information.'}
+          {lang === 'zh' ? (
+            <>
+              註冊即代表你同意儲存你的商戶資料。詳見{' '}
+              <a href="/vendor-terms" className="underline" target="_blank" rel="noreferrer">商戶服務條款</a>
+              {' '}同{' '}
+              <a href="/privacy" className="underline" target="_blank" rel="noreferrer">私隱</a>
+              。
+            </>
+          ) : (
+            <>
+              By signing up you agree to our storing your business information. See{' '}
+              <a href="/vendor-terms" className="underline" target="_blank" rel="noreferrer">vendor terms</a>
+              {' '}and{' '}
+              <a href="/privacy" className="underline" target="_blank" rel="noreferrer">privacy</a>
+              .
+            </>
+          )}
         </p>
       </div>
     </div>

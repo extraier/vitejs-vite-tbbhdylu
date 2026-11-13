@@ -30,7 +30,7 @@
 //                                   "Set password / Set login password".
 //   logout                        — sign out
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   EmailAuthProvider,
   GoogleAuthProvider,
@@ -48,6 +48,7 @@ import {
   updatePassword,
   updateProfile,
 } from 'firebase/auth';
+import { resolveHelperInviteEmail } from '../lib/helperInviteLink';
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from '../lib/firebase';
 
@@ -150,6 +151,10 @@ export function useAuth() {
   // as the active user. Defaults false so restored anonymous sessions
   // from prior visits don't bypass the login screen.
   const [allowAnonymous, setAllowAnonymous] = useState(false);
+  // Set when an invite link is opened without an email we can trust.
+  // The login screen asks for the invited address and completes the link.
+  const [emailLinkPending, setEmailLinkPending] = useState(false);
+  const emailLinkHrefRef = useRef('');
 
   // 2026-07-29 — Referral attribution URL pickup. If the user landed
   // via ?ref=STD-XXXXX, stash the code in sessionStorage. The actual
@@ -190,37 +195,26 @@ export function useAuth() {
     });
   }, []);
 
-  // 2026-07-18 — Passwordless helper-invite link handler.
-  // When the owner invites an email via HelperManager, Firebase Auth
-  // sends a one-time signed link to that email containing
-  // `?apiKey=…&oobCode=…&__heroinvite=1`. We detect both the URL
-  // param and `isSignInWithEmailLink` to be belt-and-suspenders, then
-  // call `signInWithEmailLink` using the email we stashed in
-  // localStorage when the invite was first sent.
-  //
-  // After sign-in, acceptHelperInvite (called from App.jsx in
-  // response to onAuthStateChanged) reads pendingInvites for this
-  // email and migrates them to helpers/{uid} with status='active'.
-  //
-  // If the email isn't in localStorage (e.g. a private-window copy
-  // of the link), fall through to the LoginScreen where the helper
-  // can enter their email and we'll match it on next sign-in.
+  // Passwordless helper-invite link. The owner sends the link; the
+  // invitee opens it on a different device, so the owner's localStorage
+  // is not available. The email travels on the continue URL. If it is
+  // missing (older links), LoginScreen asks for it and we finish here.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const isInviteLanding =
       params.get('__heroinvite') === '1' || isSignInWithEmailLink(auth, window.location.href);
     if (!isInviteLanding) return;
 
-    // Pull the email we stashed when the invite was sent. If absent,
-    // prompt the user (LoginScreen reads localStorage too).
+    const originalHref = window.location.href;
+    emailLinkHrefRef.current = originalHref;
+
     let storedEmail = '';
     try {
       storedEmail = window.localStorage.getItem('__heroinvite_email') || '';
     } catch (_) {
-      /* localStorage blocked — fall through */
+      /* localStorage blocked — the URL email still works */
     }
 
-    // Strip our marker param so refreshes don't loop.
     params.delete('__heroinvite');
     const next =
       window.location.pathname +
@@ -228,26 +222,20 @@ export function useAuth() {
       window.location.hash;
     window.history.replaceState({}, '', next);
 
-    if (!storedEmail) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        '[useAuth] __heroinvite landing, but no stashed email — ' +
-          'LoginScreen will prompt for it.',
-      );
+    const email = resolveHelperInviteEmail(originalHref, storedEmail);
+    if (!email) {
+      setEmailLinkPending(true);
       return;
     }
 
-    signInWithEmailLink(auth, storedEmail, window.location.href)
+    signInWithEmailLink(auth, email, originalHref)
       .then(() => {
-        // Don't keep the email around forever — it's only needed for
-        // this one sign-in.
+        setEmailLinkPending(false);
         try {
           window.localStorage.removeItem('__heroinvite_email');
         } catch (_) {
           /* noop */
         }
-        // eslint-disable-next-line no-console
-        console.info('[useAuth] helper invite sign-in succeeded');
       })
       .catch((err) => {
         // eslint-disable-next-line no-console
@@ -256,14 +244,29 @@ export function useAuth() {
           err?.code,
           err?.message,
         );
-        // Clear stale stored email so the user can re-enter.
         try {
           window.localStorage.removeItem('__heroinvite_email');
         } catch (_) {
           /* noop */
         }
+        setEmailLinkPending(true);
       });
   }, []);
+
+  const completeEmailLinkSignIn = async (email) => {
+    const href = emailLinkHrefRef.current || window.location.href;
+    const normalized = String(email || '').trim().toLowerCase();
+    if (!normalized || !href) {
+      throw new Error('missing-email-link');
+    }
+    await signInWithEmailLink(auth, normalized, href);
+    setEmailLinkPending(false);
+    try {
+      window.localStorage.removeItem('__heroinvite_email');
+    } catch (_) {
+      /* noop */
+    }
+  };
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (currentUser) => {
@@ -486,5 +489,7 @@ export function useAuth() {
     // session in so useAuth.onAuthStateChanged doesn't strip it.
     // See App.jsx share-redeem effect.
     acceptAnonymousSession,
+    emailLinkPending,
+    completeEmailLinkSignIn,
   };
 }

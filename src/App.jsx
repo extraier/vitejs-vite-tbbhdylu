@@ -28,6 +28,11 @@ import {
      } from 'firebase/firestore';
 
 import { db, appId } from './lib/firebase';
+import { buildNewEventFields } from './lib/newEvent';
+import { nextVendorView } from './lib/vendorRoute';
+import { authEntryState, signedInVendorHashTarget } from './lib/authEntry';
+import { eventsListPending } from './lib/eventsListPending';
+import { legalNoticeKey } from './lib/legalNotice';
 
 // ─── onSnapshot import retention (defensive, no longer load-bearing) ────
 // Historical context: importing `onSnapshot` from `firebase/firestore` used
@@ -99,6 +104,7 @@ import { useGuestExperience } from './hooks/useGuestExperience';
 import { useGuestPortalBootstrap } from './hooks/useGuestPortalBootstrap';
 
 import { LoginScreen } from './screens/LoginScreen';
+import { LegalNotice } from './screens/LegalNotice';
 import { VendorSignupCard } from './components/VendorSignupCard';
 import { EventsDashboard } from './screens/EventsDashboard';
 import { CoupleChecklist } from './screens/CoupleChecklist';
@@ -233,6 +239,8 @@ export default function App() {
     // handler at App.jsx 2507 sees `!user` and fails with
     // "登入狀態已過期" — exactly what the previous screenshot showed.
     acceptAnonymousSession,
+    emailLinkPending,
+    completeEmailLinkSignIn,
   } = useAuth();
   // 2026-07-26 — Partner-invite pre-fill. Detects ?t=<token> in URL,
   // calls previewPartnerInvite CF, and exposes the partnerEmail + eventName
@@ -279,11 +287,38 @@ export default function App() {
   // it bails on isAnonymous, cleared by handleLinkGuestAccount on success.
   const [pendingCreateEventName, setPendingCreateEventName] = useState(null);
 
-  // 2026-07-14 — 'signing up as' toggle. null = regular login, 'vendor' =
-  // show the dedicated VendorSignupCard instead. Set when the user clicks
-  // the green 'I'm a Vendor' CTA on the public main page, cleared when
-  // they click 'back to sign in' on the vendor card.
-  const [signingUpAs, setSigningUpAs] = useState(null);
+  // 'signing up as' toggle. null = regular login, 'vendor' = the vendor
+  // card. A fresh load of #signup-as-vendor (including ?slug= inside the
+  // hash) must open that card before paint. Later hash changes, including
+  // the in-page links, follow the same mapping.
+  const [signingUpAs, setSigningUpAs] = useState(() => (
+    authEntryState(typeof window !== 'undefined' ? window.location.hash : '').signingUpAs
+  ));
+  const [coupleSignupFromHash, setCoupleSignupFromHash] = useState(() => (
+    authEntryState(typeof window !== 'undefined' ? window.location.hash : '').loginMode === 'signup'
+  ));
+  const vendorHashUidRef = useRef('');
+  useEffect(() => {
+    const applyAuthEntry = () => {
+      const next = authEntryState(window.location.hash);
+      setSigningUpAs(next.signingUpAs);
+      setCoupleSignupFromHash(next.loginMode === 'signup');
+      if (!authChecked || !user || user.isAnonymous) return;
+      if (next.signingUpAs !== 'vendor') {
+        vendorHashUidRef.current = '';
+        return;
+      }
+      if (vendorHashUidRef.current === user.uid) return;
+      vendorHashUidRef.current = user.uid;
+      const target = signedInVendorHashTarget('vendor', isVendor);
+      setCurrentEvent(null);
+      if (target === 'vendor-dashboard') setUserRole('vendor');
+      setCurrentView(target);
+    };
+    applyAuthEntry();
+    window.addEventListener('hashchange', applyAuthEntry);
+    return () => window.removeEventListener('hashchange', applyAuthEntry);
+  }, [authChecked, user, isVendor]);
 
   // 2026-07-14 — defensive modal close. If the user signs in (Google or
   // email) WHILE the signup prompt is open, the modal stays open unless
@@ -320,21 +355,26 @@ export default function App() {
   // during the first render (which would trigger a TDZ crash).
   const _userUnlocksForUpload = userUnlocks;
 
-  // 2026-07-15 — auto-route vendors to their dashboard. When the user
-  // signs in and has the `vendor: true` custom claim (set by
-  // applyAsVendor), we flip userRole to 'vendor' and route them to the
-  // vendor dashboard. Without this, returning vendors would land on
-  // the couple events-dashboard and see the "I'm a Vendor" CTA again.
-  //
-  // The role check also runs on every isVendor change, so when the
-  // claim flips true mid-session (after submitting the wizard) we
-  // auto-route instead of leaving the user stuck on a stale screen.
+  // Returning vendors land on the vendor dashboard instead of the
+  // couple events list. useAuth clears isVendor while it refreshes the
+  // ID token, then sets it again. That refresh must not pull a vendor
+  // off the profile editor, onboarding, or an inquiry thread.
+  const vendorRouteRef = useRef({ uid: null });
   useEffect(() => {
-    if (!user || user.isAnonymous) return;
+    if (!user || user.isAnonymous) {
+      vendorRouteRef.current.uid = null;
+      return;
+    }
     if (!isVendor) return;
-    setUserRole('vendor');
-    if (currentView !== 'vendor-dashboard') {
-      setCurrentView('vendor-dashboard');
+    const decision = nextVendorView({
+      isVendor: true,
+      alreadyRouted: vendorRouteRef.current.uid === user.uid,
+      currentView,
+    });
+    vendorRouteRef.current.uid = user.uid;
+    setUserRole(decision.role);
+    if (decision.view !== currentView) {
+      setCurrentView(decision.view);
     }
   }, [isVendor, user]);
 
@@ -538,6 +578,21 @@ export default function App() {
 
   // Current selection
   const [currentEvent, setCurrentEvent] = useState(null);
+  const authUidRef = useRef(user?.uid ?? null);
+  if ((user?.uid ?? null) !== authUidRef.current) {
+    const previousUid = authUidRef.current;
+    authUidRef.current = user?.uid ?? null;
+    if (previousUid && previousUid !== (user?.uid ?? null)) {
+      setCurrentEvent(null);
+      if (user?.uid) {
+        setCurrentView((view) => (
+          view === 'vendor-onboarding' || view === 'vendor-dashboard' || view === 'vendor-profile'
+            ? view
+            : 'events-dashboard'
+        ));
+      }
+    }
+  }
   const [activeCategory, setActiveCategory] = useState(null);
 
   // 2026-08-01 (TDZ hotfix) — owner-names subscription moved here
@@ -834,7 +889,7 @@ export default function App() {
     assignedContactId: '',
     customTitle: '',
     venue: '',
-    dueDate: '2026-12-31',
+    dueDate: '',
     // 2026-07-17 — optional HH:MM for finer-grained deadlines (e.g.
     // "下午茶 14:30"). Empty string = date-only (existing behavior).
     // Format will match <input type="time"> emission: "HH:MM".
@@ -1348,7 +1403,7 @@ export default function App() {
 // ---- Firestore subscriptions (skip when in guest mode) ----
   const targetUid = guest.isGuestMode ? guest.qOwner : user?.uid;
 
-  const { data: ownEvents } = useFirestoreCollection(
+  const { data: ownEvents, loading: ownEventsLoading } = useFirestoreCollection(
     guestDataReady && targetUid && !guest.isGuestMode
       ? collection(db, 'artifacts', appId, 'users', targetUid, 'events')
       : null,
@@ -1367,7 +1422,7 @@ export default function App() {
   // where the rule short-circuits unexpectedly). The error is
   // caught at the App level — see `coOwnedEventsError` below —
   // and we fall back to showing just the user's own events.
-  const { data: coOwnedEvents, error: coOwnedEventsError } = useFirestoreCollection(
+  const { data: coOwnedEvents, loading: coOwnedEventsLoading, error: coOwnedEventsError } = useFirestoreCollection(
     !guest.isGuestMode && user && !user.isAnonymous
       ? query(
           collectionGroup(db, 'events'),
@@ -1391,6 +1446,17 @@ export default function App() {
       );
     }
   }, [coOwnedEventsError]);
+
+  const eventsLoading = eventsListPending({
+    signedIn: Boolean(user),
+    guestMode: Boolean(guest.isGuestMode),
+    guestDataReady,
+    ownLoading: ownEventsLoading,
+    ownCount: (ownEvents || []).filter((event) => !event.deletedAt).length,
+    coOwnedActive: Boolean(!guest.isGuestMode && user && !user.isAnonymous),
+    coOwnedLoading: coOwnedEventsLoading,
+    coOwnedError: coOwnedEventsError,
+  });
 
   // Merge own events + co-owned events. The dashboard doesn't
   // care which is which for the picker — it just shows the
@@ -2788,20 +2854,7 @@ export default function App() {
       setShowSignUpPrompt(true);
       return;
     }
-    const newEvent = {
-      name: newEventName,
-      date: '2027-01-01',
-      tier: 'free',
-      budget: 350000,
-      // 2026-07-26 — Co-owners (couples/partners). The creator's
-      // uid is always the first entry. When a partner accepts an
-      // invite, the partner's uid gets pushed onto this array
-      // (see acceptPartnerInvite Cloud Function). Used by the
-      // Firestore rules (isEventCoOwner, isCoOwnerOfEventDoc) to
-      // grant equal CRUD access to the partner.
-      coOwners: [user.uid],
-      createdAt: Date.now(),
-    };
+    const newEvent = buildNewEventFields(newEventName, user.uid);
     const docRef = await addDoc(
       collection(db, 'artifacts', appId, 'users', user.uid, 'events'),
       newEvent,
@@ -2829,13 +2882,7 @@ export default function App() {
       // user.uid is the SAME UID we had pre-link — Firebase preserved
       // it during linkWithCredential. So the write goes to the same
       // path; nothing to migrate.
-      const newEvent = {
-        name,
-        date: '2027-01-01',
-        tier: 'free',
-        budget: 350000,
-        createdAt: Date.now(),
-      };
+      const newEvent = buildNewEventFields(name, user.uid);
       const docRef = await addDoc(
         collection(db, 'artifacts', appId, 'users', user.uid, 'events'),
         newEvent,
@@ -2917,6 +2964,10 @@ export default function App() {
       chosenHelperName = newTaskForm.assignedHelperName || '';
     }
 
+    if (!newTaskForm.dueDate) {
+      showToast('請先選擇任務日期');
+      return;
+    }
     const newTask = {
       eventId: currentEvent.id,
       title,
@@ -2961,7 +3012,7 @@ export default function App() {
       assignedContactId: '',
       customTitle: '',
       venue: '',
-      dueDate: '2026-12-31',
+      dueDate: '',
       dueTime: '',
       estimatedCost: '',
       taskType: 'vendor',
@@ -3014,6 +3065,17 @@ export default function App() {
     setCurrentEvent({ ...currentEvent, budget: Number(newBudget) });
     showToast('✅ 總預算已更新');
     return Number(newBudget);
+  };
+
+  const handleSaveEventDate = async (date) => {
+    const target = eventSettingsTarget;
+    const ownerUid = target?._ownerUid || dataOwnerUid;
+    if (!user || !target?.id || !ownerUid) return;
+    const eventRef = doc(db, 'artifacts', appId, 'users', ownerUid, 'events', target.id);
+    const next = date || '';
+    await updateDoc(eventRef, { date: next });
+    setEventSettingsTarget((prev) => (prev && prev.id === target.id ? { ...prev, date: next } : prev));
+    setCurrentEvent((prev) => (prev && prev.id === target.id ? { ...prev, date: next } : prev));
   };
 
   // Restore 2026-07-02: inline edit task cost from CoupleChecklist
@@ -4043,6 +4105,12 @@ export default function App() {
   // module. While the FindSeatPage chunk is fetched, render a
   // full-page "載入緊…" placeholder so the screen doesn't
   // flash empty / show stale content.
+  if (typeof window !== 'undefined' && legalNoticeKey(window.location.pathname)) {
+    return (
+      <LegalNotice page={legalNoticeKey(window.location.pathname)} />
+    );
+  }
+
   if (typeof window !== 'undefined'
       && new URLSearchParams(window.location.search).has('find-seat')) {
     return (
@@ -4074,7 +4142,10 @@ export default function App() {
           onEmailRegister={registerWithEmail}
           onBack={() => {
             try { sessionStorage.removeItem('postLoginIntent'); } catch {}
+            const next = window.location.pathname + window.location.search;
+            window.history.pushState(null, '', next);
             setSigningUpAs(null);
+            setCoupleSignupFromHash(false);
           }}
         />
       );
@@ -4087,13 +4158,15 @@ export default function App() {
         onContinueAsGuest={continueAsGuest}
         onVendorSignup={() => setSigningUpAs('vendor')}
         defaultEmail={partnerInvite?.partnerEmail}
-        defaultMode={partnerInvite ? 'signup' : undefined}
+        defaultMode={partnerInvite ? 'signup' : (coupleSignupFromHash ? 'signup' : undefined)}
         inviteMessage={
           partnerInvite
             ? `你已被邀請一同籌備「${partnerInvite.eventName}」婚禮。請用 ${partnerInvite.partnerEmail} 建立帳戶以加入。\n(You've been invited to co-plan the "${partnerInvite.eventName}" wedding. Sign up with ${partnerInvite.partnerEmail} to join.)`
             : undefined
         }
         readOnlyEmail={Boolean(partnerInvite)}
+        emailLinkPending={emailLinkPending}
+        onCompleteEmailLink={completeEmailLinkSignIn}
       />
     );
   }
@@ -4666,6 +4739,7 @@ export default function App() {
             {!currentEvent && currentView === 'events-dashboard' && (
               <EventsDashboard
                 events={events}
+                eventsLoading={eventsLoading}
                 newEventName={newEventName}
                 onNewEventNameChange={setNewEventName}
                 onCreate={handleCreateEvent}
@@ -4707,6 +4781,7 @@ export default function App() {
                 // path so the user sees the success message in the
                 // same surface where they triggered the action.
                 onOpenEventSettings={(ev) => setEventSettingsTarget(ev)}
+                onOpenProfile={() => setCurrentView('profile')}
                 onToast={showToast}
                 onOpenChat={(vendor) =>
                   handleOpenChat({
@@ -5717,6 +5792,7 @@ export default function App() {
             currentUser={{ ...user, uid: ownerUid }}
             currentEvent={eventSettingsTarget}
             onToast={showToast}
+            onSaveDate={handleSaveEventDate}
             onClose={() => {
               setEventSettingsTarget(null);
               if (openedFromTab) {

@@ -42,6 +42,7 @@ import { defineSecret } from 'firebase-functions/params';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { sendViaSendgrid } from './sendgridMailer';
+import { helperInviteContinueUrl } from './helperInviteLink';
 
 const db = getFirestore();
 
@@ -176,15 +177,14 @@ async function _sendHelperInviteEmailImpl(req: any): Promise<SendHelperInviteEma
 
   const resolvedRole = (role || 'wedding helper').trim();
 
-  // Generate the one-time magic link. Admin SDK's generateSignInWithEmailLink
-  // produces the SAME shape that the client's sendSignInLinkToEmail would
-  // produce, so the front-end's existing useAuth flow
-  // (AuthScreen: `signInWithEmailLink(localStorage.__heroinvite_email, link)`)
-  // works without any client-side changes.
+  // The invitee opens this link on their own device. The owner's
+  // localStorage is not there, so the continue URL carries the email
+  // and useAuth reads it back (including from Firebase's nested
+  // continueUrl). If it is still missing, the login screen asks.
   let magicLinkUrl: string;
   try {
     magicLinkUrl = await getAuth().generateSignInWithEmailLink(helperEmail, {
-      url: `${appBase}/?__heroinvite=1`,
+      url: helperInviteContinueUrl(appBase, helperEmail),
       handleCodeInApp: true,
     });
   } catch (err: unknown) {

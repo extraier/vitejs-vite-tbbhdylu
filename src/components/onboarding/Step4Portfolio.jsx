@@ -144,12 +144,12 @@ export function Step4Portfolio({ form, update, user, errors }) {
             {form.portfolio.map((url, idx) => (
               <div
                 key={url}
-                className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 group"
+                className="relative aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100 group"
               >
                 <img
                   src={url}
                   alt={`作品 ${idx + 1}`}
-                  className="w-full h-full object-cover"
+                  className="absolute inset-0 w-full h-full object-cover"
                 />
                 <button
                   type="button"

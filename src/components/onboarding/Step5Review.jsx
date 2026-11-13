@@ -113,6 +113,10 @@ export function Step5Review({ form, update, user, errors, onSuccess, onBack }) {
           <a href="/vendor-terms" target="_blank" rel="noreferrer" className="text-emerald-700 underline">
             商戶服務條款
           </a>
+          {' '}同{' '}
+          <a href="/privacy" target="_blank" rel="noreferrer" className="text-emerald-700 underline">
+            私隱
+          </a>
           。明白商戶專頁需要通過審批後先會公開展示。
         </div>
       </label>

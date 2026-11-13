@@ -342,7 +342,7 @@ describe('VendorSignupCard — postLoginIntent (stale-intent routing bug guard)'
   });
 
   it('Google signup FAILURE clears the postLoginIntent', async () => {
-    const onGoogleLogin = vi.fn().mockRejectedValue(new Error('popup-blocked'));
+    const onGoogleLogin = vi.fn().mockRejectedValue({ code: 'auth/popup-blocked' });
     render(
       <VendorSignupCard
         onGoogleLogin={onGoogleLogin}
@@ -357,7 +357,7 @@ describe('VendorSignupCard — postLoginIntent (stale-intent routing bug guard)'
     // to errGoogle only if the message is empty). Wait for the error
     // to appear.
     await waitFor(() => {
-      expect(screen.getByText(/popup-blocked|Google 登入失敗/)).toBeTruthy();
+      expect(screen.getByText(/彈出式視窗/)).toBeTruthy();
     });
 
     expect(sessionStorage.getItem('postLoginIntent')).toBeNull();
