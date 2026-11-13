@@ -20,6 +20,34 @@ function renderLogin(extra = {}) {
   return { onVendorSignup };
 }
 
+describe('LoginScreen password reset', () => {
+  it('asks Firebase to email a reset link and does not use the signed-in change-password modal', async () => {
+    const onPasswordReset = vi.fn().mockResolvedValue(undefined);
+    renderLogin({ onPasswordReset });
+    fireEvent.change(screen.getByPlaceholderText('電郵地址'), {
+      target: { value: 'couple@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '忘記密碼？' }));
+    await screen.findByText('重設連結已寄出，請查收電郵。');
+    expect(onPasswordReset).toHaveBeenCalledWith('couple@example.com');
+    expect(screen.queryByText('更改密碼')).toBeNull();
+  });
+});
+
+describe('VendorSignupCard invite slug', () => {
+  it('shows the hash or claim slug on the signup card', () => {
+    render(
+      <VendorSignupCard
+        onGoogleLogin={noop}
+        onEmailRegister={noop}
+        onBack={() => {}}
+        inviteSlug="abc-studio"
+      />,
+    );
+    expect(screen.getByTestId('vendor-invite-slug').textContent).toContain('abc-studio');
+  });
+});
+
 describe('LoginScreen entry points', () => {
   beforeEach(() => {
     localStorage.clear();

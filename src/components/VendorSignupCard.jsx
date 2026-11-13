@@ -40,6 +40,7 @@ const STRINGS = {
     badge: '我是商戶',
     title: '加入 Save The Day 商戶指南',
     tagline: '加入 Save The Day 商戶指南，5 分鐘填表，立即收到全港新人查詢。',
+    claimLine: '你正在認領商戶',
     nameLabel: '商戶名稱 / 工作室名',
     namePlaceholder: '例：ABC Wedding Studio',
     emailPlaceholder: '電郵地址',
@@ -65,6 +66,7 @@ const STRINGS = {
     badge: 'Vendor signup',
     title: 'Join the Vendor Directory',
     tagline: 'Join the savetheday.io directory — fill in your business info in 5 minutes and start receiving inquiries.',
+    claimLine: 'You are claiming the vendor',
     nameLabel: 'Business name',
     namePlaceholder: 'e.g. ABC Wedding Studio',
     emailPlaceholder: 'Email address',
@@ -120,7 +122,7 @@ function clearVendorSignupIntent() {
   }
 }
 
-export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
+export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack, inviteSlug = '' }) {
   const [lang, setLang] = useState(readUiLang);
   const t = STRINGS[lang];
   const chooseLang = (next) => {
@@ -231,6 +233,11 @@ export function VendorSignupCard({ onGoogleLogin, onEmailRegister, onBack }) {
           <Briefcase className="w-14 h-14 text-emerald-600 mx-auto mb-4" />
           <h1 className="text-2xl font-black text-slate-800 mb-2">{t.title}</h1>
           <p className="text-slate-500 mb-6 text-sm leading-relaxed">{t.tagline}</p>
+          {inviteSlug ? (
+            <p className="mb-6 text-sm font-bold text-emerald-800" data-testid="vendor-invite-slug">
+              {t.claimLine}：{inviteSlug}
+            </p>
+          ) : null}
 
           {/* Google signup */}
           <button

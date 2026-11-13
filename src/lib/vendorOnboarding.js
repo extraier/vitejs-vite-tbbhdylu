@@ -15,6 +15,7 @@
 
 import { functions } from './firebase';
 import { httpsCallable } from 'firebase/functions';
+import { shouldClaimSeededVendor } from './vendorInviteLink';
 
 /**
  * Vendor onboarding form state — single source of truth for the wizard.
@@ -168,7 +169,7 @@ export async function submitVendorApplication(form) {
     // ignore — treat as no invite
   }
 
-  if (pendingInvite && pendingInvite.slug && pendingInvite.token) {
+  if (shouldClaimSeededVendor(pendingInvite)) {
     // Lazy import to avoid an import cycle (vendorOnboarding.js is
     // bundled in app shell, vendorActivation is the new module).
     const { claimAndApplyAsVendor } = await import('./vendorActivation');
