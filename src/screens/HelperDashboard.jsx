@@ -43,6 +43,8 @@ import { TaskActivityTimeline } from '../components/TaskActivityTimeline';
 import { ReceptionScanner } from './ReceptionScanner';
 import { PhotoDrop } from './PhotoDrop';
 import { recordTaskStatusUpdate } from '../lib/taskUpdates';
+import { guestListCollectionName, mergeGuestGifts } from '../lib/guestGifts';
+import { requestGuestGiftSplit } from '../lib/splitGuestGifts';
 
 const TASK_STATUSES = [
   { id: 'todo', label: '待辦', color: 'slate', Icon: Hourglass },
@@ -191,12 +193,28 @@ export function HelperDashboard({
   // filter was a workaround for the owner-scoped layout; with the
   // event in the URL path the filter is no longer needed (and the
   // old collection is now ruled off-limits, so it returned empty).
-  const { data: helperGuests = [] } = useFirestoreCollection(
+  const helperGuestCollection = guestListCollectionName(perms);
+  const { data: helperGuestRows = [] } = useFirestoreCollection(
     ownerUid && perms.canViewGuestList && helperAssignment?.eventId
-      ? collection(db, 'artifacts', appId, 'users', ownerUid, 'events', helperAssignment.eventId, 'guests')
+      ? collection(db, 'artifacts', appId, 'users', ownerUid, 'events', helperAssignment.eventId, helperGuestCollection)
       : null,
-    [ownerUid, perms.canViewGuestList, helperAssignment?.eventId],
+    [ownerUid, perms.canViewGuestList, helperAssignment?.eventId, helperGuestCollection],
   );
+  const { data: helperGiftDocs = [] } = useFirestoreCollection(
+    ownerUid && perms.canViewGiftAmount && helperAssignment?.eventId
+      ? collection(db, 'artifacts', appId, 'users', ownerUid, 'events', helperAssignment.eventId, 'guestGifts')
+      : null,
+    [ownerUid, perms.canViewGiftAmount, helperAssignment?.eventId],
+  );
+  const helperGuests = useMemo(
+    () => mergeGuestGifts(helperGuestRows, perms.canViewGiftAmount ? helperGiftDocs : [], perms),
+    [helperGuestRows, helperGiftDocs, perms],
+  );
+  useEffect(() => {
+    if (!ownerUid || !helperAssignment?.eventId || !perms.canViewGuestList) return undefined;
+    requestGuestGiftSplit(ownerUid, helperAssignment.eventId).catch(() => {});
+    return undefined;
+  }, [ownerUid, helperAssignment?.eventId, perms.canViewGuestList]);
 
   // 2026-08-15 — Vendor and Helper Onboarding & Assignment
   // Architecture Audit (P0-C). Helpers now see Big Day

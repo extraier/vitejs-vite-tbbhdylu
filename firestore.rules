@@ -495,8 +495,14 @@ match /{path=**}/events/{eventId} {
         allow write: if isAdmin();
       }
       match /meta/{metaId} {
+        // Templates cache-buster only (updatedAt). No user records.
         allow read: if true;
         allow write: if isAdmin();
+      }
+
+      // Direct address for guestLinks/{linkId}. Admin SDK only.
+      match /guestLinkIndex/{linkId} {
+        allow read, write: if false;
       }
 
       // ---- 2026-09-18 — P13.4.4: Public Find-Seat QR lookup -----------
@@ -655,7 +661,16 @@ match /{path=**}/events/{eventId} {
           // budget and coOwners. Their portal uses
           // guestExperience/public.
           allow read: if isOwnerOrAnyCoOwner(ownerUid);
-          allow create, update, delete: if isOwner(ownerUid);
+          // storageUsageBytes / storageQuotaBytes are not the quota
+          // counter. Enforcement reads privateUsage/storage. Owners
+          // must not seed or zero those event-doc fields.
+          allow create: if isOwner(ownerUid)
+            && !request.resource.data.keys().hasAny(['storageUsageBytes', 'storageQuotaBytes']);
+          allow update: if resource != null
+            && isOwner(ownerUid)
+            && !request.resource.data.diff(resource.data).affectedKeys()
+                 .hasAny(['storageUsageBytes', 'storageQuotaBytes']);
+          allow delete: if isOwner(ownerUid);
 
           // 2026-08-23 — Manus P1 hardening (PDF §3.1, §3.2):
           // Server-sanitized public Guest Experience projection.
@@ -1266,30 +1281,60 @@ match /{path=**}/events/{eventId} {
           // hasAttended). Other guests' docs remain unreadable.
           match /guests/{guestDocId} {
             // get is per document. A redeemed guest may read only the
-            // guest doc their link names (guestDocId). list stays with
-            // the couple and helpers, so a guest cannot enumerate the
-            // rest of the list or their gift amounts.
+            // guest doc their link names (guestDocId). Gift amounts
+            // are not on this doc: they live in /guestGifts, and a
+            // helper without canViewGiftAmount cannot list guests
+            // that might still carry a legacy amount. They read
+            // /guestDirectory instead.
             allow get: if isOwnerOrAnyCoOwner(ownerUid)
-              || hasHelperPerm(ownerUid, 'canViewGuestList')
+              || (hasHelperPerm(ownerUid, 'canViewGuestList')
+                  && hasHelperPerm(ownerUid, 'canViewGiftAmount'))
+              || (hasHelperPerm(ownerUid, 'canViewGuestList')
+                  && !resource.data.keys().hasAny(['giftAmount', 'hasGifted', 'lastGiftedAt']))
               || (hasValidGuestLink(ownerUid, eventId)
                   && guestDocId == guestLink(ownerUid).data.guestDocId);
             allow list: if isOwnerOrAnyCoOwner(ownerUid)
-              || hasHelperPerm(ownerUid, 'canViewGuestList');
-            allow create, delete: if isOwnerOrAnyCoOwner(ownerUid);
+              || (hasHelperPerm(ownerUid, 'canViewGuestList')
+                  && hasHelperPerm(ownerUid, 'canViewGiftAmount'));
+            allow delete: if isOwnerOrAnyCoOwner(ownerUid);
+            allow create: if isOwnerOrAnyCoOwner(ownerUid)
+              && !request.resource.data.keys().hasAny(['giftAmount', 'hasGifted', 'lastGiftedAt']);
             // 2026-08-25 — Manus P10: QR regeneration audit fields.
-            // The owner / co-owner tier can write any field, so they
-            // already cover qrRegeneratedAt / qrRegeneratedByUid /
-            // qrCanonicalOwnerUid / qrCanonicalEventId. The helper
-            // tier is restricted to reception scan fields — a helper
-            // who somehow ends up on the QR modal cannot write the
-            // audit metadata. The canEditGuests helper branch is
-            // unchanged from before (full update), since reception
-            // helpers do not have canEditGuests by default.
-            allow update: if isOwnerOrAnyCoOwner(ownerUid)
-              || (hasHelperPerm(ownerUid, 'canScan')
-                  && request.resource.data.diff(resource.data).affectedKeys()
-                       .hasOnly(['hasAttended', 'lastScannedBy', 'lastScannedAt']))
-              || hasHelperPerm(ownerUid, 'canEditGuests');
+            // The owner / co-owner tier can write any field except
+            // gift amounts (those are server-owned on /guestGifts).
+            // The helper scan tier stays limited to reception fields.
+            allow update: if resource != null
+              && !request.resource.data.diff(resource.data).affectedKeys()
+                  .hasAny(['giftAmount', 'hasGifted', 'lastGiftedAt'])
+              && (
+                isOwnerOrAnyCoOwner(ownerUid)
+                || (hasHelperPerm(ownerUid, 'canScan')
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['hasAttended', 'lastScannedBy', 'lastScannedAt']))
+                || hasHelperPerm(ownerUid, 'canEditGuests')
+              );
+          }
+
+          // Authoritative gift amount. Clients cannot write it.
+          // Helpers need canViewGiftAmount. A guest may get only
+          // the doc their link names.
+          match /guestGifts/{guestDocId} {
+            allow get: if isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewGiftAmount')
+              || (hasValidGuestLink(ownerUid, eventId)
+                  && guestDocId == guestLink(ownerUid).data.guestDocId);
+            allow list: if isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewGiftAmount');
+            allow create, update, delete: if false;
+          }
+
+          // Sanitized guest projection (no gift fields). Written
+          // only by the Admin SDK. Helpers with canViewGuestList
+          // list this instead of /guests.
+          match /guestDirectory/{guestDocId} {
+            allow get, list: if isOwnerOrAnyCoOwner(ownerUid)
+              || hasHelperPerm(ownerUid, 'canViewGuestList');
+            allow create, update, delete: if false;
           }
 
           // Photos — same shape as old /photos/ rule. eventId is in
@@ -1568,10 +1613,11 @@ match /{path=**}/events/{eventId} {
           allow read, write: if isOwnerOrAnyCoOwner(ownerUid);
         }
 
-        // Cache-buster touched whenever templates/* is updated. Clients
-        // watch this doc's updatedAt to know when to re-fetch.
+        // Leftover user-scoped cache path. The live templates
+        // cache-buster is /artifacts/{appId}/meta/templates (public,
+        // updatedAt only). This user path must not be world-readable.
         match /meta/{metaId} {
-          allow read: if true;
+          allow read: if isOwner(ownerUid) || isAdmin();
           allow write: if isAdmin();
         }
 

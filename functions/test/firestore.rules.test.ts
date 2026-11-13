@@ -1162,3 +1162,88 @@ describe.skipIf(skipEmulator)('firestore.rules — helper pendingInvites and cou
     await assertFails(getDocs(collection(stranger!, 'proposals')));
   });
 });
+
+describe.skipIf(skipEmulator)('firestore.rules — gift amounts, quota fields, meta', () => {
+  const ownerUid = 'owner-gift';
+  const eventId = 'event-gift';
+  const helperUid = 'helper-gift';
+  const base = `artifacts/savetheday-production/users/${ownerUid}/events/${eventId}`;
+
+  beforeEach(async () => {
+    await seedEvent(ownerUid, eventId);
+  });
+
+  it('lets a helper without canViewGiftAmount list guestDirectory but not guests that still have amounts', async () => {
+    await seedHelper(ownerUid, helperUid, { canViewGuestList: true });
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await setDoc(doc(adminDb, `${base}/guests/g-1`), {
+        name: '陳大文',
+        giftAmount: 800,
+        hasGifted: true,
+      });
+      await setDoc(doc(adminDb, `${base}/guestDirectory/g-1`), { name: '陳大文' });
+      await setDoc(doc(adminDb, `${base}/guestGifts/g-1`), { giftAmount: 800, hasGifted: true });
+    });
+    const helper = await asUser(helperUid);
+    await assertFails(getDocs(collection(helper!, `${base}/guests`)));
+    await assertFails(getDoc(doc(helper!, `${base}/guests/g-1`)));
+    await assertFails(getDoc(doc(helper!, `${base}/guestGifts/g-1`)));
+    await assertSucceeds(getDocs(collection(helper!, `${base}/guestDirectory`)));
+  });
+
+  it('lets a helper with canViewGiftAmount read guestGifts and blocks client writes', async () => {
+    await seedHelper(ownerUid, helperUid, { canViewGuestList: true, canViewGiftAmount: true });
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await setDoc(doc(adminDb, `${base}/guests/g-1`), { name: '陳大文', giftAmount: 800, hasGifted: true });
+      await setDoc(doc(adminDb, `${base}/guestGifts/g-1`), { giftAmount: 800, hasGifted: true });
+    });
+    const helper = await asUser(helperUid);
+    await assertSucceeds(getDoc(doc(helper!, `${base}/guestGifts/g-1`)));
+    await assertSucceeds(getDoc(doc(helper!, `${base}/guests/g-1`)));
+    await assertFails(updateDoc(doc(helper!, `${base}/guestGifts/g-1`), { giftAmount: 1 }));
+  });
+
+  it('rejects client creates and updates that set gift fields on the guest doc', async () => {
+    const owner = await asUser(ownerUid);
+    await assertFails(setDoc(doc(owner!, `${base}/guests/g-new`), {
+      name: '新人',
+      giftAmount: 100,
+      hasGifted: true,
+    }));
+    await assertSucceeds(setDoc(doc(owner!, `${base}/guests/g-new`), { name: '新人' }));
+    await assertFails(updateDoc(doc(owner!, `${base}/guests/g-new`), { giftAmount: 50 }));
+    await assertSucceeds(updateDoc(doc(owner!, `${base}/guests/g-new`), { name: '新人乙' }));
+  });
+
+  it('rejects owner writes of storageUsageBytes on the event doc', async () => {
+    const owner = await asUser(ownerUid);
+    const eventPath = `artifacts/savetheday-production/users/${ownerUid}/events/fresh-event`;
+    await assertFails(setDoc(doc(owner!, eventPath), { name: 'Wedding', storageUsageBytes: 0 }));
+    await assertSucceeds(setDoc(doc(owner!, eventPath), { name: 'Wedding', budget: 1 }));
+    await assertFails(updateDoc(doc(owner!, eventPath), { storageQuotaBytes: 999 }));
+    await assertSucceeds(updateDoc(doc(owner!, eventPath), { name: 'Wedding 2' }));
+  });
+
+  it('keeps the templates cache-buster public and locks user-scoped meta', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await setDoc(doc(adminDb, 'artifacts/savetheday-production/meta/templates'), { updatedAt: 1 });
+      await setDoc(doc(adminDb, `artifacts/savetheday-production/users/${ownerUid}/meta/templates`), {
+        note: 'not public',
+      });
+      await setDoc(doc(adminDb, 'artifacts/savetheday-production/guestLinkIndex/link-1'), {
+        path: 'artifacts/savetheday-production/users/x/guestLinks/link-1',
+      });
+    });
+    const anon = env.unauthenticatedContext().firestore();
+    await assertSucceeds(getDoc(doc(anon, 'artifacts/savetheday-production/meta/templates')));
+    await assertFails(getDoc(doc(anon, `artifacts/savetheday-production/users/${ownerUid}/meta/templates`)));
+    const stranger = await asUser('stranger-meta');
+    await assertFails(getDoc(doc(stranger!, `artifacts/savetheday-production/users/${ownerUid}/meta/templates`)));
+    await assertFails(getDoc(doc(stranger!, 'artifacts/savetheday-production/guestLinkIndex/link-1')));
+    const owner = await asUser(ownerUid);
+    await assertSucceeds(getDoc(doc(owner!, `artifacts/savetheday-production/users/${ownerUid}/meta/templates`)));
+  });
+});

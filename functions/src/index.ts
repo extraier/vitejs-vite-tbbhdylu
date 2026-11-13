@@ -19,9 +19,18 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { initializeApp } from 'firebase-admin/app';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue, FieldPath } from 'firebase-admin/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import * as crypto from 'crypto';
+import { resolveGuestLinkTtlHours } from './guestLinkTtl';
+import { guestLinkIndexDocPath, readGuestLinkIndexPath } from './guestLinkIndex.pure';
+import {
+  collectVendorNameHits,
+  normalizeVendorSearchCap,
+  vendorSearchDenial,
+  VENDOR_SEARCH_MAX_SCAN,
+  VENDOR_SEARCH_PAGE_SIZE,
+} from './vendorSearch.pure';
 
 initializeApp();
 const db = getFirestore();
@@ -78,13 +87,19 @@ export const issueGuestLink = onCall(
   { secrets: [HMAC_KEY], cors: true, region: "us-central1" },
   async (req) => {
     if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
-    const { eventId, guestId, ttlHours = 72 } = req.data as {
+    const { eventId, guestId, ttlHours: rawTtl } = req.data as {
       eventId: string;
       guestId: string;
-      ttlHours?: number;
+      ttlHours?: unknown;
     };
     if (!eventId || !guestId) {
       throw new HttpsError('invalid-argument', 'eventId and guestId required.');
+    }
+    let ttlHours: number;
+    try {
+      ttlHours = resolveGuestLinkTtlHours(rawTtl);
+    } catch (err) {
+      throw new HttpsError('invalid-argument', (err as Error).message);
     }
 
     const ownerUid = req.auth.uid;
@@ -100,7 +115,9 @@ export const issueGuestLink = onCall(
       .collection('users').doc(ownerUid)
       .collection('guestLinks').doc();
 
-    await linkRef.set({
+    const indexRef = db.doc(guestLinkIndexDocPath(appId, linkRef.id));
+    const batch = db.batch();
+    batch.set(linkRef, {
       ownerUid,
       eventId,
       guestId,
@@ -111,6 +128,14 @@ export const issueGuestLink = onCall(
       revoked: false,
       createdAt: FieldValue.serverTimestamp(),
     });
+    batch.set(indexRef, {
+      ownerUid,
+      eventId,
+      guestId,
+      path: linkRef.path,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
 
     return { linkId: linkRef.id, token, expiresAt };
   },
@@ -132,52 +157,67 @@ export const redeemGuestLink = onCall(
     }
 
     const authUid = req.auth.uid;
-    const linkSnap = await findGuestLink(linkId);
-    if (!linkSnap) throw new HttpsError('not-found', 'Invalid link.');
+    const indexRef = db.doc(guestLinkIndexDocPath(appId, linkId));
 
-    const link = linkSnap.data()!;
-    if (link.revoked) throw new HttpsError('permission-denied', 'Link revoked.');
-    if (link.expiresAt < Date.now()) {
-      throw new HttpsError('deadline-exceeded', 'Link expired.');
-    }
-    if (link.redeemedByUid && link.redeemedByUid !== authUid) {
-      throw new HttpsError('already-exists', 'Link already redeemed by another device.');
-    }
-    if (!verifyGuestLink(
-      HMAC_KEY.value(),
-      token,
-      link.ownerUid,
-      link.eventId,
-      link.guestId,
-      link.expiresAt,
-    )) {
-      throw new HttpsError('permission-denied', 'Invalid signature.');
-    }
+    const claimed = await db.runTransaction(async (tx) => {
+      const indexSnap = await tx.get(indexRef);
+      const indexedPath = readGuestLinkIndexPath(indexSnap.data());
+      if (!indexSnap.exists || !indexedPath) {
+        return { error: { code: 'not-found' as const, message: 'Invalid link.' } };
+      }
+      const linkRef = db.doc(indexedPath);
+      const linkSnap = await tx.get(linkRef);
+      if (!linkSnap.exists) {
+        return { error: { code: 'not-found' as const, message: 'Invalid link.' } };
+      }
+      const link = linkSnap.data()!;
+      if (link.revoked) {
+        return { error: { code: 'permission-denied' as const, message: 'Link revoked.' } };
+      }
+      if (link.expiresAt < Date.now()) {
+        return { error: { code: 'deadline-exceeded' as const, message: 'Link expired.' } };
+      }
+      if (link.redeemedByUid && link.redeemedByUid !== authUid) {
+        return { error: { code: 'already-exists' as const, message: 'Link already redeemed by another device.' } };
+      }
+      if (!verifyGuestLink(
+        HMAC_KEY.value(),
+        token,
+        link.ownerUid,
+        link.eventId,
+        link.guestId,
+        link.expiresAt,
+      )) {
+        return { error: { code: 'permission-denied' as const, message: 'Invalid signature.' } };
+      }
 
-    // Atomic claim. The rules check `auth.uid == doc.id` for guestLinks,
-    // so we MUST move the doc into a slot keyed by auth.uid. We do this
-    // by copying the data into a new doc owned by auth.uid and deleting
-    // the old one (best-effort).
-    const ownerUid = link.ownerUid;
-    const newRef = db
-      .collection('artifacts').doc(appId)
-      .collection('users').doc(ownerUid)
-      .collection('guestLinks').doc(authUid);
-
-    const batch = db.batch();
-    batch.set(newRef, {
-      ...link,
-      redeemedByUid: authUid,
-      redeemedAt: FieldValue.serverTimestamp(),
+      // Atomic claim. The rules check `auth.uid == doc.id` for guestLinks,
+      // so we MUST move the doc into a slot keyed by auth.uid.
+      const ownerUid = link.ownerUid as string;
+      const newRef = db
+        .collection('artifacts').doc(appId)
+        .collection('users').doc(ownerUid)
+        .collection('guestLinks').doc(authUid);
+      tx.set(newRef, {
+        ...link,
+        redeemedByUid: authUid,
+        redeemedAt: FieldValue.serverTimestamp(),
+      });
+      if (linkRef.path !== newRef.path) tx.delete(linkRef);
+      tx.set(indexRef, {
+        ownerUid,
+        eventId: link.eventId,
+        guestId: link.guestId,
+        path: newRef.path,
+        redeemedByUid: authUid,
+      }, { merge: true });
+      return { ownerUid, eventId: link.eventId as string, guestId: link.guestId as string };
     });
-    batch.delete(linkSnap.ref);
-    await batch.commit();
 
-    return {
-      ownerUid,
-      eventId: link.eventId,
-      guestId: link.guestId,
-    };
+    if ('error' in claimed && claimed.error) {
+      throw new HttpsError(claimed.error.code, claimed.error.message);
+    }
+    return claimed;
   },
 );
 
@@ -189,13 +229,27 @@ export const revokeGuestLink = onCall({ cors: true, region: "us-central1" }, asy
   const { linkId } = req.data as { linkId: string };
   if (!linkId) throw new HttpsError('invalid-argument', 'linkId required.');
 
-  const linkSnap = await findGuestLink(linkId);
-  if (!linkSnap) throw new HttpsError('not-found', 'Invalid link.');
-  if (linkSnap.data()!.ownerUid !== req.auth.uid) {
-    throw new HttpsError('permission-denied', 'Not your link.');
+  const indexRef = db.doc(guestLinkIndexDocPath(appId, linkId));
+  const revoked = await db.runTransaction(async (tx) => {
+    const indexSnap = await tx.get(indexRef);
+    const indexedPath = readGuestLinkIndexPath(indexSnap.data());
+    if (!indexSnap.exists || !indexedPath) {
+      return { error: { code: 'not-found' as const, message: 'Invalid link.' } };
+    }
+    const linkRef = db.doc(indexedPath);
+    const linkSnap = await tx.get(linkRef);
+    if (!linkSnap.exists) {
+      return { error: { code: 'not-found' as const, message: 'Invalid link.' } };
+    }
+    if (linkSnap.data()!.ownerUid !== req.auth!.uid) {
+      return { error: { code: 'permission-denied' as const, message: 'Not your link.' } };
+    }
+    tx.update(linkRef, { revoked: true });
+    return { ok: true as const };
+  });
+  if ('error' in revoked && revoked.error) {
+    throw new HttpsError(revoked.error.code, revoked.error.message);
   }
-
-  await linkSnap.ref.update({ revoked: true });
   return { ok: true };
 });
 
@@ -210,18 +264,6 @@ export const revokeGuestLink = onCall({ cors: true, region: "us-central1" }, asy
 
 import { getAuth } from 'firebase-admin/auth';
 import { resolveHelperInviteAcceptance } from './helperInvitePure';
-
-/**
- * findGuestLink — collectionGroup lookup by document ID.
- * Firestore's collectionGroup().doc() doesn't exist in the Admin SDK type
- * definitions (it's a known gap). We work around it by listing the group and
- * filtering by ID. Links are small (< 100 per wedding) so this is fine.
- */
-async function findGuestLink(linkId: string) {
-  const group = await db.collectionGroup('guestLinks').get();
-  const match = group.docs.find((d) => d.id === linkId);
-  return match ?? null;
-}
 
 // All possible helper permissions. Kept in sync with the client UI.
 export const HELPER_PERMS = [
@@ -649,14 +691,26 @@ export const linkVendorContact = onCall({ cors: true, region: "us-central1" }, a
 });
 
 /**
- * searchVendorsByName — owner-only. Lightweight lookup against the
- * `/vendors` directory for the "重新連結商戶" picker. Filters by
- * case-insensitive substring on `name` and optional `category`.
- * Caps results at 20 to keep payloads small; the UI does the
- * rest of the matching.
+ * searchVendorsByName — signed-in directory lookup for the
+ * "重新連結商戶" picker.
+ *
+ * Auth: any non-anonymous signed-in caller. /vendors is already
+ * world-readable, so this is not an owner-data boundary. The
+ * owner check lives on linkVendorContact, which only updates
+ * vendorContacts under the caller's own uid. Anonymous guest
+ * sessions are rejected.
+ *
+ * Name match is a case-insensitive substring. Firestore cannot
+ * express that, so we page by document id until `cap` hits are
+ * filled or VENDOR_SEARCH_MAX_SCAN docs have been read. Category
+ * is filtered in the same pass (no composite index required).
  */
 export const searchVendorsByName = onCall({ cors: true, region: "us-central1" }, async (req) => {
-  if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+  const denial = vendorSearchDenial(req.auth);
+  if (denial === 'unauthenticated') throw new HttpsError('unauthenticated', 'Sign in first.');
+  if (denial === 'permission-denied') {
+    throw new HttpsError('permission-denied', 'Sign in with a couple account to search vendors.');
+  }
 
   const { name, category, limit } = req.data as {
     name?: string;
@@ -664,37 +718,30 @@ export const searchVendorsByName = onCall({ cors: true, region: "us-central1" },
     limit?: number;
   };
 
-  const cap = Math.min(Number(limit) || 20, 50);
-
-  // /vendors is publicly readable; no per-owner filter needed.
-  let q = db.collection('vendors').limit(cap);
-  if (category && typeof category === 'string') {
-    q = q.where('category', '==', category);
-  }
-  const snap = await q.get();
-
-  // Filter by case-insensitive substring on name. Firestore
-  // doesn't support `contains` natively without a 3rd-party
-  // search service, so we filter in-memory after the category
-  // query (which is index-supported). Cap stays on the
-  // post-filter set.
-  const needle = String(name || '').trim().toLowerCase();
-  const hits = snap.docs
-    .filter((d) => {
-      if (!needle) return true;
-      const n = (d.data().name || '').toLowerCase();
-      return n.includes(needle);
-    })
-    .slice(0, cap)
-    .map((d) => {
-      const v = d.data();
+  const cap = normalizeVendorSearchCap(limit);
+  const needle = String(name || '');
+  const hits = await collectVendorNameHits({
+    cap,
+    needle,
+    category: typeof category === 'string' ? category : '',
+    maxScan: VENDOR_SEARCH_MAX_SCAN,
+    pageSize: VENDOR_SEARCH_PAGE_SIZE,
+    fetchPage: async (cursor, pageSize) => {
+      let q = db.collection('vendors').orderBy(FieldPath.documentId()).limit(pageSize);
+      if (cursor) q = q.startAfter(cursor);
+      const snap = await q.get();
       return {
-        uid: d.id,
-        name: v.name || d.id,
-        category: v.category || '',
-        serviceAreaCity: v.serviceAreaCity || '',
+        rows: snap.docs.map((d) => ({
+          id: d.id,
+          name: d.get('name'),
+          category: d.get('category'),
+          serviceAreaCity: d.get('serviceAreaCity'),
+          cursor: d,
+        })),
+        exhausted: snap.size < pageSize,
       };
-    });
+    },
+  });
 
   return { ok: true, hits };
 });
@@ -741,6 +788,11 @@ export {
 // Pure helpers live in ./redPacket.pure.ts (amount validation +
 // audit-record shape).
 export { confirmRedPacket } from './redPacket';
+
+// Gift amounts live in guestGifts (rules check canViewGiftAmount).
+// splitEventGuestGifts backfills legacy guest docs; the trigger
+// keeps guestDirectory in sync and strips gift fields on write.
+export { splitEventGuestGifts, onGuestGiftFieldsWritten } from './guestGifts';
 
 // 2026-07-18: helper invite SMTP email (Traditional-Chinese rich HTML).
 // The callable lives in ./helpersMail.ts — re-exported here so

@@ -166,7 +166,7 @@ jobs:
         # firestore:rules`. Vercel does not deploy them. This step
         # fails the job when the Vitest rules suite fails, including
         # the CSP path and guest-link cases.
-        run: firebase emulators:exec --only firestore --project savetheday-2377a "cd functions && FIRESTORE_RULES_TEST=1 npx vitest run --no-coverage test/firestore.rules.test.ts"
+        run: firebase emulators:exec --only firestore --project savetheday-2377a "cd functions && FIRESTORE_RULES_TEST=1 npx vitest run --no-coverage"
         env:
           CI: 'true'
 

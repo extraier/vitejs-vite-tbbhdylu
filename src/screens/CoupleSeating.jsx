@@ -45,6 +45,8 @@ import { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { collection, onSnapshot, doc, setDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { seatingItemPath, seatingCollectionPath } from '../lib/firestorePaths';
+import { sanitizeGuestForHelper } from '../lib/helpers';
+import { requestGuestGiftSplit } from '../lib/splitGuestGifts';
 import {
   normalizeTable,
   occupancy,
@@ -484,6 +486,9 @@ export function SeatingCanvas({
   /* ---------- subscriptions ---------- */
   useEffect(() => {
     if (!ownerUid || !eventId) return;
+    if (role === 'helper') {
+      requestGuestGiftSplit(ownerUid, eventId).catch(() => {});
+    }
     setLoading(true);
 
     const metaUnsub = onSnapshot(
@@ -533,13 +538,19 @@ export function SeatingCanvas({
       },
     );
 
-    // P13.2 — guests: /events/{eventId}/guests/{guestId} (sparse fields,
-    // but we at least grab name + side + dietary tags).
+    // Helpers without canViewGiftAmount cannot list /guests. The
+    // seating canvas only needs names, so they read guestDirectory.
+    const guestCollection = role === 'helper' ? 'guestDirectory' : 'guests';
     const guestsUnsub = onSnapshot(
-      collection(db, seatingCollectionPath(APP_ID, { ownerUid, eventId, collection: 'guests' })),
+      collection(db, seatingCollectionPath(APP_ID, { ownerUid, eventId, collection: guestCollection })),
       (snap) => {
         const rows = [];
-        snap.forEach((d) => rows.push({ id: d.id, ...d.data() }));
+        snap.forEach((d) => {
+          const row = { id: d.id, ...d.data() };
+          rows.push(role === 'helper'
+            ? sanitizeGuestForHelper(row, { canViewGiftAmount: false })
+            : row);
+        });
         setGuests(rows);
       },
       (err) => {
@@ -568,7 +579,7 @@ export function SeatingCanvas({
       guestsUnsub();
       checkInsUnsub();
     };
-  }, [ownerUid, eventId]);
+  }, [ownerUid, eventId, role]);
 
   /* ---------- helpers ---------- */
   const showToast = useCallback(

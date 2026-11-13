@@ -591,6 +591,21 @@ export function deriveExpectedAmount(
   return { expectedAmount };
 }
 
+/**
+ * adminOverride skips the SKU price and the required eventId.
+ * Only an admin custom claim may turn that on. A signed-in couple
+ * who sends the flag is rejected before a pending receipt is stored.
+ */
+export function resolvePaymentOverride(input: {
+  adminOverride: boolean;
+  callerIsAdmin: boolean;
+}): boolean {
+  if (input.adminOverride && input.callerIsAdmin !== true) {
+    throw new Error('adminOverride is only available to admins.');
+  }
+  return input.adminOverride === true && input.callerIsAdmin === true;
+}
+
 export const submitPaymentReceipt = onCall(
   { cors: true, region: 'us-central1' },
   async (req) => {
@@ -637,6 +652,16 @@ export const submitPaymentReceipt = onCall(
       throw new HttpsError('invalid-argument', 'amount must be > 0.');
     }
 
+    let overrideAllowed = false;
+    try {
+      overrideAllowed = resolvePaymentOverride({
+        adminOverride: !!adminOverride,
+        callerIsAdmin: req.auth.token.admin === true,
+      });
+    } catch (err: any) {
+      throw new HttpsError('permission-denied', err.message);
+    }
+
     // 2026-08-19 — Manus P1.1: server-side price derivation.
     // Use the shared helper so the unit tests cover the policy.
     let expectedAmount: number;
@@ -644,7 +669,7 @@ export const submitPaymentReceipt = onCall(
       const out = deriveExpectedAmount(
         unlockType as UnlockType,
         amount,
-        !!adminOverride,
+        overrideAllowed,
         overrideReason,
       );
       expectedAmount = out.expectedAmount;
@@ -656,7 +681,7 @@ export const submitPaymentReceipt = onCall(
     // admin override. Validate that the event exists under the
     // caller (don't leak ownership info via 404 vs 403).
     if (!eventId || typeof eventId !== 'string') {
-      if (!adminOverride) {
+      if (!overrideAllowed) {
         throw new HttpsError(
           'invalid-argument',
           'eventId is required so the entitlement can be scoped to a wedding.',
@@ -682,8 +707,8 @@ export const submitPaymentReceipt = onCall(
       screenshotUrl,
       reference: reference || '',
       eventId: eventId || null,
-      adminOverride: !!adminOverride,
-      overrideReason: adminOverride ? (overrideReason || '').trim() : null,
+      adminOverride: overrideAllowed,
+      overrideReason: overrideAllowed ? (overrideReason || '').trim() : null,
       status: 'pending',
       createdAt: FieldValue.serverTimestamp(),
       verifiedAt: null,
