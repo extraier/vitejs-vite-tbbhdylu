@@ -121,20 +121,21 @@ export function mailboxLabel(recipientBase) {
 
 export function htmlToText(html) {
   if (!html || typeof html !== 'string') return '';
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&#39;|&apos;/gi, "'")
-    .replace(/&quot;/gi, '"')
-    .replace(/[ \t]{2,}/g, ' ')
+  // The HTML parser decodes entities once and drops script/style nodes.
+  // The result is plain text for React to escape; it is never reinserted as HTML.
+  if (typeof DOMParser === 'undefined') return html.trim();
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, style, noscript').forEach((node) => node.remove());
+  doc.querySelectorAll('br').forEach((node) => {
+    node.replaceWith(doc.createTextNode('\n'));
+  });
+  doc.querySelectorAll('p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote').forEach((node) => {
+    node.appendChild(doc.createTextNode('\n'));
+  });
+  return (doc.body?.textContent || '')
+    .replace(/\u00A0/g, ' ')
     .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

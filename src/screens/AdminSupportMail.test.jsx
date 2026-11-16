@@ -5,6 +5,12 @@
 // reader (the live test message, an HTML-only body, and a message
 // with an empty Message-ID plus incomplete attachment metadata).
 
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 const mocks = vi.hoisted(() => {
   const readSnapshot = async (q) => {
     const name = q?.ref?.name;
@@ -40,12 +46,6 @@ const mocks = vi.hoisted(() => {
     readSnapshot,
   };
 });
-
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 vi.mock('../lib/firebase', () => ({
   db: {},
@@ -370,6 +370,10 @@ describe('support mail helpers', () => {
 
   it('strips html to text and drops scripts', () => {
     expect(htmlToText('<p>Hello <b>there</b></p><script>alert(1)</script>')).toBe('Hello there');
+    expect(htmlToText('<p>Hi</p><script>alert(1)</script >')).toBe('Hi');
+    expect(htmlToText('<p>Line<br>break</p>')).toBe('Line\nbreak');
+    // The parser decodes entities once, so a double-encoded tag stays text.
+    expect(htmlToText('<p>&amp;lt;b&amp;gt;</p>')).toBe('&lt;b&gt;');
     expect(htmlToText('')).toBe('');
     expect(htmlToText(null)).toBe('');
   });
