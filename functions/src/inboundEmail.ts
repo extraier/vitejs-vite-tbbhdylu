@@ -36,6 +36,9 @@ export interface InboundRequest {
   headers: Record<string, string | string[] | undefined>;
   pipe: (dest: NodeJS.WritableStream) => unknown;
   on: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  /** Cloud Functions v2 already buffers the body here after consuming the stream. */
+  rawBody?: Buffer | string;
+  body?: unknown;
 }
 
 export interface InboundResponse {
@@ -103,15 +106,28 @@ export function parseMultipart(req: InboundRequest): Promise<{ fields: Record<st
     });
     bb.on('finish', () => resolve({ fields, files }));
     bb.on('error', reject);
-    req.pipe(bb);
+    const buffered = rawBodyIfPresent(req);
+    if (buffered) {
+      bb.end(buffered);
+    } else {
+      req.pipe(bb);
+    }
   });
 }
 
+function rawBodyIfPresent(req: InboundRequest): Buffer | undefined {
+  if (req.rawBody == null) return undefined;
+  return Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(req.rawBody);
+}
+
 function readBody(req: InboundRequest): Promise<string> {
-  return new Promise((resolve) => {
+  const buffered = rawBodyIfPresent(req);
+  if (buffered) return Promise.resolve(buffered.toString('utf8'));
+  return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk) => chunks.push(chunk as Buffer));
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
   });
 }
 

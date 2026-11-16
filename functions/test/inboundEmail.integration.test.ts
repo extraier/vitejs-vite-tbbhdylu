@@ -102,6 +102,13 @@ function makeReq(body: Buffer, headers: Record<string, string>, method = 'POST')
   return Object.assign(req, { headers, method });
 }
 
+/** Mimic Cloud Functions v2: the stream is already consumed and the body lives on rawBody. */
+function makeConsumedReq(body: Buffer, headers: Record<string, string>, method = 'POST'): InboundRequest {
+  const req = new Readable({ read() {} });
+  req.push(null);
+  return Object.assign(req, { headers, method, rawBody: body });
+}
+
 function makeRes(): InboundResponse & { statusCode: number; body: string } {
   const res = { statusCode: 200, body: '' };
   return Object.assign(res, {
@@ -192,5 +199,28 @@ describe('inboundEmail handler', () => {
     expect(store.messages[0].threadId).toBe(seedId);
     expect(store.threads[seedId].messageCount).toBe(2);
     expect(replies).toHaveLength(0);
+  });
+
+  it('reads a Cloud Functions-style request whose stream is already consumed', async () => {
+    const store = freshStore();
+    const { body, headers } = multipartBody({
+      from: 'couple@example.com',
+      to: 'Savetheday Support <support@savetheday.io>',
+      recipient: 'support@savetheday.io',
+      subject: 'Already consumed body',
+      'body-plain': 'This should still be parsed.',
+      'stripped-text': 'This should still be parsed.',
+      'Message-ID': '<rawbody@mail.example.com>',
+    });
+    const res = makeRes();
+    await handleInboundEmail(
+      makeConsumedReq(body, headers),
+      res,
+      runtimeFrom(store, async () => ({})),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0].bodyPlain).toBe('This should still be parsed.');
   });
 });
