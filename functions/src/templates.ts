@@ -24,9 +24,11 @@
  * --------------
  *   gs://savetheday-2377a.firebasestorage.app/invitation-templates/{templateId}.svg
  *
- * Public read of the SVG is enabled by storage.rules (public bucket
- * serving the preview at /invitation-templates/*.svg). The admin claim
- * is the ONLY way to write.
+ * Public read of template objects is storage.rules on
+ * /invitation-templates/{fileName} (world-readable by design). This
+ * function must not grant allUsers roles/storage.objectViewer on the
+ * bucket — that IAM binding bypasses owner-only rules for every object.
+ * The admin claim is the ONLY way to write.
  */
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
@@ -76,76 +78,6 @@ const VALID_TEMPLATE_IDS = new Set([
 ]);
 
 const VALID_LAYOUTS = new Set(['centered', 'ornate', 'stacked']);
-
-// Module-level cache so we don't re-patch bucket IAM on every upload.
-// Once the policy grants allUsers objectViewer, it stays granted —
-// re-patching is wasted API calls.
-let bucketIamPatched = false;
-
-/**
- * ensureBucketPublicRead — adds allUsers → roles/storage.objectViewer
- * on the default bucket. Uses the Cloud Storage v1 IAM REST API via
- * fetch (the Admin SDK doesn't expose bucket-level IAM policy edits).
- *
- * Idempotent: if the binding is already present, returns immediately.
- */
-async function ensureBucketPublicRead(): Promise<void> {
-  const bucketName = BUCKET.name;
-  const url = `https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(bucketName)}/iam`;
-  const headers = { Authorization: `Bearer ${await getAccessToken()}` };
-
-  // 1. GET current policy.
-  const getRes = await fetch(url, { headers });
-  if (!getRes.ok) {
-    throw new Error(`GET bucket IAM failed: ${getRes.status} ${await getRes.text()}`);
-  }
-  const policy: { bindings?: Array<{ role: string; members?: string[] }> } = await getRes.json();
-
-  // 2. Find or create the objectViewer binding.
-  const binding = (policy.bindings || []).find((b) => b.role === 'roles/storage.objectViewer');
-  if (binding && (binding.members || []).includes('allUsers')) {
-    return; // already public
-  }
-  if (binding) {
-    binding.members = [...(binding.members || []), 'allUsers'];
-  } else {
-    policy.bindings = [
-      ...(policy.bindings || []),
-      { role: 'roles/storage.objectViewer', members: ['allUsers'] },
-    ];
-  }
-
-  // 3. PUT the updated policy.
-  const putRes = await fetch(url, {
-    method: 'PUT',
-    headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify(policy),
-  });
-  if (!putRes.ok) {
-    throw new Error(`PUT bucket IAM failed: ${putRes.status} ${await putRes.text()}`);
-  }
-}
-
-/**
- * getAccessToken — uses the Admin SDK's built-in credential to mint an
- * OAuth2 access token for the default service account. Equivalent to
- * `gcloud auth print-access-token` but runs in-process.
- */
-async function getAccessToken(): Promise<string> {
-  // The Admin SDK exposes credential access via the app's credential
-  // object. getAccessToken() returns a string access token + expiry.
-  // We pull it from the storage service's underlying app, which is the
-  // same one we initialized with initializeApp() at module load.
-  const app = getStorage().app;
-  // firebase-admin 12 exposes credential at runtime even though the
-  // type isn't always declared on the storage service.
-  const cred = (app as unknown as { credential: { getAccessToken: () => Promise<{ access_token: string }> } }).credential;
-  if (!cred) {
-    throw new Error('No credential on storage app — was initializeApp() called?');
-  }
-  const { access_token } = await cred.getAccessToken();
-  return access_token;
-}
 
 /**
  * Image format detection — sniffs the first few bytes of a buffer and
@@ -419,10 +351,9 @@ async function _updateTemplateImpl(req: any): Promise<UpdateTemplateResult> {
   const contentType = 'image/svg+xml';
   const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
 
-  // Token so the public can read this specific file via the Firebase Storage
-  // public CDN. Without a token, the rules + signed-URL dance would force
-  // every guest to authenticate just to see a preview tile.
-  // We grant public read by setting the file's ACL after upload.
+  // Public read of this object is storage.rules
+  // (`/invitation-templates/{fileName}` allow read: if true). Do not
+  // make the object or the bucket public via ACL or IAM here.
   await file.save(buf, {
     contentType,
     metadata: {
@@ -438,35 +369,11 @@ async function _updateTemplateImpl(req: any): Promise<UpdateTemplateResult> {
     resumable: false,
   });
 
-  // 5. Make the file publicly readable. Firebase Storage buckets don't
-  //    honor legacy per-object ACLs the way you'd expect — `file.makePublic()`
-  //    returns success but the resulting object stays private because
-  //    the bucket has uniform-bucket-level-access enabled (the default
-  //    for new Firebase Storage buckets). The right lever is the BUCKET
-  //    IAM policy: grant allUsers → roles/storage.objectViewer. That
-  //    makes every object in the bucket public-read at once.
-  //
-  //    We patch the IAM lazily on first invocation and cache the success
-  //    in a module-level flag to avoid hammering the IAM API on every
-  //    upload. If the project owner has already granted allUsers READ
-  //    (via the seed script or the Firebase Console), this is a no-op.
-  if (!bucketIamPatched) {
-    try {
-      await ensureBucketPublicRead();
-      bucketIamPatched = true;
-    } catch (e) {
-      // Non-fatal — the file is still uploaded. Public-read failures
-      // surface at fetch time as a 403, which we log so the admin can
-      // see what's wrong.
-      console.warn('[updateTemplate] ensureBucketPublicRead failed (may be OK if already public):', e);
-    }
-  }
-
-  // 6. Build the public URL. Two forms — we keep the storage.googleapis.com
-  //    one for direct <img src> use (CORS-friendly, no token in URL).
+  // 5. Build the public URL. Guests read the object through Storage rules
+  //    on /invitation-templates/{fileName}, not a bucket-wide IAM grant.
   const publicUrl = `https://storage.googleapis.com/${BUCKET.name}/${storagePath}`;
 
-  // 7. Upsert the matching Firestore doc. Templates are GLOBAL (not per-owner)
+  // 6. Upsert the matching Firestore doc. Templates are GLOBAL (not per-owner)
   //    because they're the stock background set the couple picks from.
   const templateRef = db
     .collection('artifacts').doc(APP_ID)
@@ -507,7 +414,7 @@ async function _updateTemplateImpl(req: any): Promise<UpdateTemplateResult> {
     throw e;
   }
 
-  // 8. Touch a "templatesVersion" doc so the client knows to invalidate cache.
+  // 7. Touch a "templatesVersion" doc so the client knows to invalidate cache.
   await db
     .collection('artifacts').doc(APP_ID)
     .collection('meta').doc('templates')
