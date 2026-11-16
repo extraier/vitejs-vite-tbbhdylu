@@ -86,6 +86,11 @@ export function PersonalGuestPortal({
   eventVenue = null,
   eventAddress = null,
   onSaveGuestMessage = null,
+  // Set when verifyShareToken or the guest bootstrap failed.
+  // Without this the portal only knows `guest` is null and spins
+  // on "正在載入您的專屬電子喜帖..." forever.
+  linkError = null,
+  onRetryLink = null,
 }) {
   const fileInputRef = useRef(null);
   const [enlarged, setEnlarged] = useState(false);
@@ -133,6 +138,23 @@ export function PersonalGuestPortal({
   };
 
   if (!guest) {
+    if (linkError) {
+      return (
+        <div className="max-w-md mx-auto mt-16 px-6 text-center" role="alert">
+          <p className="text-lg font-bold text-slate-800">無法開啟電子喜帖</p>
+          <p className="mt-2 text-sm text-slate-500">{linkError}</p>
+          {onRetryLink && (
+            <button
+              type="button"
+              onClick={onRetryLink}
+              className="mt-6 px-5 py-2.5 text-sm font-bold text-white bg-slate-900 hover:bg-slate-800 rounded-xl"
+            >
+              再試一次
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="text-center mt-20 text-slate-500">正在載入您的專屬電子喜帖...</div>
     );

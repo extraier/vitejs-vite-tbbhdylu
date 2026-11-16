@@ -19,11 +19,13 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { initializeApp } from 'firebase-admin/app';
-import { getFirestore, FieldValue, FieldPath } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue, FieldPath, Timestamp } from 'firebase-admin/firestore';
 import { defineSecret } from 'firebase-functions/params';
 import * as crypto from 'crypto';
 import { resolveGuestLinkTtlHours } from './guestLinkTtl';
 import { guestLinkIndexDocPath, readGuestLinkIndexPath } from './guestLinkIndex.pure';
+import { evaluateGuestLinkIssue } from './guestLinkIssue.pure';
+import { readExpiresAtMillis } from './guestExperience.pure';
 import {
   collectVendorNameHits,
   normalizeVendorSearchCap,
@@ -103,13 +105,31 @@ export const issueGuestLink = onCall(
     }
 
     const ownerUid = req.auth.uid;
-    const expiresAt = Date.now() + ttlHours * 3600 * 1000;
+    const nowMs = Date.now();
+    const expiresAtMs = nowMs + ttlHours * 3600 * 1000;
+    const located = await locateGuestForLink(ownerUid, eventId, guestId);
+    const decision = evaluateGuestLinkIssue({
+      ownerUid,
+      eventId,
+      guestId,
+      eventExists: located.eventExists,
+      guestDocId: located.guestDocId,
+      ambiguousGuest: located.ambiguousGuest,
+      expiresAtMs,
+      nowMs,
+    });
+    if (!decision.ok) {
+      throw new HttpsError(decision.code, decision.message);
+    }
+
     const secret = HMAC_KEY.value();
-    const token = signGuestLink(secret, ownerUid, eventId, guestId, expiresAt);
+    const token = signGuestLink(secret, ownerUid, eventId, guestId, decision.expiresAtMs);
 
     // Persist as a doc keyed by a random ID (NOT auth.uid — the guest
     // hasn't redeemed yet). The client receives the docId + token and
     // embeds them in the QR URL.
+    // expiresAt is a Timestamp so rules (`expiresAt > request.time`)
+    // and validateLinkShape agree with verifyShareToken.
     const linkRef = db
       .collection('artifacts').doc(appId) // any appId
       .collection('users').doc(ownerUid)
@@ -121,7 +141,8 @@ export const issueGuestLink = onCall(
       ownerUid,
       eventId,
       guestId,
-      expiresAt,
+      guestDocId: decision.guestDocId,
+      expiresAt: Timestamp.fromMillis(decision.expiresAtMs),
       token,
       redeemedByUid: null,
       redeemedAt: null,
@@ -137,9 +158,41 @@ export const issueGuestLink = onCall(
     });
     await batch.commit();
 
-    return { linkId: linkRef.id, token, expiresAt };
+    return { linkId: linkRef.id, token, expiresAt: decision.expiresAtMs };
   },
 );
+
+/**
+ * The guest must already exist on the caller's event. Matches
+ * verifyShareToken: prefer the guestId field, then the doc id.
+ */
+async function locateGuestForLink(
+  ownerUid: string,
+  eventId: string,
+  guestId: string,
+): Promise<{ eventExists: boolean; guestDocId: string | null; ambiguousGuest: boolean }> {
+  const eventRef = db
+    .collection('artifacts').doc(appId)
+    .collection('users').doc(ownerUid)
+    .collection('events').doc(eventId);
+  const eventSnap = await eventRef.get();
+  if (!eventSnap.exists) {
+    return { eventExists: false, guestDocId: null, ambiguousGuest: false };
+  }
+  const guests = eventRef.collection('guests');
+  const byField = await guests.where('guestId', '==', guestId).limit(2).get();
+  if (byField.size > 1) {
+    return { eventExists: true, guestDocId: null, ambiguousGuest: true };
+  }
+  if (byField.size === 1) {
+    return { eventExists: true, guestDocId: byField.docs[0].id, ambiguousGuest: false };
+  }
+  const byId = await guests.doc(guestId).get();
+  if (byId.exists) {
+    return { eventExists: true, guestDocId: byId.id, ambiguousGuest: false };
+  }
+  return { eventExists: true, guestDocId: null, ambiguousGuest: false };
+}
 
 /**
  * redeemGuestLink — guest calls this after scanning the QR.
@@ -174,7 +227,8 @@ export const redeemGuestLink = onCall(
       if (link.revoked) {
         return { error: { code: 'permission-denied' as const, message: 'Link revoked.' } };
       }
-      if (link.expiresAt < Date.now()) {
+      const expiresMs = readExpiresAtMillis(link.expiresAt);
+      if (!Number.isFinite(expiresMs) || expiresMs <= Date.now()) {
         return { error: { code: 'deadline-exceeded' as const, message: 'Link expired.' } };
       }
       if (link.redeemedByUid && link.redeemedByUid !== authUid) {
@@ -186,7 +240,7 @@ export const redeemGuestLink = onCall(
         link.ownerUid,
         link.eventId,
         link.guestId,
-        link.expiresAt,
+        expiresMs,
       )) {
         return { error: { code: 'permission-denied' as const, message: 'Invalid signature.' } };
       }
@@ -194,12 +248,32 @@ export const redeemGuestLink = onCall(
       // Atomic claim. The rules check `auth.uid == doc.id` for guestLinks,
       // so we MUST move the doc into a slot keyed by auth.uid.
       const ownerUid = link.ownerUid as string;
+      let guestDocId = typeof link.guestDocId === 'string' ? link.guestDocId : '';
+      if (!guestDocId && typeof link.guestId === 'string' && typeof link.eventId === 'string') {
+        const guests = db
+          .collection('artifacts').doc(appId)
+          .collection('users').doc(ownerUid)
+          .collection('events').doc(link.eventId)
+          .collection('guests');
+        const byField = await tx.get(guests.where('guestId', '==', link.guestId).limit(1));
+        if (!byField.empty) guestDocId = byField.docs[0].id;
+        else {
+          const byId = await tx.get(guests.doc(link.guestId));
+          if (byId.exists) guestDocId = byId.id;
+        }
+      }
+      if (!guestDocId) {
+        return { error: { code: 'not-found' as const, message: 'Guest not found on this event.' } };
+      }
       const newRef = db
         .collection('artifacts').doc(appId)
         .collection('users').doc(ownerUid)
         .collection('guestLinks').doc(authUid);
       tx.set(newRef, {
         ...link,
+        // Always a Timestamp, including legacy links stored as epoch ms.
+        expiresAt: Timestamp.fromMillis(expiresMs),
+        guestDocId,
         redeemedByUid: authUid,
         redeemedAt: FieldValue.serverTimestamp(),
       });
@@ -747,24 +821,46 @@ export const searchVendorsByName = onCall({ cors: true, region: "us-central1" },
 });
 // ─── Admin Bootstrap ─────────────────────────────────────────────────────
 //
-// First-call: NO admin exists yet. Anyone signed in can call this once
-// to grant themselves admin (bootstrap pattern — there's no way out of
-// the chicken-and-egg problem otherwise).
+// selfPromoteAdmin is NOT open to every signed-in user. It requires:
+//   - a non-anonymous account
+//   - a verified email
+//   - that email on the ADMIN_BOOTSTRAP_EMAILS secret (comma-separated)
+//   - no admin already present
+//   - the one-time Firestore lock at
+//     artifacts/{appId}/adminBootstrap/lock
+// An empty or unset allowlist rejects every caller (fail closed).
+// Set the secret later with:
+//   firebase functions:secrets:set ADMIN_BOOTSTRAP_EMAILS
+// Value: comma-separated verified emails. Do not commit the value.
 //
-// Subsequent calls: require the caller to already be admin. Admin can
-// promote/demote any other user.
+// grantAdmin promotes or demotes someone else. It refuses to remove
+// the last remaining admin, and it refuses anonymous or unverified
+// promotion targets. Callers cannot change their own admin flag.
 //
-// Usage from the browser console while signed in:
+// Usage from the browser console while signed in as an admin:
 //   const { getFunctions, httpsCallable } = await import('firebase/functions');
 //   const fn = httpsCallable(getFunctions(), 'grantAdmin');
 //   const r = await fn({ uid: 'TARGET_UID', admin: true });
 //   console.log(r.data);
-//
-// To find a UID: Firebase Console → Authentication → Users → copy
-// the "User UID" column for the row matching the email.
 
 import { getAuth as getAdminAuth } from 'firebase-admin/auth';
-import { mergeAdminClaim, pageHasAdmin } from './adminClaims';
+import {
+  adminMutationLockHeld,
+  bootstrapDenial,
+  bootstrapLockDecision,
+  countAdminsInPage,
+  demotionLeavesZeroAdmins,
+  grantTargetDenial,
+  mergeAdminClaim,
+  ownAdminChangeMessage,
+  pageHasAdmin,
+  parseBootstrapAllowlist,
+  type BootstrapDenial,
+} from './adminClaims';
+
+const ADMIN_BOOTSTRAP_EMAILS = defineSecret('ADMIN_BOOTSTRAP_EMAILS');
+const ADMIN_BOOTSTRAP_LOCK = `artifacts/${appId}/adminBootstrap/lock`;
+const ADMIN_MUTATION_LOCK = `artifacts/${appId}/adminBootstrap/mutation`;
 
 // Restore 2026-07-02: re-export sendInvitations (defined in invitations.ts)
 export * from './invitations';
@@ -826,7 +922,80 @@ export * from './ratings';
 export * from './vendorAnalytics';
 export * from './cron/archiveJob';
 
-export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (req) => {
+function throwBootstrapDenial(reason: BootstrapDenial): never {
+  switch (reason) {
+    case 'unauthenticated':
+      throw new HttpsError('unauthenticated', 'Sign in first.');
+    case 'anonymous':
+      throw new HttpsError('permission-denied', 'Anonymous accounts cannot become admin.');
+    case 'unverified-email':
+      throw new HttpsError('permission-denied', 'A verified email is required to bootstrap admin.');
+    case 'allowlist-empty':
+      throw new HttpsError(
+        'failed-precondition',
+        'Admin bootstrap is disabled until ADMIN_BOOTSTRAP_EMAILS is set.',
+      );
+    case 'not-allowlisted':
+      throw new HttpsError('permission-denied', 'This account is not allowed to bootstrap admin.');
+    default: {
+      const unexpected: never = reason;
+      throw new HttpsError('permission-denied', `Admin bootstrap refused (${String(unexpected)}).`);
+    }
+  }
+}
+
+async function projectHasAdmin(auth: ReturnType<typeof getAdminAuth>): Promise<boolean> {
+  let pageToken: string | undefined;
+  do {
+    const list = pageToken
+      ? await auth.listUsers(1000, pageToken)
+      : await auth.listUsers(1000);
+    if (pageHasAdmin(list.users)) return true;
+    pageToken = list.pageToken;
+  } while (pageToken);
+  return false;
+}
+
+async function countAdminUsers(auth: ReturnType<typeof getAdminAuth>): Promise<number> {
+  let count = 0;
+  let pageToken: string | undefined;
+  do {
+    const list = pageToken
+      ? await auth.listUsers(1000, pageToken)
+      : await auth.listUsers(1000);
+    count += countAdminsInPage(list.users);
+    pageToken = list.pageToken;
+  } while (pageToken);
+  return count;
+}
+
+/**
+ * Serializes grant/demote so two concurrent demotions cannot both
+ * observe "more than one admin" and remove the last two.
+ */
+async function withAdminMutationLock<T>(holderUid: string, fn: () => Promise<T>): Promise<T> {
+  const lockRef = db.doc(ADMIN_MUTATION_LOCK);
+  const nowMs = Date.now();
+  const acquired = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(lockRef);
+    const existing = snap.exists ? (snap.data() as { heldAtMs?: unknown }) : null;
+    if (adminMutationLockHeld(existing, nowMs)) return false;
+    tx.set(lockRef, { heldAtMs: nowMs, holderUid });
+    return true;
+  });
+  if (!acquired) {
+    throw new HttpsError('aborted', 'Another admin change is in progress. Retry shortly.');
+  }
+  try {
+    return await fn();
+  } finally {
+    await lockRef.delete().catch((err) => {
+      console.error('admin mutation lock release failed', err);
+    });
+  }
+}
+
+export const grantAdmin = onCall({ cors: true, region: "us-central1", timeoutSeconds: 120 }, async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
@@ -834,49 +1003,126 @@ export const grantAdmin = onCall({ cors: true, region: "us-central1" }, async (r
   if (!uid || typeof admin !== 'boolean') {
     throw new HttpsError('invalid-argument', 'uid (string) and admin (bool) required.');
   }
+
+  const callerClaims = (req.auth.token as { admin?: boolean }) || {};
   if (uid === req.auth.uid) {
-    throw new HttpsError('invalid-argument', 'Use setMyAdminSelf to self-promote.');
+    throw new HttpsError('invalid-argument', ownAdminChangeMessage(callerClaims.admin === true));
   }
 
   // Authorization: caller must already be admin.
-  const callerClaims = (req.auth.token as { admin?: boolean }) || {};
   if (!callerClaims.admin) {
     throw new HttpsError('permission-denied', 'Only existing admins can grant admin.');
   }
 
   const auth = getAdminAuth();
-  const target = await auth.getUser(uid);
-  await auth.setCustomUserClaims(uid, mergeAdminClaim(target.customClaims, admin));
-  await auth.revokeRefreshTokens(uid);
-  return { ok: true, uid, admin };
+  return withAdminMutationLock(req.auth.uid, async () => {
+    const target = await auth.getUser(uid);
+    const providerIds = (target.providerData || []).map((provider) => provider.providerId);
+    const targetDenial = grantTargetDenial(
+      {
+        email: target.email,
+        emailVerified: target.emailVerified,
+        providerIds,
+      },
+      admin,
+    );
+    if (targetDenial === 'anonymous') {
+      throw new HttpsError('permission-denied', 'Anonymous accounts cannot become admin.');
+    }
+    if (targetDenial === 'unverified-email') {
+      throw new HttpsError('permission-denied', 'Admin grants require a verified email.');
+    }
+    const targetIsAdmin = target.customClaims?.admin === true;
+    if (demotionLeavesZeroAdmins({
+      adminCount: admin === false && targetIsAdmin ? await countAdminUsers(auth) : 2,
+      targetIsAdmin,
+      settingAdmin: admin,
+    })) {
+      throw new HttpsError('failed-precondition', 'Cannot remove the last remaining admin.');
+    }
+    await auth.setCustomUserClaims(uid, mergeAdminClaim(target.customClaims, admin));
+    await auth.revokeRefreshTokens(uid);
+    return { ok: true, uid, admin };
+  });
 });
 
-// selfPromoteAdmin — bootstrap call when NO admin exists yet.
-// Hard-gated: only works if there are currently zero admins in the
-// project. Once any admin exists, this function refuses (use grantAdmin).
-export const selfPromoteAdmin = onCall({ cors: true, region: "us-central1", timeoutSeconds: 300 }, async (req) => {
+// selfPromoteAdmin — one-time bootstrap when NO admin exists yet.
+// Fail closed unless ADMIN_BOOTSTRAP_EMAILS lists the caller's
+// verified email. Concurrent calls share one Firestore lock.
+export const selfPromoteAdmin = onCall(
+  { cors: true, region: "us-central1", timeoutSeconds: 300, secrets: [ADMIN_BOOTSTRAP_EMAILS] },
+  async (req) => {
   if (!req.auth) {
     throw new HttpsError('unauthenticated', 'Sign in first.');
   }
 
-  const auth = getAdminAuth();
-  // Page through every Auth user. listUsers returns at most 1000,
-  // and anonymous guest sessions make that page easy to fill.
-  let pageToken: string | undefined;
-  do {
-    const list = pageToken
-      ? await auth.listUsers(1000, pageToken)
-      : await auth.listUsers(1000);
-    if (pageHasAdmin(list.users)) {
-      throw new HttpsError('already-exists', 'An admin already exists. Ask them to grant you admin via grantAdmin.');
-    }
-    pageToken = list.pageToken;
-  } while (pageToken);
+  const token = req.auth.token as {
+    email?: string;
+    email_verified?: boolean;
+    firebase?: { sign_in_provider?: string };
+  };
+  let allowlistRaw = '';
+  try {
+    allowlistRaw = ADMIN_BOOTSTRAP_EMAILS.value() || '';
+  } catch {
+    allowlistRaw = '';
+  }
+  const denial = bootstrapDenial(
+    {
+      uid: req.auth.uid,
+      email: token.email,
+      emailVerified: token.email_verified === true,
+      signInProvider: token.firebase?.sign_in_provider || null,
+    },
+    parseBootstrapAllowlist(allowlistRaw),
+  );
+  if (denial) throwBootstrapDenial(denial);
 
-  const caller = await auth.getUser(req.auth.uid);
-  await auth.setCustomUserClaims(req.auth.uid, mergeAdminClaim(caller.customClaims, true));
-  await auth.revokeRefreshTokens(req.auth.uid);
-  return { ok: true, uid: req.auth.uid, bootstrapped: true };
+  const auth = getAdminAuth();
+  if (await projectHasAdmin(auth)) {
+    throw new HttpsError('already-exists', 'An admin already exists. Ask them to grant you admin via grantAdmin.');
+  }
+
+  const lockRef = db.doc(ADMIN_BOOTSTRAP_LOCK);
+  const callerUid = req.auth.uid;
+  const callerEmail = (token.email || '').trim().toLowerCase();
+  const nowMs = Date.now();
+  const lockOutcome = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(lockRef);
+    const existing = snap.exists
+      ? (snap.data() as { uid?: unknown; status?: unknown; heldAtMs?: unknown })
+      : null;
+    const decision = bootstrapLockDecision(existing, callerUid, nowMs);
+    if (decision === 'taken') return 'taken' as const;
+    if (decision === 'claim') {
+      tx.set(lockRef, {
+        uid: callerUid,
+        email: callerEmail,
+        status: 'pending',
+        heldAtMs: nowMs,
+      });
+    }
+    return decision;
+  });
+  if (lockOutcome === 'taken') {
+    throw new HttpsError('already-exists', 'Admin bootstrap is already claimed. Ask an admin to use grantAdmin.');
+  }
+
+  if (await projectHasAdmin(auth)) {
+    throw new HttpsError('already-exists', 'An admin already exists. Ask them to grant you admin via grantAdmin.');
+  }
+
+  const caller = await auth.getUser(callerUid);
+  await auth.setCustomUserClaims(callerUid, mergeAdminClaim(caller.customClaims, true));
+  await auth.revokeRefreshTokens(callerUid);
+  await lockRef.set({
+    uid: callerUid,
+    email: callerEmail,
+    status: 'complete',
+    heldAtMs: nowMs,
+    completedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return { ok: true, uid: callerUid, bootstrapped: true };
 });
 
 // admin_listUsers — admin-only list of all Firebase Auth users with their
@@ -1230,6 +1476,7 @@ export {
   submitPaymentReceipt,
   adminVerifyPayment,
   grantUnlock,
+  revokeUnlock,
   UNLOCK_PRICING,
   UNLOCK_TYPES,
 } from './unlocks';

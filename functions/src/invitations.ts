@@ -27,7 +27,7 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { shareTokenReuse } from './shareTokenPure';
 // 2026-08-14 — mergeOverride is the pure-logic helper for invitation
 // metadata overrides. Lives in its own file so test code can import
@@ -742,10 +742,15 @@ export const verifyShareToken = onCall(
       }
       // Idempotent — same (eventId, guestId) pair means same invite.
       if (data.eventId === eventId && data.guestId === guestId) {
-        // If guestDocId wasn't set on the previous redeem (older callers),
-        // patch it now so P2's callables can rely on it.
-        if (!data.guestDocId) {
-          await linkRef.set({ guestDocId }, { merge: true });
+        // Patch older rows: missing guestDocId, or expiresAt stored as
+        // epoch ms (rules compare that int to request.time and deny).
+        const patch: Record<string, unknown> = {};
+        if (!data.guestDocId) patch.guestDocId = guestDocId;
+        if (typeof data.expiresAt === 'number' && Number.isFinite(data.expiresAt)) {
+          patch.expiresAt = Timestamp.fromMillis(data.expiresAt);
+        }
+        if (Object.keys(patch).length > 0) {
+          await linkRef.set(patch, { merge: true });
         }
         return { ok: true, ownerUid, eventId, guestId };
       }
@@ -757,9 +762,12 @@ export const verifyShareToken = onCall(
       eventId,
       guestId,
       guestDocId,
-      expiresAt: new Date(expiresAt),
+      // Timestamp, same type issueGuestLink writes, so rules can
+      // compare expiresAt > request.time and callables can read toMillis.
+      expiresAt: Timestamp.fromMillis(expiresAt),
       redeemedByUid: authUid,
       redeemedAt: FieldValue.serverTimestamp(),
+      revoked: false,
     });
     return { ok: true, ownerUid, eventId, guestId };
   },

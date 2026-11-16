@@ -58,6 +58,7 @@ import {
   getVendorCategoryLabel,
 } from './lib/config';
 import { parseGuestParams } from './lib/guestMode';
+import { GUEST_LINK_ERROR_MESSAGE, guestPortalLinkProblem } from './lib/guestPortalLink';
 import { uploadPhotoToNas } from './lib/uploadToNas';
 import { recordTaskStatusUpdate } from './lib/taskUpdates';
 import { tableLabelForGuest } from './lib/seatingPure';
@@ -1136,6 +1137,11 @@ export default function App() {
   // guestLinks/{auth.uid} so subsequent Firestore reads pass
   // hasValidGuestLink() in firestore.rules.
   const [redeemStatus, setRedeemStatus] = useState('pending');
+  const [redeemAttempt, setRedeemAttempt] = useState(0);
+  const retryGuestLink = useCallback(() => {
+    setRedeemStatus('pending');
+    setRedeemAttempt((n) => n + 1);
+  }, []);
   useEffect(() => {
     if (!guest.isGuestMode) {
       setRedeemStatus('ok');
@@ -1168,11 +1174,14 @@ export default function App() {
         if (!cancelled) setRedeemStatus('ok');
       } catch (e) {
         console.error('[redeem] failed:', e);
-        if (!cancelled) setRedeemStatus('error');
+        if (!cancelled) {
+          setRedeemStatus('error');
+          setActiveGuestPortal(null);
+        }
       }
     })();
     return () => { cancelled = true; };
-  }, [guest.isGuestMode, guest.qToken]);
+  }, [guest.isGuestMode, guest.qToken, redeemAttempt]);
 
   // Wait for redemption before doing the Firestore reads — otherwise the
   // page shows "loading" forever because rules hasValidGuestLink fails.
@@ -4375,6 +4384,20 @@ export default function App() {
       {(guest.isGuestMode || userRole === 'guest_portal') ? (
         <PersonalGuestPortal
           guest={activeGuestPortal}
+          linkError={
+            guestPortalLinkProblem({
+              isGuestMode: guest.isGuestMode,
+              redeemStatus,
+              bootstrapFailed: Boolean(guestBootstrapError),
+              hasGuest: Boolean(activeGuestPortal),
+            })
+              ? GUEST_LINK_ERROR_MESSAGE
+              : null
+          }
+          onRetryLink={() => {
+            if (redeemStatus === 'error') retryGuestLink();
+            else refetchGuestBootstrap();
+          }}
           // 2026-08-23 — Manus P2b: in guest mode, read display data
           // from the projection. With P2 still rolling out,
           // guestExperience may be null on legacy events — fall

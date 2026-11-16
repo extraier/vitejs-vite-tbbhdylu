@@ -378,13 +378,22 @@ match /{path=**}/events/{eventId} {
     // a different anonymous session that happened to share request.auth.uid
     // (theoretically impossible but the cost of an extra check is one
     // get(), and the failure mode would be silent cross-tenant access).
+    // New links store a Timestamp. Older issueGuestLink docs stored
+    // epoch milliseconds; comparing that int to request.time type-errors
+    // and denies the read. Accept either shape.
+    function guestLinkUnexpired(ownerUid) {
+      let exp = guestLink(ownerUid).data.expiresAt;
+      return (exp is timestamp && exp > request.time)
+        || (exp is int && exp > request.time.toMillis());
+    }
+
     function hasValidGuestLink(ownerUid, eventId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/artifacts/savetheday-production/users/$(ownerUid)/guestLinks/$(request.auth.uid)) &&
         guestLink(ownerUid).data.ownerUid == ownerUid &&
         guestLink(ownerUid).data.eventId == eventId &&
         guestLink(ownerUid).data.redeemedByUid == request.auth.uid &&
-        guestLink(ownerUid).data.expiresAt > request.time &&
+        guestLinkUnexpired(ownerUid) &&
         guestLink(ownerUid).data.get('revoked', false) != true;
     }
 
@@ -502,6 +511,13 @@ match /{path=**}/events/{eventId} {
 
       // Direct address for guestLinks/{linkId}. Admin SDK only.
       match /guestLinkIndex/{linkId} {
+        allow read, write: if false;
+      }
+
+      // One-time admin bootstrap lock and the short mutation lock
+      // used by grantAdmin. Admin SDK only — the emails and uids
+      // here are not client-readable.
+      match /adminBootstrap/{docId} {
         allow read, write: if false;
       }
 
@@ -2494,6 +2510,12 @@ match /{path=**}/events/{eventId} {
     match /inbound_messages/{messageId} {
       allow read: if isAdmin();
       allow create, update, delete: if false;
+    }
+
+    // Auto-reply cooldown records (hashed address + last send).
+    // Written only by inboundEmail. Not readable by clients.
+    match /inbound_autoreplies/{id} {
+      allow read, write: if false;
     }
   }
 }

@@ -407,6 +407,22 @@ export interface GuestLinkDoc {
   guestDocId?: unknown;
   redeemedByUid?: unknown;
   expiresAt?: unknown;
+  revoked?: unknown;
+}
+
+/**
+ * Epoch milliseconds for a guest-link expiry. Accepts a Firestore
+ * Timestamp (toMillis), a Date, or a finite number. Anything else
+ * is NaN so callers fail closed.
+ */
+export function readExpiresAtMillis(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+  if (isTimestamp(value)) return value.toMillis();
+  return NaN;
 }
 
 /**
@@ -453,9 +469,10 @@ export function validateLinkShape(
   if (typeof link.guestId !== 'string' || !link.guestId) {
     throw new LinkInvalidError('guest link is not valid for this event');
   }
-  const expiresAt = link.expiresAt;
-  const expiresMs =
-    isTimestamp(expiresAt) ? expiresAt.toMillis() : NaN;
+  if (link.revoked === true) {
+    throw new LinkInvalidError('guest link is not valid for this event');
+  }
+  const expiresMs = readExpiresAtMillis(link.expiresAt);
   if (!Number.isFinite(expiresMs) || expiresMs <= nowMs) {
     throw new LinkInvalidError('guest link is not valid for this event');
   }
