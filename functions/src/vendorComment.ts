@@ -16,11 +16,12 @@
 //   1. Vendor's browser calls vendorPostComment / vendorPostCommentHelper
 //      via the /api/firebase-proxy Vercel proxy (or directly via
 //      httpsCallable if you can deal with the preflight issue).
-//   2. CF validates caller is signed in + has vendor/helper claim.
+//   2. CF validates the caller is the assigned vendor (vendor claim)
+//      or an active helper assigned on this item.
 //   3. CF reads the parent rundown/resource doc server-side using
 //      Admin SDK (no rules layer involved — admin reads always succeed).
-//   4. CF checks the caller's UID matches `assignedVendorUid` or
-//      `assignedHelperUid` on the parent doc.
+//   4. CF checks the caller is the assigned vendor, or an active
+//      helper named by assignedHelperUid or assignedHelpers[].uid.
 //   5. CF constructs the comment doc with all required fields
 //      stamped correctly (parentAssignedVendorUid, parentAssignedHelperUid,
 //      authorRole, etc.) and writes via Admin SDK (rules-engine bypass).
@@ -42,6 +43,7 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore } from 'firebase-admin/firestore';
+import { resolveCommentAuthor } from './helperCommentAuth';
 
 const db = getFirestore();
 const APP_ID = 'savetheday-production';
@@ -80,22 +82,12 @@ export const vendorPostComment = onCall(
     }
     const callerUid = req.auth.uid;
 
-    // 2026-08-12 — accept either a vendor claim or a helper claim.
-    // Either can legitimately post a comment under the parent's
-    // assignment. The pair (vendorPostComment, vendorPostCommentHelper)
-    // is for route-dispatch symmetry; the actual auth logic is
-    // identical so we share the same body via vendorPostComment.
+    // Vendors still need the vendor claim. Helpers do not: no code
+    // path sets a helper claim, so requiring one rejected every
+    // helper, including people who accepted before a claim could
+    // exist. Assignment is checked after the parent doc is loaded.
     const callerClaims = (req.auth.token as Record<string, unknown>) || {};
     const isVendor = callerClaims.vendor === true;
-    const isHelper =
-      typeof callerClaims.helper === 'string' ||
-      callerClaims.helper === true;
-    if (!isVendor && !isHelper) {
-      throw new HttpsError(
-        'permission-denied',
-        'Only assigned vendors or helpers can call this function.',
-      );
-    }
 
     const {
       ownerUid,
@@ -186,14 +178,30 @@ export const vendorPostComment = onCall(
         ? parentData.assignedHelperUid
         : null;
 
-    const isAssigned =
-      (isVendor && assignedVendorUid === callerUid) ||
-      (isHelper && assignedHelperUid === callerUid);
-    if (!isAssigned) {
-      throw new HttpsError(
-        'permission-denied',
-        'Not assigned to this item.',
-      );
+    // Read the helper doc only when the vendor assignment did not
+    // already authorize the caller. Admin SDK, so a missing doc is
+    // "not a helper" rather than a rules error.
+    let helperStatus: string | null = null;
+    const vendorMatch = isVendor && assignedVendorUid === callerUid;
+    if (!vendorMatch) {
+      const helperSnap = await db
+        .collection('artifacts').doc(APP_ID)
+        .collection('users').doc(ownerUidStr)
+        .collection('helpers').doc(callerUid)
+        .get();
+      const status = helperSnap.data()?.status;
+      helperStatus = typeof status === 'string' ? status : null;
+    }
+    const decision = resolveCommentAuthor({
+      callerUid,
+      vendorClaim: isVendor,
+      assignedVendorUid,
+      assignedHelperUid,
+      assignedHelpers: parentData.assignedHelpers,
+      helperStatus,
+    });
+    if (!decision.ok) {
+      throw new HttpsError('permission-denied', 'Not assigned to this item.');
     }
 
     // Build the comment doc with the same field shape the live
@@ -209,12 +217,12 @@ export const vendorPostComment = onCall(
       authorName:
         (typeof req.auth.token.name === 'string' && req.auth.token.name) ||
         (typeof req.auth.token.email === 'string' && req.auth.token.email) ||
-        (isVendor ? '商戶' : '助手'),
-      authorRole: isVendor ? 'vendor' : 'helper',
+        (decision.role === 'vendor' ? '商戶' : '助手'),
+      authorRole: decision.role,
       text: cleanText,
       createdAt: now,
       parentAssignedVendorUid: assignedVendorUid,
-      parentAssignedHelperUid: assignedHelperUid,
+      parentAssignedHelperUid: decision.role === 'helper' ? callerUid : assignedHelperUid,
       // 2026-08-12 — provenanced comments written via this CF
       // so we can grep for them later if a rules-engine quirk
       // resurfaces. Pure observability; the rules layer ignores

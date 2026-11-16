@@ -8,6 +8,7 @@ import {
   defaultHelperPerms,
   HELPER_PERMS,
   sanitizeGuestForHelper,
+  shouldEmailHelperInvite,
 } from './helpers';
 
 describe('defaultHelperPerms', () => {
@@ -38,6 +39,30 @@ describe('HELPER_PERMS', () => {
       'canEditGuests',
       'canViewGiftAmount',
     ]);
+  });
+});
+
+describe('shouldEmailHelperInvite', () => {
+  it('emails an already-registered invitee', () => {
+    expect(shouldEmailHelperInvite({
+      ok: true,
+      pendingEmailRegistration: false,
+      helperUid: 'helper-uid',
+    })).toBe(true);
+  });
+
+  it('emails someone who still needs to register', () => {
+    expect(shouldEmailHelperInvite({
+      ok: true,
+      pendingEmailRegistration: true,
+      helperUid: null,
+    })).toBe(true);
+  });
+
+  it('does not email a failed invite', () => {
+    expect(shouldEmailHelperInvite({ ok: false })).toBe(false);
+    expect(shouldEmailHelperInvite(null)).toBe(false);
+    expect(shouldEmailHelperInvite(undefined)).toBe(false);
   });
 });
 

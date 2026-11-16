@@ -34,6 +34,7 @@ import {
   Clock,
   Package,
   Armchair,
+  MessageCircle,
 } from 'lucide-react';
 import { collection, doc, query, updateDoc, where } from 'firebase/firestore';
 import { db, appId } from '../lib/firebase';
@@ -45,6 +46,7 @@ import { PhotoDrop } from './PhotoDrop';
 import { recordTaskStatusUpdate } from '../lib/taskUpdates';
 import { guestListCollectionName, mergeGuestGifts } from '../lib/guestGifts';
 import { requestGuestGiftSplit } from '../lib/splitGuestGifts';
+import { ItemComments } from '../components/ItemComments';
 
 const TASK_STATUSES = [
   { id: 'todo', label: '待辦', color: 'slate', Icon: Hourglass },
@@ -68,6 +70,12 @@ export function HelperDashboard({
   focusedParentId = null,
   focusedParentKind = null,
   onFocusedParentHandled = null,
+  // Invites that are still status 'invited' while this helper is
+  // already active on another wedding. The waiting screen is not
+  // mounted in that case, so accept has to stay reachable here.
+  pendingInvites = [],
+  onAcceptInvites = null,
+  acceptingInvites = false,
 }) {
   const ownerUid = helperAssignment?.ownerUid;
   const perms = helperAssignment?.perms || {};
@@ -289,6 +297,26 @@ export function HelperDashboard({
 
   return (
     <div className="max-w-5xl mx-auto py-6 px-4">
+      {pendingInvites.length > 0 && onAcceptInvites && (
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex-1">
+            <p className="text-sm font-bold text-amber-900">
+              仲有 {pendingInvites.length} 個邀請未接受
+            </p>
+            <p className="text-xs text-amber-800 mt-0.5">
+              {pendingInvites.map((a) => a.eventName || a.displayName || a.email || '婚禮').join('、')}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onAcceptInvites}
+            disabled={acceptingInvites}
+            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-sm font-bold"
+          >
+            {acceptingInvites ? '處理中...' : '接受邀請'}
+          </button>
+        </div>
+      )}
       <div className="rounded-2xl bg-white border border-slate-200 shadow-sm overflow-hidden">
         <div className="px-5 py-4 bg-gradient-to-br from-amber-50 via-white to-rose-50 border-b border-slate-200">
           <div className="flex items-center gap-3 mb-2">
@@ -355,6 +383,8 @@ export function HelperDashboard({
               rundown={assignedRundown}
               resources={assignedResources}
               eventId={helperAssignment?.eventId}
+              ownerUid={ownerUid}
+              currentUser={currentUser}
               focusedParentId={focusedParentId}
               focusedParentKind={focusedParentKind}
               onFocusedParentHandled={onFocusedParentHandled}
@@ -401,7 +431,75 @@ export function HelperDashboard({
 // Architecture Audit (P0-C). Big Day rundown + resources tab.
 // Renders items where this helper is in `assignedHelpers`.
 // Sorted by startTime for rundown, by category for resources.
-function HelperBigDayTab({ rundown = [], resources = [], eventId, focusedParentId = null, focusedParentKind = null, onFocusedParentHandled = null }) {
+function HelperAssignedItem({
+  item,
+  kind,
+  ownerUid,
+  eventId,
+  currentUser,
+  children,
+}) {
+  const [open, setOpen] = useState(false);
+  const path = ownerUid && eventId && item?.id
+    ? collection(
+        db,
+        'artifacts',
+        appId,
+        'users',
+        ownerUid,
+        'events',
+        eventId,
+        kind,
+        item.id,
+        'comments',
+      )
+    : null;
+  return (
+    <li
+      data-row-id={item.id}
+      data-row-kind={kind}
+      className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+    >
+      {children}
+      {path && currentUser?.uid && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 hover:text-indigo-900"
+          >
+            <MessageCircle className="w-3.5 h-3.5" />
+            {open ? '收埋留言' : '留言'}
+          </button>
+          {open && (
+            <div className="mt-2">
+              <ItemComments
+                path={path}
+                currentUser={currentUser}
+                currentRole="helper"
+                label="留言"
+                emptyHint="未有留言，可以留低第一句。"
+                parentAssignedVendorUid={item.assignedVendorUid || null}
+                parentAssignedHelperUid={item.assignedHelperUid || currentUser.uid}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function HelperBigDayTab({
+  rundown = [],
+  resources = [],
+  eventId,
+  ownerUid,
+  currentUser,
+  focusedParentId = null,
+  focusedParentKind = null,
+  onFocusedParentHandled = null,
+}) {
   // 2026-08-17 — Manus A8: helper-side deep-link focus. When the
   // couple clicks a Big Day comment bell alert addressed to this
   // helper, App.jsx passes focusedParentId + focusedParentKind
@@ -482,11 +580,13 @@ function HelperBigDayTab({ rundown = [], resources = [], eventId, focusedParentI
           </h3>
           <ul className="space-y-2">
             {sortedRundown.map((e) => (
-              <li
+              <HelperAssignedItem
                 key={e.id}
-                data-row-id={e.id}
-                data-row-kind="rundown"
-                className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+                item={e}
+                kind="rundown"
+                ownerUid={ownerUid}
+                eventId={eventId}
+                currentUser={currentUser}
               >
                 <div className="flex items-baseline justify-between gap-2 mb-1">
                   <span className="text-sm font-semibold text-slate-800">
@@ -505,7 +605,7 @@ function HelperBigDayTab({ rundown = [], resources = [], eventId, focusedParentI
                     {e.notes}
                   </p>
                 )}
-              </li>
+              </HelperAssignedItem>
             ))}
           </ul>
         </section>
@@ -523,11 +623,13 @@ function HelperBigDayTab({ rundown = [], resources = [], eventId, focusedParentI
           </h3>
           <ul className="space-y-2">
             {sortedResources.map((r) => (
-              <li
+              <HelperAssignedItem
                 key={r.id}
-                data-row-id={r.id}
-                data-row-kind="resources"
-                className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+                item={r}
+                kind="resources"
+                ownerUid={ownerUid}
+                eventId={eventId}
+                currentUser={currentUser}
               >
                 <div className="flex items-baseline justify-between gap-2 mb-1">
                   <span className="text-sm font-semibold text-slate-800">
@@ -549,7 +651,7 @@ function HelperBigDayTab({ rundown = [], resources = [], eventId, focusedParentI
                     {r.notes}
                   </p>
                 )}
-              </li>
+              </HelperAssignedItem>
             ))}
           </ul>
         </section>

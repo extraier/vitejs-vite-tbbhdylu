@@ -38,6 +38,7 @@ import {
   query,
   where,
   collection,
+  collectionGroup,
   updateDoc,
   setLogLevel,
   Timestamp,
@@ -112,6 +113,16 @@ async function seedHelper(
       { status: 'active', perms },
     );
   });
+}
+
+async function expectPermissionDenied(promise: Promise<unknown>) {
+  try {
+    await promise;
+  } catch (err) {
+    expect((err as { code?: string }).code).toBe('permission-denied');
+    return;
+  }
+  throw new Error('expected permission-denied');
 }
 
 async function asUser(uid: string | null) {
@@ -1099,6 +1110,158 @@ describe.skipIf(skipEmulator)('firestore.rules — helper pendingInvites and cou
       updateDoc(
         doc(db!, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
         { ownerUid: 'victim-2' },
+      ),
+    );
+  });
+
+  it('denies an invitee collectionGroup read of pendingInvites addressed to their email', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      const admin = ctx.firestore();
+      await setDoc(
+        doc(admin, 'artifacts/savetheday-production/users', ownerUid, 'pendingInvites', 'helper@example.com'),
+        pendingInvite(ownerUid),
+      );
+      // Same collection id, different tree. A collection-group query
+      // is allowed only when every pendingInvites path allows it.
+      await setDoc(doc(admin, 'vendors', 'vendor-slug', 'pendingInvites', 'req-1'), {
+        email: 'helper@example.com',
+        status: 'pending',
+        requestedAt: Timestamp.fromMillis(1),
+      });
+    });
+
+    const invitee = env.authenticatedContext('helper-uid', {
+      email: 'helper@example.com',
+    }).firestore();
+
+    await assertFails(
+      getDoc(doc(
+        invitee,
+        'artifacts/savetheday-production/users',
+        ownerUid,
+        'pendingInvites',
+        'helper@example.com',
+      )),
+    );
+    await expectPermissionDenied(
+      getDocs(query(
+        collectionGroup(invitee, 'pendingInvites'),
+        where('email', '==', 'helper@example.com'),
+      )),
+    );
+
+    const owner = await asUser(ownerUid);
+    await assertSucceeds(
+      getDoc(doc(
+        owner!,
+        'artifacts/savetheday-production/users',
+        ownerUid,
+        'pendingInvites',
+        'helper@example.com',
+      )),
+    );
+  });
+
+  it('lets a helper read their own helper doc but not a helpers collectionGroup by field', async () => {
+    const helperUid = 'helper-uid';
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', ownerUid, 'helpers', helperUid),
+        {
+          status: 'active',
+          helperUid,
+          email: 'helper@example.com',
+          perms: { canViewChecklist: true },
+        },
+      );
+    });
+
+    const helper = env.authenticatedContext(helperUid, {
+      email: 'helper@example.com',
+    }).firestore();
+    await assertSucceeds(
+      getDoc(doc(
+        helper,
+        'artifacts/savetheday-production/users',
+        ownerUid,
+        'helpers',
+        helperUid,
+      )),
+    );
+    // The read rule compares auth.uid to the document id. A query on
+    // the helperUid field does not prove that, so the collection
+    // group is denied and cannot be the client's discovery path.
+    await expectPermissionDenied(
+      getDocs(query(
+        collectionGroup(helper, 'helpers'),
+        where('helperUid', '==', helperUid),
+      )),
+    );
+  });
+
+  it('lets an active assigned helper create a task comment', async () => {
+    const helperUid = 'helper-uid';
+    await seedHelper(ownerUid, helperUid, { canViewChecklist: true });
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', ownerUid, 'events', eventId, 'tasks', 'task-1'),
+        { title: '接待', assignedHelperUid: helperUid, eventId },
+      );
+    });
+
+    const helper = await asUser(helperUid);
+    await assertSucceeds(
+      setDoc(
+        doc(
+          helper!,
+          'artifacts/savetheday-production/users',
+          ownerUid,
+          'events',
+          eventId,
+          'tasks',
+          'task-1',
+          'comments',
+          'c-1',
+        ),
+        {
+          authorUid: helperUid,
+          authorRole: 'helper',
+          text: '到場了',
+          createdAt: Date.now(),
+        },
+      ),
+    );
+  });
+
+  it('rejects a task comment from a helper who is not assigned', async () => {
+    const helperUid = 'helper-uid';
+    await seedHelper(ownerUid, helperUid, { canViewChecklist: true });
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'artifacts/savetheday-production/users', ownerUid, 'events', eventId, 'tasks', 'task-1'),
+        { title: '接待', assignedHelperUid: 'someone-else', eventId },
+      );
+    });
+    const helper = await asUser(helperUid);
+    await assertFails(
+      setDoc(
+        doc(
+          helper!,
+          'artifacts/savetheday-production/users',
+          ownerUid,
+          'events',
+          eventId,
+          'tasks',
+          'task-1',
+          'comments',
+          'c-1',
+        ),
+        {
+          authorUid: helperUid,
+          authorRole: 'helper',
+          text: '到場了',
+          createdAt: Date.now(),
+        },
       ),
     );
   });

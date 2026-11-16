@@ -18,6 +18,7 @@ import {
   defaultHelperPerms,
   HELPER_PERMS,
   HELPER_PERM_LABELS,
+  shouldEmailHelperInvite,
 } from '../../lib/helpers';
 
 export function HelperManager({ ownerUid, currentEvent, onClose }) {
@@ -164,7 +165,11 @@ export function HelperManager({ ownerUid, currentEvent, onClose }) {
       // The invitee opens the link on their own device, so the owner's
       // localStorage cannot supply the email. The continue URL carries
       // it, and the login screen asks if an older link omitted it.
-      if (inviteRes?.pendingEmailRegistration) {
+      // Already-registered invitees have pendingEmailRegistration false.
+      // They still need the email; otherwise the invite only exists in
+      // Firestore and they never hear about it. Active helpers are not
+      // demoted by the callable, but a re-invite still notifies them.
+      if (shouldEmailHelperInvite(inviteRes)) {
         // 2026-07-18 — Try the rich SMTP email FIRST. The new
         // sendHelperInviteEmail cloud function renders a branded
         // Traditional-Chinese HTML template (rose gradient hero,
