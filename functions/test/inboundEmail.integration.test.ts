@@ -2,6 +2,7 @@ import { createHash, createHmac } from 'crypto';
 import { Readable } from 'stream';
 import { describe, expect, it } from 'vitest';
 import { handleInboundEmail, type InboundRequest, type InboundResponse, type InboundRuntime } from '../src/inboundEmail';
+import { AUTO_REPLY_GLOBAL_WINDOW_MS, autoReplyRateDecision, INBOUND_MAX_FILES } from '../src/inboundEmail.pure';
 
 interface Store {
   messages: Array<Record<string, unknown>>;
@@ -13,7 +14,13 @@ function freshStore(): Store {
   return { messages: [], threads: {}, files: [] };
 }
 
-function runtimeFrom(store: Store, sendMessage: InboundRuntime['sendMessage']): InboundRuntime {
+function runtimeFrom(
+  store: Store,
+  sendMessage: InboundRuntime['sendMessage'],
+  extra: Partial<InboundRuntime> = {},
+): InboundRuntime {
+  const sentAt = new Map<string, number>();
+  let globalSends: number[] = [];
   return {
     devMode: true,
     signingKey: 'testkey',
@@ -65,6 +72,20 @@ function runtimeFrom(store: Store, sendMessage: InboundRuntime['sendMessage']): 
       },
     },
     sendMessage,
+    claimAutoReply: async (toEmail, nowMs) => {
+      const last = sentAt.has(toEmail) ? sentAt.get(toEmail)! : null;
+      const recent = globalSends.filter((t) => nowMs - t < AUTO_REPLY_GLOBAL_WINDOW_MS);
+      const decision = autoReplyRateDecision({
+        lastSentAtMs: last,
+        recentGlobalSends: recent.length,
+        nowMs,
+      });
+      if (!decision.allow) return false;
+      sentAt.set(toEmail, nowMs);
+      globalSends = [...recent, nowMs];
+      return true;
+    },
+    ...extra,
   };
 }
 
@@ -133,6 +154,7 @@ describe('inboundEmail handler', () => {
     const signature = createHmac('sha256', signingKey).update(ts + token).digest('hex');
     const { body, headers } = multipartBody({
       from: 'couple@example.com',
+      sender: 'couple@example.com',
       to: 'Savetheday Support <support@savetheday.io>',
       recipient: 'support@savetheday.io',
       subject: 'Help with RSVP',
@@ -205,6 +227,7 @@ describe('inboundEmail handler', () => {
     const store = freshStore();
     const { body, headers } = multipartBody({
       from: 'couple@example.com',
+      sender: 'couple@example.com',
       to: 'Savetheday Support <support@savetheday.io>',
       recipient: 'support@savetheday.io',
       subject: 'Already consumed body',
@@ -222,5 +245,164 @@ describe('inboundEmail handler', () => {
     expect(res.statusCode).toBe(200);
     expect(store.messages).toHaveLength(1);
     expect(store.messages[0].bodyPlain).toBe('This should still be parsed.');
+  });
+
+  it('returns 401 for a non-hex signature instead of throwing', async () => {
+    const store = freshStore();
+    const now = Date.now();
+    const { body, headers } = multipartBody({
+      from: 'couple@example.com',
+      sender: 'couple@example.com',
+      recipient: 'support@savetheday.io',
+      subject: 'bad sig',
+      'body-plain': 'nope',
+      timestamp: String(Math.floor(now / 1000)),
+      token: 'tok123',
+      signature: 'z'.repeat(64),
+    });
+    const res = makeRes();
+    await handleInboundEmail(
+      makeReq(body, headers),
+      res,
+      runtimeFrom(store, async () => ({}), { devMode: false, now: () => now }),
+    );
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toBe('invalid signature');
+    expect(store.messages).toHaveLength(0);
+  });
+
+  it('returns 401 for a stale but otherwise valid signature', async () => {
+    const store = freshStore();
+    const signingKey = 'testkey';
+    const timestamp = '1000000000';
+    const token = 'tok123';
+    const signature = createHmac('sha256', signingKey).update(timestamp + token).digest('hex');
+    const { body, headers } = multipartBody({
+      from: 'couple@example.com',
+      sender: 'couple@example.com',
+      recipient: 'support@savetheday.io',
+      subject: 'replay',
+      'body-plain': 'old',
+      timestamp,
+      token,
+      signature,
+    });
+    const res = makeRes();
+    await handleInboundEmail(
+      makeReq(body, headers),
+      res,
+      runtimeFrom(store, async () => ({}), { devMode: false, signingKey, now: () => Date.now() }),
+    );
+    expect(res.statusCode).toBe(401);
+    expect(store.messages).toHaveLength(0);
+  });
+
+  it('accepts a fresh signature when dev mode is off', async () => {
+    const store = freshStore();
+    const replies: unknown[] = [];
+    const now = Date.now();
+    const signingKey = 'testkey';
+    const timestamp = String(Math.floor(now / 1000));
+    const token = 'tok123';
+    const signature = createHmac('sha256', signingKey).update(timestamp + token).digest('hex');
+    const { body, headers } = multipartBody({
+      from: 'couple@example.com',
+      sender: 'couple@example.com',
+      recipient: 'support@savetheday.io',
+      subject: 'fresh',
+      'body-plain': 'hello',
+      'Message-ID': '<fresh@mail.example.com>',
+      timestamp,
+      token,
+      signature,
+    });
+    const res = makeRes();
+    await handleInboundEmail(
+      makeReq(body, headers),
+      res,
+      runtimeFrom(store, async () => {
+        replies.push(true);
+        return {};
+      }, { devMode: false, signingKey, now: () => now }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(replies).toHaveLength(1);
+  });
+
+  it('does not auto-reply when From and the envelope sender disagree', async () => {
+    const store = freshStore();
+    const replies: unknown[] = [];
+    const { body, headers } = multipartBody({
+      from: 'victim@example.com',
+      sender: 'attacker@evil.test',
+      recipient: 'support@savetheday.io',
+      subject: 'spoofed',
+      'body-plain': 'please reply to the victim',
+      'Message-ID': '<spoof@mail.example.com>',
+    });
+    const res = makeRes();
+    await handleInboundEmail(
+      makeReq(body, headers),
+      res,
+      runtimeFrom(store, async () => {
+        replies.push(true);
+        return {};
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(store.messages).toHaveLength(1);
+    expect(replies).toHaveLength(0);
+  });
+
+  it('rate-limits a second first-contact auto-reply to the same address', async () => {
+    const store = freshStore();
+    const replies: unknown[] = [];
+    const runtime = runtimeFrom(store, async () => {
+      replies.push(true);
+      return {};
+    });
+    const send = async (messageId: string) => {
+      const { body, headers } = multipartBody({
+        from: 'couple@example.com',
+        sender: 'couple@example.com',
+        recipient: 'support@savetheday.io',
+        subject: 'again',
+        'body-plain': messageId,
+        'Message-ID': messageId,
+      });
+      const res = makeRes();
+      await handleInboundEmail(makeReq(body, headers), res, runtime);
+      expect(res.statusCode).toBe(200);
+    };
+    await send('<one@mail.example.com>');
+    await send('<two@mail.example.com>');
+    expect(store.messages).toHaveLength(2);
+    expect(replies).toHaveLength(1);
+  });
+
+  it('returns 413 when the attachment count exceeds the limit', async () => {
+    const store = freshStore();
+    const files = Array.from({ length: INBOUND_MAX_FILES + 1 }, (_, i) => ({
+      fieldName: 'attachment',
+      filename: `f${i}.txt`,
+      mimeType: 'text/plain',
+      content: Buffer.from('x'),
+    }));
+    const { body, headers } = multipartBody({
+      from: 'couple@example.com',
+      sender: 'couple@example.com',
+      recipient: 'support@savetheday.io',
+      subject: 'too many',
+      'body-plain': 'files',
+    }, files);
+    const res = makeRes();
+    await handleInboundEmail(
+      makeReq(body, headers),
+      res,
+      runtimeFrom(store, async () => ({})),
+    );
+    expect(res.statusCode).toBe(413);
+    expect(store.messages).toHaveLength(0);
+    expect(store.files).toHaveLength(0);
   });
 });

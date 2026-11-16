@@ -34,6 +34,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { anyActivePremiumUnlock, mapStoredUnlock } from './entitlementResolver';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -175,6 +176,66 @@ export async function grantUnlock(
 
   return { unlockId, alreadyGranted: false };
 }
+
+/**
+ * Fields written by revokeUnlock. expiresAt is set to `nowMs` so
+ * computeEntitlement treats the grant as expired even if a reader
+ * ignores the revoked flag. The doc is kept for audit.
+ */
+export function buildUnlockRevocation(nowMs: number, adminUid: string): {
+  revoked: true;
+  revokedBy: string;
+  expiresAt: number;
+} {
+  return {
+    revoked: true,
+    revokedBy: adminUid,
+    expiresAt: nowMs,
+  };
+}
+
+/**
+ * revokeUnlock — admin-only. Stops an unlock from granting
+ * customInvitation / watermarkRemoved / extraStorage /
+ * lifetimeRetention. Idempotent if the doc is already revoked.
+ */
+export const revokeUnlock = onCall(
+  { cors: true, region: 'us-central1' },
+  async (req) => {
+    if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in first.');
+    const callerClaims = (req.auth.token || {}) as { admin?: boolean };
+    if (callerClaims.admin !== true) {
+      throw new HttpsError('permission-denied', 'Admin only.');
+    }
+    const { uid, unlockId } = (req.data || {}) as { uid?: string; unlockId?: string };
+    if (!uid || typeof uid !== 'string' || !unlockId || typeof unlockId !== 'string') {
+      throw new HttpsError('invalid-argument', 'uid and unlockId required.');
+    }
+
+    const ref = unlockRef(uid, unlockId);
+    const snap = await ref.get();
+    if (!snap.exists) throw new HttpsError('not-found', 'Unlock not found.');
+
+    const nowMs = Date.now();
+    await ref.set(
+      {
+        ...buildUnlockRevocation(nowMs, req.auth.uid),
+        revokedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    );
+
+    const remainingSnap = await userRef(uid).collection('unlocks').get();
+    const remaining = remainingSnap.docs.map((doc) =>
+      mapStoredUnlock(doc.data() as Record<string, unknown>),
+    );
+    if (!anyActivePremiumUnlock(remaining, nowMs)) {
+      await userRef(uid).set({ tier: 'free' }, { merge: true });
+    }
+
+    return { ok: true, uid, unlockId, revoked: true };
+  },
+);
 
 // ---- Social Proof Path -------------------------------------------------
 

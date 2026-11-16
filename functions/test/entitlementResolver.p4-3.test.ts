@@ -29,6 +29,8 @@ interface FakeUnlock {
   type: string;
   source?: string;
   eventId?: string | null;
+  expiresAt?: number | { toMillis: () => number } | null;
+  revoked?: boolean;
 }
 
 /**
@@ -52,6 +54,8 @@ function buildFakeFirestore(unlocks: FakeUnlock[]) {
         type: u.type,
         source: u.source,
         eventId: u.eventId === undefined ? null : u.eventId,
+        expiresAt: u.expiresAt,
+        revoked: u.revoked === true,
       }),
     })),
   }));
@@ -163,6 +167,23 @@ describe('resolveServerEntitlementLimit (P4.3 server-side limit)', () => {
     await expect(
       resolveServerEntitlementLimit(fs, OWNER, EVENT),
     ).rejects.toThrow(/unavailable/);
+  });
+
+  it('does not grant extra storage for an expired or revoked storage unlock', async () => {
+    const now = Date.now();
+    const expired = buildFakeFirestore([{
+      type: 'storage-500mb',
+      source: 'paid',
+      expiresAt: now - 1000,
+    }]);
+    const revoked = buildFakeFirestore([{
+      type: 'storage-500mb',
+      source: 'paid',
+      expiresAt: { toMillis: () => now + 60_000 },
+      revoked: true,
+    }]);
+    expect(await resolveServerEntitlementLimit(expired, OWNER, EVENT)).toBe(FREE_TIER_BASE_BYTES);
+    expect(await resolveServerEntitlementLimit(revoked, OWNER, EVENT)).toBe(FREE_TIER_BASE_BYTES);
   });
 
   it('returns the same value as computeEntitlement().storageLimitBytes (consistency)', async () => {

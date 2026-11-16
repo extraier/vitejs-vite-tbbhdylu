@@ -118,7 +118,9 @@ interface UnlockDoc {
   source?: string;
   paid?: number;
   paymentId?: string;
-  expiresAt?: number | null;
+  expiresAt?: number | { toMillis?: () => number } | null;
+  /** Admin revoke. A revoked unlock never grants features. */
+  revoked?: boolean;
   grantedAt?: { toMillis?: () => number } | number | null;
   // 2026-08-20 — Manus P1.1 audit §4.1: per-event unlock
   // binding. Unlocks written before this commit leave
@@ -128,6 +130,54 @@ interface UnlockDoc {
   // carry the eventId they were granted for, and the
   // resolver excludes them from other events.
   eventId?: string | null;
+}
+
+const PREMIUM_UNLOCK_TYPES = new Set([
+  'custom-template',
+  'watermark-removed',
+  'storage-500mb',
+  'permanent-archive',
+]);
+
+/** null means "no expiry". A Timestamp-like value is read via toMillis. */
+export function readUnlockExpiryMs(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (
+    typeof value === 'object' &&
+    typeof (value as { toMillis?: unknown }).toMillis === 'function'
+  ) {
+    const ms = (value as { toMillis: () => number }).toMillis();
+    return Number.isFinite(ms) ? ms : null;
+  }
+  return null;
+}
+
+/** Expired and revoked unlocks must not grant premium features. */
+export function unlockIsActive(unlock: UnlockDoc, nowMs: number): boolean {
+  if (unlock.revoked === true) return false;
+  const expiresAt = readUnlockExpiryMs(unlock.expiresAt);
+  if (expiresAt !== null && expiresAt <= nowMs) return false;
+  return true;
+}
+
+export function anyActivePremiumUnlock(unlocks: UnlockDoc[], nowMs: number): boolean {
+  return unlocks.some(
+    (unlock) => PREMIUM_UNLOCK_TYPES.has(unlock.type) && unlockIsActive(unlock, nowMs),
+  );
+}
+
+export function mapStoredUnlock(data: Record<string, unknown>): UnlockDoc {
+  return {
+    type: typeof data.type === 'string' ? data.type : '',
+    source: typeof data.source === 'string' ? data.source : undefined,
+    paid: typeof data.paid === 'number' ? data.paid : undefined,
+    paymentId: typeof data.paymentId === 'string' ? data.paymentId : undefined,
+    expiresAt: readUnlockExpiryMs(data.expiresAt),
+    revoked: data.revoked === true,
+    grantedAt: data.grantedAt as UnlockDoc['grantedAt'],
+    eventId: typeof data.eventId === 'string' ? data.eventId : null,
+  };
 }
 
 // ---- Internal helpers --------------------------------------------------
@@ -189,6 +239,7 @@ export function computeEntitlement(
   ownerUid: string,
   eventId: string,
   unlocks: Array<UnlockDoc>,
+  nowMs: number = Date.now(),
 ): EventEntitlement {
   // 2026-08-20 — audit §4.1: filter by eventId first. An
   // unlock with `eventId === null` is legacy/owner-wide and
@@ -196,7 +247,13 @@ export function computeEntitlement(
   // written before this commit). An unlock with
   // `eventId === eventId` is the event-scoped path. Anything
   // else is a different event's unlock and is excluded.
+  //
+  // Expired (`expiresAt <= now`) and revoked unlocks are
+  // dropped here so they cannot grant customInvitation,
+  // watermarkRemoved, extraStorage, or lifetimeRetention.
+  // A missing expiresAt means the grant does not expire.
   const relevant = unlocks.filter((u) => {
+    if (!unlockIsActive(u, nowMs)) return false;
     if (u.eventId === undefined || u.eventId === null) return true;
     return u.eventId === eventId;
   });
@@ -312,18 +369,9 @@ export async function resolveServerEntitlementLimit(
     .collection('unlocks')
     .get();
 
-  const unlocks: UnlockDoc[] = unlocksSnap.docs.map((d) => {
-    const data = d.data() as Record<string, unknown>;
-    return {
-      type: typeof data.type === 'string' ? data.type : '',
-      source: typeof data.source === 'string' ? data.source : undefined,
-      paid: typeof data.paid === 'number' ? data.paid : undefined,
-      paymentId: typeof data.paymentId === 'string' ? data.paymentId : undefined,
-      expiresAt: typeof data.expiresAt === 'number' ? data.expiresAt : null,
-      grantedAt: data.grantedAt as UnlockDoc['grantedAt'],
-      eventId: typeof data.eventId === 'string' ? data.eventId : null,
-    };
-  });
+  const unlocks: UnlockDoc[] = unlocksSnap.docs.map((d) =>
+    mapStoredUnlock(d.data() as Record<string, unknown>),
+  );
 
   // computeEntitlement accepts (ownerUid, eventId, unlocks) and
   // returns the full EventEntitlement (features + storageLimitBytes
@@ -370,17 +418,12 @@ async function resolveEntitlement(
   // query without pagination. If usage grows we can add
   // `where('relevant', '==', true)` or compute per-event.
   const unlocksSnap = await unlocksCol(ownerUid).get();
-  const unlocks: Array<UnlockDoc> = unlocksSnap.docs.map((d) => ({
-    type: d.data().type || d.id,
-    source: d.data().source,
-    paid: d.data().paid,
-    paymentId: d.data().paymentId,
-    expiresAt: d.data().expiresAt,
-    grantedAt: d.data().grantedAt,
-    // 2026-08-20 — audit §4.1: read eventId from the doc so
-    // computeEntitlement can filter by event.
-    eventId: d.data().eventId ?? null,
-  }));
+  const unlocks: Array<UnlockDoc> = unlocksSnap.docs.map((d) => {
+    const data = d.data() as Record<string, unknown>;
+    const mapped = mapStoredUnlock(data);
+    if (!mapped.type) mapped.type = d.id;
+    return mapped;
+  });
 
   return computeEntitlement(ownerUid, eventId, unlocks);
 }

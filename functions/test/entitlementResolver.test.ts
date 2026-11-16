@@ -169,6 +169,53 @@ describe('computeEntitlement (P1.2 policy)', () => {
     expect(e2.retentionClass).toBe('lifetime');
   });
 
+  it('ignores expired unlocks for every premium feature', () => {
+    const now = 1_700_000_000_000;
+    const expired = now - 1;
+    const e = computeEntitlement(OWNER, EVENT, [
+      { type: 'custom-template', source: 'paid', expiresAt: expired, paymentId: 'old' },
+      { type: 'watermark-removed', source: 'paid', expiresAt: expired },
+      { type: 'storage-500mb', source: 'referral', expiresAt: expired },
+      { type: 'permanent-archive', source: 'paid', expiresAt: { toMillis: () => expired } },
+    ], now);
+    expect(e.features).toEqual({
+      customInvitation: false,
+      watermarkRemoved: false,
+      extraStorage: false,
+      lifetimeRetention: false,
+    });
+    expect(e.storageLimitBytes).toBe(200 * 1024 * 1024);
+    expect(e.retentionClass).toBe('standard');
+    expect(e.source).toBe('none');
+    expect(e.receiptId).toBe(null);
+  });
+
+  it('keeps an unlock whose expiresAt is still in the future', () => {
+    const now = 1_700_000_000_000;
+    const e = computeEntitlement(OWNER, EVENT, [
+      { type: 'watermark-removed', source: 'paid', expiresAt: now + 60_000 },
+    ], now);
+    expect(e.features.watermarkRemoved).toBe(true);
+  });
+
+  it('treats a missing expiresAt as not expired', () => {
+    const e = computeEntitlement(OWNER, EVENT, [
+      { type: 'custom-template', source: 'paid', expiresAt: null },
+    ], 1_700_000_000_000);
+    expect(e.features.customInvitation).toBe(true);
+  });
+
+  it('ignores a revoked unlock even when expiresAt is in the future', () => {
+    const now = 1_700_000_000_000;
+    const e = computeEntitlement(OWNER, EVENT, [
+      { type: 'storage-500mb', source: 'paid', expiresAt: now + 60_000, revoked: true },
+      { type: 'custom-template', source: 'admin-grant', revoked: true },
+    ], now);
+    expect(e.features.extraStorage).toBe(false);
+    expect(e.features.customInvitation).toBe(false);
+    expect(e.storageLimitBytes).toBe(200 * 1024 * 1024);
+  });
+
   it('scope and eventId are always set on the response', () => {
     const e = computeEntitlement('different-owner', 'different-event', []);
     expect(e.scope).toBe('event');

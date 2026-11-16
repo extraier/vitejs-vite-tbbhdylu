@@ -41,6 +41,29 @@ import {
 
 afterEach(() => cleanup());
 
+describe('guest link failure', () => {
+  it('renders an error and a retry instead of the loading spinner', () => {
+    const onRetryLink = vi.fn();
+    render(
+      <PersonalGuestPortal
+        guest={null}
+        linkError="這條嘉賓連結無法使用"
+        onRetryLink={onRetryLink}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('無法開啟電子喜帖');
+    expect(screen.getByRole('alert')).toHaveTextContent('這條嘉賓連結無法使用');
+    expect(screen.queryByText('正在載入您的專屬電子喜帖...')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '再試一次' }));
+    expect(onRetryLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the loading spinner when there is no error yet', () => {
+    render(<PersonalGuestPortal guest={null} />);
+    expect(screen.getByText('正在載入您的專屬電子喜帖...')).toBeTruthy();
+  });
+});
+
 // ── parseLocalEventDateTime (pure) ──────────────────────────────
 
 describe('parseLocalEventDateTime', () => {

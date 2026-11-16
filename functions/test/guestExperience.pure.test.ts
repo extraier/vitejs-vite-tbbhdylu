@@ -387,6 +387,27 @@ describe('validateLinkShape', () => {
       ),
     ).toThrow(LinkInvalidError);
   });
+
+  it('accepts an epoch-ms expiresAt as well as a Timestamp', () => {
+    const out = validateLinkShape(
+      makeLink({ expiresAt: Date.now() + 60_000 }),
+      OWNER,
+      EVENT,
+      GUEST_UID,
+    );
+    expect(out.guestId).toBe(GUEST_ID);
+  });
+
+  it('rejects a revoked link even when it has not expired', () => {
+    expect(() =>
+      validateLinkShape(
+        makeLink({ revoked: true }),
+        OWNER,
+        EVENT,
+        GUEST_UID,
+      ),
+    ).toThrow(LinkInvalidError);
+  });
 });
 
 // ---------------------------------------------------------------------------

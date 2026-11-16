@@ -6,7 +6,7 @@
  * in Firebase Secret Manager (defineSecret); nothing is hardcoded.
  */
 
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import Busboy = require('busboy');
 import { onRequest } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
@@ -16,7 +16,15 @@ import { getStorage } from 'firebase-admin/storage';
 import Mailgun from 'mailgun.js';
 import {
   asArray,
+  attachmentsWithinLimits,
+  autoReplyGate,
   autoReplyPayload,
+  autoReplyRateDecision,
+  AUTO_REPLY_GLOBAL_MAX_PER_WINDOW,
+  AUTO_REPLY_GLOBAL_WINDOW_MS,
+  INBOUND_MAX_BODY_BYTES,
+  INBOUND_MAX_FILE_BYTES,
+  INBOUND_MAX_FILES,
   parsePlusAddress,
   recipientToAddress,
   threadIdForInbound,
@@ -74,6 +82,12 @@ export interface InboundRuntime {
     };
   };
   sendMessage: (domain: string, payload: Record<string, unknown>) => Promise<unknown>;
+  /**
+   * Reserve a one-per-address auto-reply slot. Return false to skip
+   * the send (cooldown, global cap, or a storage failure). Missing
+   * implementation fails closed — no reply is sent.
+   */
+  claimAutoReply?: (toEmail: string, nowMs: number) => Promise<boolean>;
   now?: () => number;
 }
 
@@ -83,11 +97,27 @@ function headerValue(headers: InboundRequest['headers'], name: string): string {
   return value || '';
 }
 
-export function parseMultipart(req: InboundRequest): Promise<{ fields: Record<string, unknown>; files: StoredFile[] }> {
+export function parseMultipart(req: InboundRequest): Promise<{ fields: Record<string, unknown>; files: StoredFile[]; limited: boolean }> {
   return new Promise((resolve, reject) => {
     const fields: Record<string, unknown> = {};
     const files: StoredFile[] = [];
-    const bb = Busboy({ headers: req.headers as Record<string, string> });
+    let limited = false;
+    const bb = Busboy({
+      headers: req.headers as Record<string, string>,
+      limits: {
+        files: INBOUND_MAX_FILES,
+        fileSize: INBOUND_MAX_FILE_BYTES,
+        fields: 40,
+        fieldSize: 1024 * 1024,
+        parts: INBOUND_MAX_FILES + 40,
+      },
+    });
+    const markLimited = () => {
+      limited = true;
+    };
+    bb.on('filesLimit', markLimited);
+    bb.on('fieldsLimit', markLimited);
+    bb.on('partsLimit', markLimited);
     bb.on('field', (name: string, val: string) => {
       if (fields[name] === undefined) fields[name] = val;
       else if (Array.isArray(fields[name])) (fields[name] as string[]).push(val);
@@ -95,8 +125,23 @@ export function parseMultipart(req: InboundRequest): Promise<{ fields: Record<st
     });
     bb.on('file', (name: string, stream: NodeJS.ReadableStream, info: { filename?: string; mimeType?: string }) => {
       const chunks: Buffer[] = [];
-      stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+      let size = 0;
+      let truncated = false;
+      stream.on('limit', () => {
+        truncated = true;
+        limited = true;
+      });
+      stream.on('data', (chunk: Buffer) => {
+        if (truncated || size >= INBOUND_MAX_FILE_BYTES) {
+          truncated = true;
+          limited = true;
+          return;
+        }
+        size += chunk.length;
+        chunks.push(chunk);
+      });
       stream.on('end', () => {
+        if (truncated) return;
         files.push({
           filename: info.filename || `unnamed-${name}`,
           mimeType: info.mimeType || 'application/octet-stream',
@@ -104,7 +149,7 @@ export function parseMultipart(req: InboundRequest): Promise<{ fields: Record<st
         });
       });
     });
-    bb.on('finish', () => resolve({ fields, files }));
+    bb.on('finish', () => resolve({ fields, files, limited }));
     bb.on('error', reject);
     const buffered = rawBodyIfPresent(req);
     if (buffered) {
@@ -122,10 +167,24 @@ function rawBodyIfPresent(req: InboundRequest): Buffer | undefined {
 
 function readBody(req: InboundRequest): Promise<string> {
   const buffered = rawBodyIfPresent(req);
-  if (buffered) return Promise.resolve(buffered.toString('utf8'));
+  if (buffered) {
+    if (buffered.length > INBOUND_MAX_BODY_BYTES) {
+      return Promise.reject(Object.assign(new Error('payload too large'), { statusCode: 413 }));
+    }
+    return Promise.resolve(buffered.toString('utf8'));
+  }
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk) => chunks.push(chunk as Buffer));
+    let size = 0;
+    req.on('data', (chunk) => {
+      const buf = chunk as Buffer;
+      size += buf.length;
+      if (size > INBOUND_MAX_BODY_BYTES) {
+        reject(Object.assign(new Error('payload too large'), { statusCode: 413 }));
+        return;
+      }
+      chunks.push(buf);
+    });
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     req.on('error', reject);
   });
@@ -155,15 +214,34 @@ export async function handleInboundEmail(
     return;
   }
 
+  const earlyBody = rawBodyIfPresent(req);
+  if (earlyBody && earlyBody.length > INBOUND_MAX_BODY_BYTES) {
+    res.status(413).send('payload too large');
+    return;
+  }
+
   const contentType = headerValue(req.headers, 'content-type');
   let fields: Record<string, unknown> = {};
   let files: StoredFile[] = [];
   if (contentType.startsWith('multipart/form-data')) {
     const parsed = await parseMultipart(req);
+    if (parsed.limited || !attachmentsWithinLimits(parsed.files.map((file) => ({ size: file.content.length })))) {
+      res.status(413).send('attachment too large');
+      return;
+    }
     fields = parsed.fields;
     files = parsed.files;
   } else if (contentType.startsWith('application/x-www-form-urlencoded')) {
-    const raw = await readBody(req);
+    let raw: string;
+    try {
+      raw = await readBody(req);
+    } catch (err) {
+      if ((err as { statusCode?: number }).statusCode === 413) {
+        res.status(413).send('payload too large');
+        return;
+      }
+      throw err;
+    }
     const params = new URLSearchParams(raw);
     for (const [key, value] of params) {
       if (fields[key] === undefined) fields[key] = value;
@@ -176,13 +254,23 @@ export async function handleInboundEmail(
     return;
   }
 
+  // DEV_MODE === '1' skips verification for local fixtures only.
+  // Unset (the production default) stays fail-closed: bad, stale,
+  // or non-hex signatures are 401, never 500.
   if (!runtime.devMode) {
-    const ok = verifyMailgunSignature({
-      timestamp: String(asArray(fields.timestamp)[0] || ''),
-      token: String(asArray(fields.token)[0] || ''),
-      signature: String(asArray(fields.signature)[0] || ''),
-      signingKey: runtime.signingKey,
-    });
+    let ok = false;
+    try {
+      ok = verifyMailgunSignature({
+        timestamp: String(asArray(fields.timestamp)[0] || ''),
+        token: String(asArray(fields.token)[0] || ''),
+        signature: String(asArray(fields.signature)[0] || ''),
+        signingKey: runtime.signingKey,
+        nowMs: runtime.now ? runtime.now() : Date.now(),
+      });
+    } catch (err) {
+      console.warn('mailgun signature check failed closed', err);
+      ok = false;
+    }
     if (!ok) {
       console.warn('mailgun signature mismatch');
       res.status(401).send('invalid signature');
@@ -264,20 +352,38 @@ export async function handleInboundEmail(
   }, { merge: true });
 
   if (isFirstInbound) {
-    try {
-      await runtime.sendMessage(
-        runtime.domain,
-        autoReplyPayload({
-          fromEmail: runtime.fromEmail,
-          fromName: runtime.fromName,
-          toEmail: sender,
-          threadId,
-          domain: runtime.domain,
-          subject,
-        }),
-      );
-    } catch (err) {
-      console.error('auto-reply failed (mail stored anyway)', err);
+    const messageHeaders = String(asArray(fields['message-headers'])[0] || '');
+    const envelopeSender = String(asArray(fields.sender)[0] || '');
+    const gate = autoReplyGate({
+      fromHeader: sender,
+      envelopeSender,
+      messageHeaders,
+    });
+    if (!gate.ok) {
+      console.warn('auto-reply suppressed', gate.reason);
+    } else if (!runtime.claimAutoReply) {
+      console.warn('auto-reply suppressed', 'no-rate-limiter');
+    } else {
+      try {
+        const claimed = await runtime.claimAutoReply(gate.toEmail, stamp);
+        if (claimed) {
+          await runtime.sendMessage(
+            runtime.domain,
+            autoReplyPayload({
+              fromEmail: runtime.fromEmail,
+              fromName: runtime.fromName,
+              toEmail: gate.toEmail,
+              threadId,
+              domain: runtime.domain,
+              subject,
+            }),
+          );
+        } else {
+          console.warn('auto-reply suppressed', 'rate-limit');
+        }
+      } catch (err) {
+        console.error('auto-reply failed (mail stored anyway)', err);
+      }
     }
   }
 
@@ -317,13 +423,59 @@ function liveRuntime(): InboundRuntime {
       );
       return client.messages.create(domain, payload);
     },
+    claimAutoReply: (toEmail, nowMs) => claimInboundAutoReply(getFirestore(), toEmail, nowMs),
   };
+}
+
+/**
+ * Transactional one-per-address cooldown plus a global hourly cap.
+ * Any storage error fails closed (returns false) so a blip cannot
+ * turn the catch-all into an open relay.
+ */
+export async function claimInboundAutoReply(
+  db: FirebaseFirestore.Firestore,
+  toEmail: string,
+  nowMs: number,
+): Promise<boolean> {
+  const email = toEmail.trim().toLowerCase();
+  const id = createHash('sha256').update(email).digest('hex');
+  const perRef = db.collection('inbound_autoreplies').doc(id);
+  const globalRef = db.collection('inbound_autoreplies').doc('_global');
+  try {
+    return await db.runTransaction(async (tx) => {
+      const perSnap = await tx.get(perRef);
+      const globalSnap = await tx.get(globalRef);
+      const lastRaw = perSnap.exists ? perSnap.data()?.lastSentAtMs : null;
+      const sentAt = Array.isArray(globalSnap.data()?.sentAtMs)
+        ? (globalSnap.data()!.sentAtMs as unknown[]).filter((n): n is number => typeof n === 'number')
+        : [];
+      const recent = sentAt.filter((t) => nowMs - t < AUTO_REPLY_GLOBAL_WINDOW_MS);
+      const decision = autoReplyRateDecision({
+        lastSentAtMs: typeof lastRaw === 'number' ? lastRaw : null,
+        recentGlobalSends: recent.length,
+        nowMs,
+      });
+      if (!decision.allow) return false;
+      recent.push(nowMs);
+      tx.set(perRef, { email, lastSentAtMs: nowMs }, { merge: true });
+      tx.set(globalRef, {
+        sentAtMs: recent.slice(-AUTO_REPLY_GLOBAL_MAX_PER_WINDOW),
+      }, { merge: true });
+      return true;
+    });
+  } catch (err) {
+    console.error('auto-reply rate limit failed closed', err);
+    return false;
+  }
 }
 
 export const inboundEmail = onRequest(
   {
     region: 'us-central1',
     cors: false,
+    // Default 256MiB OOMs on a large multipart body. The parser also
+    // rejects oversized attachments before they are stored.
+    memory: '512MiB',
     maxInstances: 10,
     secrets: [
       MAILGUN_API_KEY,
