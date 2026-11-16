@@ -38,3 +38,22 @@ export function buildJobRecords(input: JobWriteInput): {
     publicRecord: shared,
   };
 }
+
+/** One proposal per vendor per job. The id is the duplicate key. */
+export function proposalDocId(jobId: string, vendorUid: string): string {
+  return `${jobId}__${vendorUid}`;
+}
+
+/**
+ * True when this vendor already has a proposal on the job.
+ * `directHit` is the deterministic doc. `matches` covers older
+ * auto-id proposals that predate that id.
+ */
+export function isDuplicateProposal(input: {
+  vendorUid: string;
+  directHit: boolean;
+  matches: Array<{ vendorUid?: unknown }>;
+}): boolean {
+  if (input.directHit) return true;
+  return input.matches.some((row) => row.vendorUid === input.vendorUid);
+}

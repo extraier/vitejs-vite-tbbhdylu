@@ -74,12 +74,23 @@ match /{path=**}/events/{eventId} {
           // every returned doc matches `auth.uid in coOwners` and
           // the rule passes — zero behavior change for legitimate
           // callers, while non-co-owners can no longer enumerate.
-          // Write rule unchanged: still tied to `ownerUid` (the
-          // path wildcard variable).
+          // Writes stay tied to `ownerUid` (the path wildcard
+          // variable) and also refuse privileged event fields.
           allow read: if isSignedIn()
             && (resource.data._ownerUid == request.auth.uid
-                || request.auth.uid in resource.data.coOwners);
-          allow create, update, delete: if isSignedIn() && request.auth.uid == ownerUid;
+                || (resource.data.keys().hasAll(['coOwners'])
+                    && resource.data.coOwners is list
+                    && request.auth.uid in resource.data.coOwners));
+          // Same privileged-field lock as the nested events rule.
+          // This wildcard's ownerUid binding is unchanged; the field
+          // checks still apply if that comparison succeeds.
+          allow create: if isSignedIn()
+            && request.auth.uid == ownerUid
+            && eventCreateOmitsPrivilegedFields();
+          allow update: if isSignedIn()
+            && request.auth.uid == ownerUid
+            && eventUpdateOmitsPrivilegedFields();
+          allow delete: if isSignedIn() && request.auth.uid == ownerUid;
         }
 
         // 2026-08-07 — collectionGroup FIX for vendorContacts.
@@ -249,6 +260,44 @@ match /{path=**}/events/{eventId} {
 
     function isOwner(uid) {
       return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Client writes to an event doc cannot grant premium, add a
+    // co-owner, or retarget the document. tier / coOwners / userId
+    // change only through Admin SDK paths (unlock grant and revoke,
+    // acceptPartnerInvite, removePartnerV2). storageUsageBytes and
+    // storageQuotaBytes stay server-owned quota counters.
+    function eventPrivilegedFields() {
+      return ['tier', 'coOwners', 'userId', 'storageUsageBytes', 'storageQuotaBytes'];
+    }
+
+    function eventCreateOmitsPrivilegedFields() {
+      return !request.resource.data.keys().hasAny(eventPrivilegedFields());
+    }
+
+    function eventUpdateOmitsPrivilegedFields() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(eventPrivilegedFields());
+    }
+
+    // Party checks for inquiries and proposals. Update and delete
+    // must use the stored document (resource.data). Create still
+    // uses request.resource.data because resource is null until
+    // the document exists. Authorizing an update from the
+    // post-write document lets a caller set vendorUid or coupleUid
+    // to their own uid and take over the thread.
+    function isThreadParty(data) {
+      return data.vendorUid == request.auth.uid
+        || data.coupleUid == request.auth.uid;
+    }
+
+    function inquiryMutableKeys() {
+      return ['vendorName', 'coupleName', 'eventId', 'lastMessageAt',
+              'lastMessagePreview', 'coupleUnread', 'vendorUnread'];
+    }
+
+    function proposalMutableKeys() {
+      return ['message'];
     }
 
     // 2026-07-26 — Co-owners (couples, business partners). A co-owner
@@ -677,15 +726,16 @@ match /{path=**}/events/{eventId} {
           // budget and coOwners. Their portal uses
           // guestExperience/public.
           allow read: if isOwnerOrAnyCoOwner(ownerUid);
-          // storageUsageBytes / storageQuotaBytes are not the quota
-          // counter. Enforcement reads privateUsage/storage. Owners
-          // must not seed or zero those event-doc fields.
+          // Owners may edit the event, but not tier, coOwners, or
+          // userId, and not the server-owned storage counters.
+          // Premium and co-owner membership stay on their callable
+          // paths. The creator's access is the path owner, not a
+          // client-written coOwners entry.
           allow create: if isOwner(ownerUid)
-            && !request.resource.data.keys().hasAny(['storageUsageBytes', 'storageQuotaBytes']);
+            && eventCreateOmitsPrivilegedFields();
           allow update: if resource != null
             && isOwner(ownerUid)
-            && !request.resource.data.diff(resource.data).affectedKeys()
-                 .hasAny(['storageUsageBytes', 'storageQuotaBytes']);
+            && eventUpdateOmitsPrivilegedFields();
           allow delete: if isOwner(ownerUid);
 
           // 2026-08-23 — Manus P1 hardening (PDF §3.1, §3.2):
@@ -2032,11 +2082,11 @@ match /{path=**}/events/{eventId} {
           && request.resource.data.vendorUid == request.auth.uid
           && request.resource.data.coupleUid is string;
         allow update: if isSignedIn()
-          && (request.resource.data.vendorUid == request.auth.uid
-              || request.resource.data.coupleUid == request.auth.uid);
+          && isThreadParty(resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(proposalMutableKeys());
         allow delete: if isSignedIn()
-          && (resource.data.vendorUid == request.auth.uid
-              || resource.data.coupleUid == request.auth.uid);
+          && isThreadParty(resource.data);
       }
 
       // 2026-07-20 — vendor ↔ couple chat threads. Lives under
@@ -2063,14 +2113,15 @@ match /{path=**}/events/{eventId} {
           && (request.resource.data.vendorUid == request.auth.uid
               || request.resource.data.coupleUid == request.auth.uid);
         // Either party can update counters (unread, lastMessageAt, etc).
-        // FIXED 2026-07-28 — was `resource.data.vendorUid` which
-        // caused evaluation error during `setDoc` create (resource
-        // is undefined for new docs). During create+update validation,
-        // the right side is request.resource.data; resource.data is
-        // only valid for existing docs (true update).
+        // Create keeps request.resource.data (resource is null on a
+        // new doc; a 2026-07-28 setDoc create failed when this check
+        // read resource.data). Update uses the pre-update parties
+        // and a field allowlist so vendorUid / coupleUid cannot be
+        // rewritten to the caller's uid.
         allow update: if isSignedIn()
-          && (request.resource.data.vendorUid == request.auth.uid
-              || request.resource.data.coupleUid == request.auth.uid);
+          && isThreadParty(resource.data)
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(inquiryMutableKeys());
         allow delete: if isAdmin()
           || (isSignedIn() && (
             resource.data.vendorUid == request.auth.uid
@@ -2139,12 +2190,14 @@ match /{path=**}/events/{eventId} {
         && request.resource.data.createdAt is timestamp
         && (request.resource.data.vendorUid == request.auth.uid
             || request.resource.data.coupleUid == request.auth.uid);
-      // FIXED 2026-07-28 — was `resource.data.vendorUid` (evaluation
-      // error during setDoc create). request.resource.data is the
-      // correct reference for create+update.
+      // Create keeps request.resource.data so setDoc on a new thread
+      // does not read a null resource (2026-07-28). Update requires
+      // the pre-update party and may only touch the mutable fields
+      // lib/chat.js writes after the thread exists.
       allow update: if isSignedIn()
-        && (request.resource.data.vendorUid == request.auth.uid
-            || request.resource.data.coupleUid == request.auth.uid);
+        && isThreadParty(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(inquiryMutableKeys());
       allow delete: if isAdmin()
         || (isSignedIn() && (
           resource.data.vendorUid == request.auth.uid
@@ -2460,9 +2513,12 @@ match /{path=**}/events/{eventId} {
         && request.resource.data.keys().hasAll(['vendorUid', 'coupleUid'])
         && request.resource.data.vendorUid == request.auth.uid
         && request.resource.data.coupleUid is string;
-      allow update, delete: if isSignedIn()
-        && (resource.data.vendorUid == request.auth.uid
-            || resource.data.coupleUid == request.auth.uid);
+      allow update: if isSignedIn()
+        && isThreadParty(resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(proposalMutableKeys());
+      allow delete: if isSignedIn()
+        && isThreadParty(resource.data);
     }
 
     // 2026-07-28 — Added top-level mirror for /vendorImageViews.

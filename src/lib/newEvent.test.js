@@ -4,16 +4,21 @@ import { describe, expect, it } from 'vitest';
 import { buildNewEventFields } from './newEvent';
 
 describe('buildNewEventFields', () => {
-  it('stamps the creator as the first co-owner', () => {
+  it('does not let the client seed tier, coOwners, or userId', () => {
     const fields = buildNewEventFields('Our day', 'uid-1', 1000);
     expect(fields).toEqual({
       name: 'Our day',
-      tier: 'free',
       budget: 350000,
-      coOwners: ['uid-1'],
       createdAt: 1000,
     });
+    expect(fields.tier).toBeUndefined();
+    expect(fields.coOwners).toBeUndefined();
+    expect(fields.userId).toBeUndefined();
     expect(fields.date).toBeUndefined();
+  });
+
+  it('rejects a create payload without an owner uid', () => {
+    expect(() => buildNewEventFields('Our day', '', 1000)).toThrow(/ownerUid/);
   });
 });
 

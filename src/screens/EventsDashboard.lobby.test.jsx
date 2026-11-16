@@ -47,6 +47,17 @@ describe('EventsDashboard lobby', () => {
     expect(screen.queryByText('➕ 建立你的婚禮')).toBeNull();
   });
 
+  it('does not badge a project from its event tier flag', () => {
+    render(
+      <EventsDashboard
+        {...base}
+        events={[{ id: 'ev-1', name: 'Our day', date: '', tier: 'premium' }]}
+      />,
+    );
+    expect(screen.queryByText('PREMIUM')).toBeNull();
+    expect(screen.getByText('Our day')).toBeTruthy();
+  });
+
   it('offers sign-out from the lobby user menu', () => {
     render(
       <EventsDashboard

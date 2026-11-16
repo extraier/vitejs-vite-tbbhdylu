@@ -1,14 +1,18 @@
-// Shared payload for a couple's first event. Both the signed-in create
-// path and the guest-upgrade replay must stamp coOwners with the creator.
-// Partner invites and the collection-group "weddings I co-own" query read
-// that array; the path owner is not implied by it.
+// Shared payload for a couple's first event. Both the signed-in
+// create path and the guest-upgrade replay use this.
+//
+// tier, coOwners, and userId are intentionally absent. Rules reject
+// client writes of those fields. Premium comes from the entitlement
+// resolver. Co-owners are added by acceptPartnerInvite (Admin SDK).
+// The creator's access is the path users/{uid}/events/{eventId}.
 
 export function buildNewEventFields(name, ownerUid, now = Date.now()) {
+  if (typeof ownerUid !== 'string' || !ownerUid) {
+    throw new Error('ownerUid is required');
+  }
   return {
     name,
-    tier: 'free',
     budget: 350000,
-    coOwners: [ownerUid],
     createdAt: now,
   };
 }

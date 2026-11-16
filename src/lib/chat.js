@@ -45,25 +45,36 @@ export function inquiryIdFor(vendorUid, coupleUid) {
 
 // ---- Create or fetch an inquiry ----
 // Returns the inquiry id (caller can then navigate to /chat-room/:id).
+function inquiryMutableFields({ vendorName, coupleName, eventId }) {
+  return {
+    vendorName: vendorName || '',
+    coupleName: coupleName || '',
+    eventId: eventId || '',
+    lastMessageAt: serverTimestamp(),
+    lastMessagePreview: '',
+    coupleUnread: 0,
+    vendorUnread: 0,
+  };
+}
+
 export async function openInquiry({ vendorUid, coupleUid, vendorName, coupleName, eventId }) {
   const id = inquiryIdFor(vendorUid, coupleUid);
   const ref = doc(db, COL, id);
-  await setDoc(
-    ref,
-    {
+  const mutable = inquiryMutableFields({ vendorName, coupleName, eventId });
+  try {
+    // Create. Rules require vendorUid, coupleUid, and createdAt on
+    // the incoming document. A later open of the same thread is an
+    // update; rewriting createdAt or the party uids is denied.
+    await setDoc(ref, {
+      ...mutable,
       vendorUid,
       coupleUid,
-      vendorName: vendorName || '',
-      coupleName: coupleName || '',
-      eventId: eventId || '',
       createdAt: serverTimestamp(),
-      lastMessageAt: serverTimestamp(),
-      lastMessagePreview: '',
-      coupleUnread: 0,
-      vendorUnread: 0,
-    },
-    { merge: true },
-  );
+    });
+  } catch (err) {
+    if (err?.code !== 'permission-denied') throw err;
+    await updateDoc(ref, mutable);
+  }
   return id;
 }
 

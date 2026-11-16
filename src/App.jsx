@@ -29,6 +29,7 @@ import {
 
 import { db, appId } from './lib/firebase';
 import { buildNewEventFields } from './lib/newEvent';
+import { entitlementIsPremium, invitationOwnerTier } from './lib/premiumAccess';
 import { guestListCollectionName, mergeGuestGifts } from './lib/guestGifts';
 import { requestGuestGiftSplit } from './lib/splitGuestGifts';
 import { nextVendorView } from './lib/vendorRoute';
@@ -2825,16 +2826,9 @@ export default function App() {
     ? prefsStorageUsageBytes / (1024 * 1024)
     : null;
   const storageUsedMB = prefsStorageUsedMB ?? eventPhotos.length * 1.5;
-  // 2026-08-19 — Manus P1.2: prefer the canonical event
-  // entitlement resolver over the legacy `currentEvent.tier`
-  // flag for premium gating. The legacy flag is kept AS-IS
-  // for a transition period (so existing unlocks + paid
-  // receipts still work) but `isPremium` now uses the
-  // resolver. The `currentEvent.tier === 'premium'` check is
-  // retained as a `legacyTierIsPremium` defensively in case
-  // the resolver is mid-fetch (loading=true) and defaults to
-  // false — a couple who has paid should NOT see their
-  // premium UI vanish during the ~200ms resolver round-trip.
+  // Premium UI follows the entitlement resolver only. A stored
+  // event tier flag is not a grant, and it must not keep premium
+  // UI while the resolver is loading or after an unlock expires.
   // 2026-08-25 — Manus P9: gate the entitlement call so reception,
   // helper, vendor, and guest contexts do not make an owner-only
   // getEventEntitlement request. The callable currently resolves
@@ -2849,12 +2843,7 @@ export default function App() {
   });
   const { features: entitlementFeatures, storageLimitBytes: entitlementBytes, refresh: refreshEntitlement } =
     useEventEntitlement(entitlementEventId);
-  const entitlementIsPremium = !!(entitlementFeatures.customInvitation
-    || entitlementFeatures.watermarkRemoved
-    || entitlementFeatures.extraStorage
-    || entitlementFeatures.lifetimeRetention);
-  const legacyTierIsPremium = currentEvent?.tier === 'premium';
-  const isPremium = entitlementIsPremium || legacyTierIsPremium;
+  const isPremium = entitlementIsPremium(entitlementFeatures);
   // 2026-08-19 — Storage gate uses the resolver's reported
   // limit when available, falls back to the legacy constant
   // otherwise. The resolver reports bytes; the legacy is in MB.
@@ -6034,16 +6023,11 @@ export default function App() {
             eventId={currentEvent.id}
             event={currentEvent}
             guests={eventGuests}
-            // 2026-08-19 — Manus P1.3: prefer the canonical
-            // entitlement resolver over the legacy tier flag.
-            // The component still accepts `ownerTier` and
-            // treats `'premium'` as "may upload custom bg" —
-            // we OR the entitlement here so a pay-but-not-
-            // yet-tier-flagged customer isn't blocked. The
-            // server still enforces at /api/photo-upload
-            // (calls the same resolver) so the client can be
-            // safely optimistic here.
-            ownerTier={(entitlementFeatures.customInvitation || currentEvent.tier === 'premium') ? 'premium' : 'free'}
+            // Custom backgrounds follow the resolver's
+            // customInvitation feature. Event-doc tier is not
+            // consulted. The upload proxy enforces the same
+            // resolver server-side.
+            ownerTier={invitationOwnerTier(entitlementFeatures)}
             isAdmin={isAdmin}
             // 2026-08-23 — Manus P4.1 (PDF Patch 4): the editor
             // delegates the locked-background upsell to the

@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  callerMayAccessEvent,
   cleanName,
   cleanEventOwnerNames,
   MAX_OWNER_NAME_LEN,
@@ -76,5 +77,37 @@ describe('cleanEventOwnerNames', () => {
     const r = cleanEventOwnerNames({ boyName: '  志明  ', girlName: '春嬌' });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.cleaned).toEqual({ boyName: '志明', girlName: '春嬌' });
+  });
+});
+
+describe('callerMayAccessEvent', () => {
+  it('allows the path owner when the event has no userId or coOwners', () => {
+    expect(callerMayAccessEvent({
+      callerUid: 'owner-1',
+      pathOwnerUid: 'owner-1',
+      coOwners: undefined,
+    })).toBe(true);
+  });
+
+  it('allows a partner listed in coOwners and rejects everyone else', () => {
+    expect(callerMayAccessEvent({
+      callerUid: 'partner-1',
+      pathOwnerUid: 'owner-1',
+      coOwners: ['partner-1'],
+    })).toBe(true);
+    expect(callerMayAccessEvent({
+      callerUid: 'stranger',
+      pathOwnerUid: 'owner-1',
+      docUserId: 'owner-1',
+      coOwners: ['partner-1'],
+    })).toBe(false);
+  });
+
+  it('still accepts a legacy userId on the event doc', () => {
+    expect(callerMayAccessEvent({
+      callerUid: 'owner-1',
+      pathOwnerUid: 'other-path',
+      docUserId: 'owner-1',
+    })).toBe(true);
   });
 });

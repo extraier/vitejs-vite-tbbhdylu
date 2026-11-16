@@ -15,7 +15,7 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { buildJobRecords } from './jobBoardPure';
+import { buildJobRecords, isDuplicateProposal, proposalDocId } from './jobBoardPure';
 
 const db = getFirestore();
 
@@ -169,6 +169,8 @@ export const postJobRequest = onCall(
  *   - cross-checks the job doc: exists, status == 'open', and writes
  *     the coupleUid from the job's doc so the couple can later query
  *     their own proposals.
+ *   - one proposal per vendor per job. A repeat submit does not
+ *     create another doc or increment proposalsCount.
  *
  * Why a Cloud Function (not a direct Firestore write):
  *   - The /proposals rule requires vendorUid == auth.uid AND
@@ -238,55 +240,70 @@ export const submitProposal = onCall(
         ? vendorData.rating
         : 0;
 
-    // Look up the job to grab coupleUid and confirm it's still open.
+    // One proposal per vendor per job. Older auto-id proposals are
+    // rejected before the transaction. The deterministic id is
+    // checked inside the transaction so two concurrent first
+    // submits cannot both increment proposalsCount. The jobId
+    // query stays outside the transaction: writing a new proposal
+    // for that job would change the query result and abort it.
     const jobRef = db.collection('jobRequests').doc(jobId);
-    const jobSnap = await jobRef.get();
-    if (!jobSnap.exists) {
-      throw new HttpsError('not-found', 'Job not found.');
-    }
-    const jobData = jobSnap.data() || {};
-    if (jobData.status !== 'open') {
-      throw new HttpsError(
-        'failed-precondition',
-        '此 job 已經關閉，唔可以再報價。',
-      );
-    }
-    const coupleUid = typeof jobData.coupleUid === 'string' ? jobData.coupleUid : null;
-    if (!coupleUid) {
-      throw new HttpsError(
-        'failed-precondition',
-        'Job 缺少 coupleUid，請聯絡管理員。',
-      );
+    const proposalRef = db.collection('proposals').doc(proposalDocId(jobId, uid));
+    const boardRef = db.collection('jobBoard').doc(jobId);
+    const prior = await db.collection('proposals').where('jobId', '==', jobId).get();
+    if (isDuplicateProposal({
+      vendorUid: uid,
+      directHit: false,
+      matches: prior.docs.map((d) => d.data() || {}),
+    })) {
+      throw new HttpsError('already-exists', '你已經向此工作提交過報價。');
     }
 
-    // Atomic write: persist the proposal + increment the job's count
-    // in a single batch so the count never drifts from the truth.
-    // The public board copy is updated only when it exists (jobs
-    // posted before the coupleUid split have no /jobBoard doc).
-    const proposalRef = db.collection('proposals').doc();
-    const boardRef = db.collection('jobBoard').doc(jobId);
-    const boardSnap = await boardRef.get();
-    const batch = db.batch();
-    batch.set(proposalRef, {
-      jobId,
-      vendorUid: uid,
-      coupleUid,
-      vendorName,
-      rating: vendorRating,
-      price: (price || '').trim(),
-      message: message.trim(),
-      status: 'pending',
-      createdAt: FieldValue.serverTimestamp(),
-    });
-    batch.update(jobRef, {
-      proposalsCount: FieldValue.increment(1),
-    });
-    if (boardSnap.exists) {
-      batch.update(boardRef, {
+    await db.runTransaction(async (tx) => {
+      const jobSnap = await tx.get(jobRef);
+      const byId = await tx.get(proposalRef);
+      const boardSnap = await tx.get(boardRef);
+
+      if (!jobSnap.exists) {
+        throw new HttpsError('not-found', 'Job not found.');
+      }
+      const jobData = jobSnap.data() || {};
+      if (jobData.status !== 'open') {
+        throw new HttpsError(
+          'failed-precondition',
+          '此 job 已經關閉，唔可以再報價。',
+        );
+      }
+      const coupleUid = typeof jobData.coupleUid === 'string' ? jobData.coupleUid : null;
+      if (!coupleUid) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Job 缺少 coupleUid，請聯絡管理員。',
+        );
+      }
+      if (byId.exists) {
+        throw new HttpsError('already-exists', '你已經向此工作提交過報價。');
+      }
+
+      tx.set(proposalRef, {
+        jobId,
+        vendorUid: uid,
+        coupleUid,
+        vendorName,
+        rating: vendorRating,
+        price: (price || '').trim(),
+        message: message.trim(),
+        status: 'pending',
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      tx.update(jobRef, {
         proposalsCount: FieldValue.increment(1),
       });
-    }
-    await batch.commit();
+      if (boardSnap.exists) {
+        tx.update(boardRef, {
+          proposalsCount: FieldValue.increment(1),
+        });
+      }
+    });
 
     // Read back the new count (could be slightly stale under concurrent
     // writes, but the client's onSnapshot subscription will correct).

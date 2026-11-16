@@ -2,7 +2,7 @@
 // event-scoped entitlement resolver.
 //
 // Wraps the getEventEntitlement Cloud Function. Components
-// that previously read `currentEvent.tier === 'premium'` or
+// that previously read an event tier flag or
 // `unlocks.includes('custom-template')` should migrate to:
 //
 //   const { features, isPremium, storageLimitBytes, retentionClass,
@@ -22,14 +22,14 @@
 // `latency > 500ms` in the wild, add a per-eventId LRU with
 // stale-while-revalidate.
 //
-// Future: this hook will be the canonical "is premium" source
-// for App.jsx, replacing the currentEvent.tier check. Until
-// then, callers SHOULD consult both signals and prefer this
-// one as the new contract.
+// The resolver is the only premium signal. Do not OR an event
+// tier flag in while loading — that reopens the client-writable
+// bypass for the whole request.
 
 import { useCallback, useEffect, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../lib/firebase';
+import { entitlementIsPremium } from '../lib/premiumAccess';
 
 const EMPTY_FEATURES = {
   customInvitation: false,
@@ -90,9 +90,6 @@ export function useEventEntitlement(eventId, { refreshKey = 0 } = {}) {
     refresh: fetchEntitlement,
     // Convenience computed booleans so callers don't have to
     // destructure features.
-    isPremium: state.features.customInvitation
-      || state.features.watermarkRemoved
-      || state.features.extraStorage
-      || state.features.lifetimeRetention,
+    isPremium: entitlementIsPremium(state.features),
   };
 }
