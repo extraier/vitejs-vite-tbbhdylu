@@ -120,11 +120,9 @@ export function EventsDashboard({
         <Heart className="w-16 h-16 text-rose-500 mx-auto mb-4 fill-rose-100" />
         <h1 className="text-4xl font-black text-slate-800 mb-2">Save The Day · 總大堂</h1>
         <p className="text-slate-500">建立或選擇你想管理的婚禮專案</p>
-        {/* 2026-07-29 — Premium-user lobby badge. Visible to the user
-            AND anyone visiting their public profile/links. Reflects
-            user-level tier (granted by any unlock from Phase 2/3).
-            Falls back to per-event tier for already-paid individual
-            weddings when user-tier is unset. */}
+        {/* Premium-user lobby badge. This is the user-profile tier
+            written by grantUnlock and cleared by revokeUnlock.
+            Event-doc tier is not a premium signal. */}
         {userTier === 'premium' ? (
           <div className="mt-4 inline-flex items-center gap-1.5 bg-gradient-to-r from-amber-400 to-amber-500 text-white text-sm font-bold px-4 py-1.5 rounded-full shadow-md">
             <Crown className="w-4 h-4" />
@@ -404,11 +402,6 @@ function EventCard({ event, onSelect, onRename, onDelete, onOpenSettings }: Even
       }}
       className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-lg hover:border-rose-300 transition-all cursor-pointer group relative overflow-hidden"
     >
-      {event.tier === 'premium' && (
-        <div className="absolute top-0 right-0 bg-amber-400 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl flex items-center gap-1">
-          <Crown className="w-3 h-3" /> PREMIUM
-        </div>
-      )}
       <h3 className="text-xl font-bold text-slate-800 mb-1 group-hover:text-rose-600 transition-colors">
         {event.name}
       </h3>

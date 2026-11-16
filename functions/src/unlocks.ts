@@ -160,9 +160,9 @@ export async function grantUnlock(
   });
 
   // 2026-07-29 — auto-promote to premium tier on any unlock. This is
-  // user-scoped (across all their events), while events/{eventId}.tier
-  // remains a per-event override that admins can still set
-  // independently. Idempotent: setting the same field is a no-op.
+  // user-scoped (across all their events). events/{eventId}.tier is
+  // not a client-writable override and the UI does not read it.
+  // Idempotent: setting the same field is a no-op.
   //
   // 2026-08-20 — audit §4.1: this auto-promotion still fires for
   // any unlock (event-scoped or owner-wide). That's the

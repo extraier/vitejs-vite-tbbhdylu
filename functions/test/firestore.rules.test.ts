@@ -1266,3 +1266,143 @@ describe.skipIf(skipEmulator)('firestore.rules — inbound mail', () => {
     await assertFails(setDoc(doc(admin, 'inbound_threads', 'forged'), { subject: 'nope' }));
   });
 });
+
+describe.skipIf(skipEmulator)('firestore.rules — event privileged fields', () => {
+  const ownerUid = 'owner-event-lock';
+  const eventPath = `artifacts/savetheday-production/users/${ownerUid}/events/event-lock`;
+
+  it('lets the owner create and edit an event without tier, coOwners, or userId', async () => {
+    const owner = await asUser(ownerUid);
+    await assertSucceeds(setDoc(doc(owner!, eventPath), {
+      name: 'Our day',
+      budget: 350000,
+      createdAt: 1,
+    }));
+    await assertSucceeds(updateDoc(doc(owner!, eventPath), { budget: 1000, date: '2027-01-01' }));
+    await assertSucceeds(getDoc(doc(owner!, eventPath)));
+  });
+
+  it('rejects create or update that sets tier, coOwners, or userId', async () => {
+    const owner = await asUser(ownerUid);
+    await assertFails(setDoc(doc(owner!, `${eventPath}-tier`), {
+      name: 'Paid',
+      tier: 'premium',
+    }));
+    await assertFails(setDoc(doc(owner!, `${eventPath}-free`), {
+      name: 'Free',
+      tier: 'free',
+    }));
+    await assertFails(setDoc(doc(owner!, `${eventPath}-co`), {
+      name: 'Shared',
+      coOwners: [ownerUid],
+    }));
+    await assertFails(setDoc(doc(owner!, `${eventPath}-extra`), {
+      name: 'Shared',
+      coOwners: [ownerUid, 'partner-1'],
+    }));
+    await assertFails(setDoc(doc(owner!, `${eventPath}-uid`), {
+      name: 'Retarget',
+      userId: ownerUid,
+    }));
+
+    await assertSucceeds(setDoc(doc(owner!, eventPath), { name: 'Our day' }));
+    await assertFails(updateDoc(doc(owner!, eventPath), { tier: 'premium' }));
+    await assertFails(updateDoc(doc(owner!, eventPath), { coOwners: ['partner-1'] }));
+    await assertFails(updateDoc(doc(owner!, eventPath), { userId: 'someone-else' }));
+    await assertSucceeds(updateDoc(doc(owner!, eventPath), { name: 'Renamed' }));
+  });
+
+  it('does not let an update strip coOwners that a callable already wrote', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), eventPath), {
+        name: 'Our day',
+        coOwners: [ownerUid, 'partner-1'],
+      });
+    });
+    const owner = await asUser(ownerUid);
+    await assertSucceeds(updateDoc(doc(owner!, eventPath), { name: 'Still ours' }));
+    const snap = await getDoc(doc(owner!, eventPath));
+    expect(snap.data()?.coOwners).toEqual([ownerUid, 'partner-1']);
+    expect(snap.data()?.name).toBe('Still ours');
+  });
+});
+
+describe.skipIf(skipEmulator)('firestore.rules — inquiry and proposal takeover', () => {
+  const inquiry = {
+    vendorUid: 'vendor-V',
+    coupleUid: 'couple-C',
+    vendorName: 'V',
+    coupleName: 'C',
+    eventId: 'event-1',
+    createdAt: Timestamp.fromMillis(1),
+    lastMessageAt: Timestamp.fromMillis(1),
+    lastMessagePreview: '',
+    coupleUnread: 0,
+    vendorUnread: 0,
+  };
+  const liveInquiry = 'artifacts/savetheday-production/vendorInquiries/thread-1';
+  const nestedInquiry = 'artifacts/savetheday-production/users/couple-C/vendorInquiries/thread-1';
+  const proposal = {
+    jobId: 'job-1',
+    vendorUid: 'vendor-V',
+    coupleUid: 'couple-C',
+    message: '報價',
+    price: '100',
+    status: 'pending',
+    rating: 4,
+  };
+
+  async function seed(path: string, data: Record<string, unknown>) {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), path), data);
+    });
+  }
+
+  it('rejects a signed-in user taking over the live inquiry by rewriting party uids', async () => {
+    await seed(liveInquiry, inquiry);
+    const attacker = await asUser('attacker');
+    await assertFails(updateDoc(doc(attacker!, liveInquiry), {
+      vendorUid: 'attacker',
+      coupleUid: 'attacker',
+    }));
+    const vendor = await asUser('vendor-V');
+    await assertFails(updateDoc(doc(vendor!, liveInquiry), { coupleUid: 'vendor-V' }));
+    await assertFails(updateDoc(doc(vendor!, liveInquiry), {
+      createdAt: Timestamp.fromMillis(9),
+    }));
+    await assertSucceeds(updateDoc(doc(vendor!, liveInquiry), {
+      lastMessagePreview: 'hello',
+      lastMessageAt: Timestamp.fromMillis(2),
+      vendorUnread: 1,
+    }));
+  });
+
+  it('rejects the same takeover on the per-user inquiry mirror', async () => {
+    await seed(nestedInquiry, inquiry);
+    const attacker = await asUser('attacker');
+    await assertFails(updateDoc(doc(attacker!, nestedInquiry), { vendorUid: 'attacker' }));
+    const couple = await asUser('couple-C');
+    await assertFails(updateDoc(doc(couple!, nestedInquiry), { vendorUid: 'couple-C' }));
+    await assertSucceeds(updateDoc(doc(couple!, nestedInquiry), { coupleUnread: 0 }));
+  });
+
+  it('rejects proposal field takeover on the top-level path and the nested mirror', async () => {
+    const paths = [
+      'proposals/p-1',
+      'artifacts/savetheday-production/users/couple-C/proposals/p-1',
+    ];
+    for (const path of paths) {
+      await seed(path, proposal);
+      const attacker = await asUser('attacker');
+      await assertFails(updateDoc(doc(attacker!, path), {
+        vendorUid: 'attacker',
+        coupleUid: 'attacker',
+      }));
+      const vendor = await asUser('vendor-V');
+      await assertFails(updateDoc(doc(vendor!, path), { status: 'accepted', price: '1' }));
+      await assertFails(updateDoc(doc(vendor!, path), { coupleUid: 'vendor-V' }));
+      await assertFails(updateDoc(doc(vendor!, path), { rating: 5, jobId: 'other-job' }));
+      await assertSucceeds(updateDoc(doc(vendor!, path), { message: '更新報價' }));
+    }
+  });
+});

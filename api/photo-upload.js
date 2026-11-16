@@ -337,7 +337,11 @@ async function _handler(req, res) {
       const owner = ev._ownerUid || ev.ownerUid;
       const coOwners = Array.isArray(ev.coOwners) ? ev.coOwners : [];
       const assignedVendorUid = ev.assignedVendorUid;
-      if (callerUid === owner) {
+      // Path owner (users/{ownerUid}/events/...) is a member even
+      // when the doc has no coOwners or owner field. Clients cannot
+      // write those fields; partner membership still comes from
+      // coOwners, which only the invite callable updates.
+      if (callerUid === ownerUid || callerUid === owner) {
         isMember = true;
       } else if (coOwners.includes(callerUid)) {
         isMember = true;

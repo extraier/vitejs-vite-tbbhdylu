@@ -523,6 +523,15 @@ describe('photo-upload proxy — verifyUploadPreferencesToken', () => {
     expect(res._body.error).toMatch(/not a member/);
   });
 
+  it('accepts the path owner when the event doc has no owner or coOwners fields', async () => {
+    mockState.events.set(
+      `artifacts/savetheday-production/users/${DEFAULT_OWNER_UID}/events/ev1`,
+      { name: 'Wedding' },
+    );
+    const { res } = await invokeWithPrefsToken({ prefsToken: undefined });
+    expect(res.statusCode).toBe(200);
+  });
+
   it('accepts a caller who is in the event coOwners array', async () => {
     const coOwner = 'coOwner99999999999999999999';
     mockState.uidByToken.set('token-coowner', coOwner);

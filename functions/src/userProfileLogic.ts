@@ -23,6 +23,27 @@
 export const MAX_OWNER_NAME_LEN = 30;
 
 /**
+ * Event access for updateOwnerNames. The path owner
+ * (users/{pathOwnerUid}/events/{eventId}) is allowed even when
+ * the document has no userId or coOwners — clients cannot write
+ * those fields. Legacy docs that stored userId, and partners
+ * added by acceptPartnerInvite, still pass.
+ */
+export function callerMayAccessEvent(input: {
+  callerUid: string;
+  pathOwnerUid: string;
+  docUserId?: unknown;
+  coOwners?: unknown;
+}): boolean {
+  if (input.callerUid && input.callerUid === input.pathOwnerUid) return true;
+  if (typeof input.docUserId === 'string' && input.docUserId === input.callerUid) {
+    return true;
+  }
+  if (!Array.isArray(input.coOwners)) return false;
+  return input.coOwners.some((entry) => entry === input.callerUid);
+}
+
+/**
  * Strips C0 controls + DEL + trims + truncates a single
  * displayed-name field. Returns '' for non-string inputs
  * (defensive against `null` / `undefined` / numbers slipping

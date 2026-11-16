@@ -13,7 +13,8 @@
  * Access model
  * ------------
  * The CF accepts callers who are EITHER:
- *   - the event owner (`auth.uid == data.userId` on the event doc)
+ *   - the path owner (`users/{uid}/events/{eventId}`)
+ *   - a legacy owner (`auth.uid == data.userId`)
  *   - a co-owner on the event (`auth.uid in data.coOwners`)
  * Guests / helpers / vendors are rejected.
  *
@@ -52,7 +53,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-import { cleanEventOwnerNames } from './userProfileLogic';
+import { callerMayAccessEvent, cleanEventOwnerNames } from './userProfileLogic';
 
 if (getApps().length === 0) {
   initializeApp();
@@ -83,10 +84,9 @@ function eventRef(uid: string, eventId: string) {
  * caller's. If `ownerUid` is provided, look up at the owner's
  * path; otherwise fall back to the caller's path (legacy per-user
  * event writers). Co-owner callers pass `ownerUid` so the lookup
- * finds the event. Co-owner semantics: `data.coOwners` is `string[]`.
- * We accept the primary owner (`data.userId`) OR any entry in
- * `coOwners`. An event with `coOwners` undefined or non-array is
- * treated as owner-only — defensive against older event docs.
+ * finds the event. The path owner is allowed even when the doc
+ * has no userId or coOwners. Legacy `data.userId` and partners in
+ * `coOwners` (written by acceptPartnerInvite) are still accepted.
  */
 async function assertEventAccess(
   uid: string,
@@ -98,17 +98,22 @@ async function assertEventAccess(
   // Both reads are tolerated — the access check below decides which
   // one matters, but we have to read the doc to know the answer.
   const candidateUid = ownerUid || uid;
+  let pathOwnerUid = candidateUid;
   let snap = await eventRef(candidateUid, eventId).get();
   if (!snap.exists && ownerUid && ownerUid !== uid) {
     snap = await eventRef(uid, eventId).get();
+    if (snap.exists) pathOwnerUid = uid;
   }
   if (!snap.exists) {
     throw new HttpsError('not-found', `Event ${eventId} not found.`);
   }
   const data = snap.data() || {};
-  const docOwnerUid: string | undefined = data.userId;
-  const coOwners: string[] = Array.isArray(data.coOwners) ? data.coOwners : [];
-  if (uid !== docOwnerUid && !coOwners.includes(uid)) {
+  if (!callerMayAccessEvent({
+    callerUid: uid,
+    pathOwnerUid,
+    docUserId: data.userId,
+    coOwners: data.coOwners,
+  })) {
     throw new HttpsError('permission-denied', 'You do not have access to this event.');
   }
 }
