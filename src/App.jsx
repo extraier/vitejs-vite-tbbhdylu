@@ -143,6 +143,8 @@ const AdminImportVendors = lazy(() => import('./screens/AdminImportVendors').the
 const AdminPaymentSettings = lazy(() => import('./screens/AdminPaymentSettings').then((m) => ({ default: m.AdminPaymentSettings })));
 // 2026-08-14 — M-06 follow-up: admin-only CSP report diagnostic.
 const AdminCspReports = lazy(() => import('./screens/AdminCspReports').then((m) => ({ default: m.AdminCspReports })));
+// Read-only inbox for *@savetheday.io mail stored by inboundEmail.
+const AdminSupportMail = lazy(() => import('./screens/AdminSupportMail').then((m) => ({ default: m.AdminSupportMail })));
 const VendorDashboard = lazy(() => import('./screens/VendorDashboard').then((m) => ({ default: m.VendorDashboard })));
 const VendorProfileEdit = lazy(() => import('./screens/VendorProfileEdit').then((m) => ({ default: m.VendorProfileEdit })));
 const VendorOnboarding = lazy(() => import('./screens/VendorOnboarding').then((m) => ({ default: m.VendorOnboarding })));
@@ -4331,7 +4333,8 @@ export default function App() {
             // 2026-08-14 — M-06 follow-up: admin-only CSP report
             // diagnostic view. Reads from /cspReports (admin-only
             // read per firestore.rules).
-            target === 'admin-csp-reports'
+            target === 'admin-csp-reports' ||
+            target === 'admin-support-mail'
           ) {
             // Stay in owner role; just swap the view. Clear any guest-portal
             // overlay so the admin screen has the full header / tab area.
@@ -5087,6 +5090,12 @@ export default function App() {
             {/* 2026-08-14 — M-06 follow-up: CSP report view */}
             {isAdmin && currentView === 'admin-csp-reports' && (
               <LazyScreen><AdminCspReports isAdmin={isAdmin} /></LazyScreen>
+            )}
+
+            {/* Admin-only support mailbox. Reads inbound_threads and
+                inbound_messages. Not the couple/vendor chat Inbox. */}
+            {isAdmin && currentView === 'admin-support-mail' && (
+              <LazyScreen><AdminSupportMail isAdmin={isAdmin} /></LazyScreen>
             )}
 
             {isAdmin && currentView === 'admin-payment-settings' && (

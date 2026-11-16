@@ -36,6 +36,7 @@ describe('RoleSimulator — admin pills', () => {
     expect(screen.queryByText(/審批管理/)).toBeNull();
     // 2026-08-07 — admin-payment-settings pill also gated on isAdmin
     expect(screen.queryByText(/收款設定/)).toBeNull();
+    expect(screen.queryByText(/支援信箱/)).toBeNull();
   });
 
   it('admin sees all admin pills', () => {
@@ -54,6 +55,7 @@ describe('RoleSimulator — admin pills', () => {
     expect(screen.getByText(/審批管理/)).toBeTruthy();
     // 2026-08-07 — admin payment settings pill
     expect(screen.getByText(/收款設定/)).toBeTruthy();
+    expect(screen.getByText(/支援信箱/)).toBeTruthy();
   });
 
   it('🛍️ 商戶控制台 pill is active when currentView=admin-vendors', () => {
@@ -72,6 +74,36 @@ describe('RoleSimulator — admin pills', () => {
     // And the inactive ones stay slate.
     const dataPill = screen.getByText(/商戶數據/).closest('button');
     expect(dataPill.className).toMatch(/bg-slate-800/);
+  });
+
+  it('📬 支援信箱 pill is active when currentView=admin-support-mail', () => {
+    render(
+      <RoleSimulator
+        userRole="owner"
+        isAdmin
+        currentView="admin-support-mail"
+        onSwitch={() => {}}
+      />,
+    );
+    const pill = screen.getByText(/支援信箱/).closest('button');
+    expect(pill).toBeTruthy();
+    expect(pill.className).toMatch(/bg-sky-500/);
+    const queuePill = screen.getByText(/審批管理/).closest('button');
+    expect(queuePill.className).toMatch(/bg-slate-800/);
+  });
+
+  it('clicking 📬 支援信箱 fires onSwitch with admin-support-mail', () => {
+    const onSwitch = vi.fn();
+    render(
+      <RoleSimulator
+        userRole="owner"
+        isAdmin
+        currentView={null}
+        onSwitch={onSwitch}
+      />,
+    );
+    fireEvent.click(screen.getByText(/支援信箱/));
+    expect(onSwitch).toHaveBeenCalledWith('admin-support-mail');
   });
 
   it('clicking 🛍️ 商戶控制台 fires onSwitch with admin-vendors', () => {

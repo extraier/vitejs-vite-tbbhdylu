@@ -2485,7 +2485,8 @@ match /{path=**}/events/{eventId} {
     }
 
     // Mailgun inbound mail. Written only by the inboundEmail function
-    // (Admin SDK). No client path reads these; support uses the admin claim.
+    // (Admin SDK). The admin support-mail screen reads these with the
+    // admin claim. Clients cannot create, update, or delete.
     match /inbound_threads/{threadId} {
       allow read: if isAdmin();
       allow create, update, delete: if false;

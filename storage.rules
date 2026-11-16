@@ -167,6 +167,11 @@ service firebase.storage {
       allow delete: if isAdmin();
     }
 
+    // Inbound mail attachments live at messages/{threadId}/... and are
+    // written by inboundEmail (Admin SDK). There is no client read
+    // rule for that path, so the admin support-mail screen shows
+    // attachment metadata only.
+    //
     // Default deny everything else (photos, vendor assets, etc. live
     // under their own owner-scoped paths in a future iteration).
     match /{path=**} {
