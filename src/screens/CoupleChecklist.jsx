@@ -503,6 +503,13 @@ export function CoupleChecklist({
                 // this, the prop reference at TaskRow:823 throws
                 // ReferenceError when the user enters edit mode.
                 ownerNames={ownerNames}
+                // 2026-11-16 — forward the canonical assignable-vendor
+                // list into TaskRow → TaskFullEditor. App.jsx already
+                // passes this into CoupleChecklist and the add-task
+                // form reads it, but edit mode was evaluating an
+                // undeclared binding and threw
+                // `ReferenceError: assignableVendors is not defined`.
+                assignableVendors={assignableVendors}
                 isActive={activeCategory === task.category}
                 isEditing={editingTaskId === task.id}
                 vendorContacts={vendorContacts}
@@ -815,6 +822,13 @@ function TaskRow({
   // flagged this; the original 2026-08-12 patch added
   // currentEvent but missed ownerNames.)
   ownerNames,
+  // 2026-11-16 — assignableVendors must be a TaskRow prop. The
+  // edit branch below passes it into <TaskFullEditor>, but the
+  // identifier was never declared here, so entering edit mode
+  // threw `ReferenceError: assignableVendors is not defined`
+  // (same class of miss as ownerNames above). Default to [] so
+  // a missing parent still renders an empty picker.
+  assignableVendors = [],
   // 2026-08-12 — currentEvent (and ownerNames) must be threaded
   // through to TaskRow so the embedded <TaskActivityTimeline/>
   // in the comments drawer receives a real eventId. See the
