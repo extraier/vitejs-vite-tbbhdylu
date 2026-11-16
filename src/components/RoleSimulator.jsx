@@ -1,4 +1,4 @@
-import { Users, Shield, BarChart3, Store, Inbox, CreditCard, ShieldAlert } from 'lucide-react';
+import { Users, Shield, BarChart3, Store, Inbox, CreditCard, ShieldAlert, Mail } from 'lucide-react';
 
 /**
  * RoleSimulator — dark "developer-mode" pill bar at the top of the screen.
@@ -22,6 +22,10 @@ import { Users, Shield, BarChart3, Store, Inbox, CreditCard, ShieldAlert } from 
  * As of 2026-08-07 a fifth admin pill:
  *
  *   - 💳 收款設定 → currentView = 'admin-payment-settings'
+ *
+ * Support mail (not the couple/vendor chat Inbox):
+ *
+ *   - 📬 支援信箱 → currentView = 'admin-support-mail'
  *
  * Active state mirrors the corresponding role chip pattern (color-coded).
  * Admin pills are considered active when currentView matches one of those two.
@@ -196,6 +200,20 @@ export function RoleSimulator({
           >
             <ShieldAlert className="w-3.5 h-3.5" />
             🛡️ CSP 報告
+          </button>
+          {/* Support mailbox for *@savetheday.io mail stored by inboundEmail.
+              Distinct from the couple/vendor chat Inbox. */}
+          <button
+            onClick={() => onSwitch('admin-support-mail')}
+            title="支援電郵 (support@savetheday.io)"
+            className={`px-3 py-1 rounded-full flex items-center gap-1 ${
+              currentView === 'admin-support-mail'
+                ? 'bg-sky-500 font-bold'
+                : 'bg-slate-800 hover:bg-slate-700'
+            }`}
+          >
+            <Mail className="w-3.5 h-3.5" />
+            📬 支援信箱
           </button>
         </>
       )}
