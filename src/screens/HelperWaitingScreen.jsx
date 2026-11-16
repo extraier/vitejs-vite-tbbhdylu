@@ -9,11 +9,13 @@
 // broken empty-state of the main app. Logout is always available so the
 // user isn't trapped.
 
-import { Heart, Mail, Clock, CheckCircle2, LogOut, ShieldOff } from 'lucide-react';
+import { Heart, Mail, Clock, CheckCircle2, LogOut, ShieldOff, AlertTriangle } from 'lucide-react';
 
 export function HelperWaitingScreen({
   assignments,
   loading,
+  error = null,
+  onRetry,
   onAccept,
   onLogout,
   accepting,
@@ -37,6 +39,8 @@ export function HelperWaitingScreen({
               <div className="animate-spin w-8 h-8 border-4 border-indigo-200 border-t-indigo-600 rounded-full mx-auto mb-3" />
               <p className="text-slate-500 text-sm">檢查邀請中...</p>
             </div>
+          ) : empty && error ? (
+            <ErrorState message={error} onRetry={onRetry} />
           ) : empty ? (
             <EmptyState />
           ) : hasPending ? (
@@ -61,6 +65,34 @@ export function HelperWaitingScreen({
           <LogOut className="w-4 h-4" /> 登出
         </button>
       </div>
+    </div>
+  );
+}
+
+function ErrorState({ message, onRetry }) {
+  return (
+    <div className="text-center">
+      <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center mx-auto mb-4">
+        <AlertTriangle className="w-8 h-8 text-rose-600" />
+      </div>
+      <h2 className="text-xl font-bold text-slate-800 mb-2">無法檢查邀請</h2>
+      <p className="text-slate-500 text-sm leading-relaxed mb-3">
+        讀取邀請時發生錯誤，所以暫時未能顯示待接受或已加入的婚禮。
+      </p>
+      {message && (
+        <p className="text-xs text-rose-700 bg-rose-50 border border-rose-100 rounded-lg p-3 break-words text-left">
+          {message}
+        </p>
+      )}
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-4 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl transition-colors"
+        >
+          重試
+        </button>
+      )}
     </div>
   );
 }
@@ -102,7 +134,7 @@ function PendingState({ assignments, onAccept, accepting }) {
             className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200"
           >
             <div>
-              <div className="font-bold text-slate-800 text-sm">{a.ownerName || '婚禮'}</div>
+              <div className="font-bold text-slate-800 text-sm">{a.eventName || a.ownerName || '婚禮'}</div>
               <div className="text-xs text-slate-500">{a.email}</div>
             </div>
             <CheckCircle2 className="w-5 h-5 text-amber-500" />

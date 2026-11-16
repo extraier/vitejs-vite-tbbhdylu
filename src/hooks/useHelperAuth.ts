@@ -14,7 +14,7 @@
 //   }
 
 import { useCallback, useEffect, useState } from 'react';
-import { getAuth } from 'firebase/auth';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import {
   listMyHelperAssignments,
   helpersApi,
@@ -31,9 +31,11 @@ export function useHelperAuth() {
     const auth = getAuth();
     if (!auth.currentUser) {
       setAssignments([]);
+      setError(null);
       setLoading(false);
       return;
     }
+    setLoading(true);
     try {
       const list = await listMyHelperAssignments();
       setAssignments(list);
@@ -45,8 +47,19 @@ export function useHelperAuth() {
     }
   }, []);
 
+  // Auth restore is async. A one-shot read on mount often runs
+  // before currentUser exists, stores [], and never looks again —
+  // the waiting screen then shows "no invite" for a real helper.
   useEffect(() => {
-    refresh();
+    const auth = getAuth();
+    let cancelled = false;
+    const unsub = onAuthStateChanged(auth, () => {
+      if (!cancelled) refresh();
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, [refresh]);
 
   const acceptInvite = useCallback(async () => {

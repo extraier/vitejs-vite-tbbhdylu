@@ -337,7 +337,11 @@ export const revokeGuestLink = onCall({ cors: true, region: "us-central1" }, asy
 // engine then enforces per-tab access based on the perms flags.
 
 import { getAuth } from 'firebase-admin/auth';
-import { resolveHelperInviteAcceptance } from './helperInvitePure';
+import {
+  buildHelperReinviteDoc,
+  classifyExistingHelperInvite,
+  resolveHelperInviteAcceptance,
+} from './helperInvitePure';
 
 // All possible helper permissions. Kept in sync with the client UI.
 export const HELPER_PERMS = [
@@ -398,6 +402,7 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
   if (!email || !displayName) {
     throw new HttpsError('invalid-argument', 'email and displayName required.');
   }
+  const normalizedEmail = email.trim().toLowerCase();
 
   // 2026-08-15 — Helper onboarding audit (P0-B). Require eventId
   // on every invite. The dashboard's per-event queries would
@@ -425,7 +430,7 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
   // Try to find an existing Firebase Auth user with this email.
   let helperUid: string | null = null;
   try {
-    const userRecord = await getAuth().getUserByEmail(email);
+    const userRecord = await getAuth().getUserByEmail(normalizedEmail);
     helperUid = userRecord.uid;
   } catch (err: unknown) {
     // User not registered yet — write to a placeholder.
@@ -450,7 +455,7 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
     // `kind: 'vendor'` (or remain unset for legacy records). The
     // acceptance path requires `kind == 'helper'`.
     kind: 'helper' as const,
-    email,
+    email: normalizedEmail,
     displayName,
     phone: phone ?? null,
     status: 'invited',
@@ -462,21 +467,32 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
     helperUid,  // null if user hasn't signed up yet
   };
 
+  let preservedActive = false;
   if (helperUid) {
-    // User exists — write to helpers/{uid}.
-    await db
+    // User exists — write to helpers/{uid}. A second invite must not
+    // demote someone who already accepted: status, acceptedAt, and
+    // helperUid stay. Perms, name, and event still update.
+    const helperRef = db
       .collection('artifacts').doc(appId)
       .collection('users').doc(ownerUid)
-      .collection('helpers').doc(helperUid)
-      .set(helperDoc);
+      .collection('helpers').doc(helperUid);
+    const existingSnap = await helperRef.get();
+    const planned = buildHelperReinviteDoc({
+      existing: existingSnap.exists
+        ? (existingSnap.data() as Record<string, unknown>)
+        : null,
+      next: helperDoc,
+    });
+    preservedActive = planned.preservedActive;
+    await helperRef.set(planned.doc);
   } else {
     // User not registered yet — write to a pendingInvites collection.
-    // When they later sign up with this email, a client-side trigger
-    // (or a Cloud Function onAuthCreate) migrates it.
+    // When they later sign up with this email, acceptHelperInvite
+    // migrates it.
     await db
       .collection('artifacts').doc(appId)
       .collection('users').doc(ownerUid)
-      .collection('pendingInvites').doc(email.toLowerCase())
+      .collection('pendingInvites').doc(normalizedEmail)
       .set(helperDoc);
   }
 
@@ -498,6 +514,7 @@ export const inviteHelper = onCall({ cors: true, region: "us-central1" }, async 
     ok: true,
     helperUid,
     pendingEmailRegistration: !helperUid,
+    alreadyActive: preservedActive,
   };
 });
 
@@ -530,24 +547,34 @@ export const acceptHelperInvite = onCall({ cors: true, region: "us-central1" }, 
     .where('kind', '==', 'helper')
     .get();
 
-  if (pending.empty) {
-    throw new HttpsError('not-found', 'No helper invite found for this email.');
-  }
-
+  // Registered invitees never get a pendingInvites doc. Their invite
+  // is helpers/{uid} with status 'invited'. An empty pending query is
+  // not "no invite" until that collection is checked too.
   return acceptHelperDocs(pending.docs, authUid, authEmail);
 });
 
 // Shared acceptance body. ownerUid always comes from the document
-// path (artifacts/{appId}/users/{ownerUid}/pendingInvites/{id}),
-// never from the body. A body ownerUid that disagrees with the
-// path is a forge and that doc is skipped.
+// path (artifacts/{appId}/users/{ownerUid}/pendingInvites/{id} or
+// helpers/{authUid}), never from the body. A body ownerUid that
+// disagrees with the path is a forge and that doc is skipped.
 async function acceptHelperDocs(
   pendingDocs: FirebaseFirestore.QueryDocumentSnapshot[],
   authUid: string,
   authEmail: string,
 ) {
+  const existingHelpers = await db
+    .collectionGroup('helpers')
+    .where('helperUid', '==', authUid)
+    .get();
+
+  if (pendingDocs.length === 0 && existingHelpers.empty) {
+    throw new HttpsError('not-found', 'No helper invite found for this email.');
+  }
+
   const batch = db.batch();
   const accepted: { ownerUid: string; perms: HelperPerms; eventId: string }[] = [];
+  const writtenHelperPaths = new Set<string>();
+  const existingByPath = new Map(existingHelpers.docs.map((doc) => [doc.ref.path, doc]));
 
   for (const doc of pendingDocs) {
     const decision = resolveHelperInviteAcceptance({
@@ -582,17 +609,68 @@ async function acceptHelperDocs(
       .collection('users').doc(decision.ownerUid)
       .collection('helpers').doc(authUid);
 
-    batch.set(newRef, {
-      ...doc.data(),
+    const alreadyActive = existingByPath.get(newRef.path)?.data()?.status === 'active';
+    if (alreadyActive) {
+      // A stale email invite must not overwrite an active helper.
+      batch.delete(doc.ref);
+    } else {
+      batch.set(newRef, {
+        ...doc.data(),
+        ownerUid: decision.ownerUid,
+        eventId: decision.eventId,
+        email: decision.email,
+        helperUid: authUid,
+        status: 'active',
+        acceptedAt: FieldValue.serverTimestamp(),
+      });
+      batch.delete(doc.ref);
+    }
+    writtenHelperPaths.add(newRef.path);
+
+    accepted.push({
       ownerUid: decision.ownerUid,
+      perms: decision.perms as HelperPerms,
       eventId: decision.eventId,
-      email: decision.email,
-      helperUid: authUid,
+    });
+  }
+
+  for (const doc of existingHelpers.docs) {
+    if (writtenHelperPaths.has(doc.ref.path)) continue;
+    const decision = classifyExistingHelperInvite({
+      path: doc.ref.path,
+      data: doc.data() as Record<string, unknown>,
+      authUid,
+      authEmail,
+      expectedAppId: appId,
+    });
+    if (!decision.ok) {
+      if (decision.reason !== 'status' && decision.reason !== 'uid' && decision.reason !== 'not-helper-path') {
+        console.warn('[acceptHelperInvite] rejected helper doc', {
+          reason: decision.reason,
+          path: doc.ref.path,
+        });
+      }
+      continue;
+    }
+
+    const eventSnap = await db
+      .collection('artifacts').doc(appId)
+      .collection('users').doc(decision.ownerUid)
+      .collection('events').doc(decision.eventId)
+      .get();
+    if (!eventSnap.exists) {
+      console.warn('[acceptHelperInvite] rejected invite with unknown event', {
+        path: doc.ref.path,
+        eventId: decision.eventId,
+      });
+      continue;
+    }
+
+    batch.update(doc.ref, {
       status: 'active',
       acceptedAt: FieldValue.serverTimestamp(),
+      helperUid: authUid,
     });
-    batch.delete(doc.ref);
-
     accepted.push({
       ownerUid: decision.ownerUid,
       perms: decision.perms as HelperPerms,
@@ -1592,6 +1670,7 @@ export { mintPhotoDeleteToken } from './photoDeleteToken';
 // on the next tick, no UI changes required. See
 // functions/src/vendorComment.ts for the auth + write shape.
 export { vendorPostComment, vendorPostCommentHelper } from './vendorComment';
+export { listMyHelperAssignments } from './helperAccess';
 export { onBigDayCommentCreated } from './commentAlertTrigger';
 // 2026-08-31 — Manus P11: helper-assignment and task-status
 // alert triggers. See functions/src/helperAssignmentTrigger.ts

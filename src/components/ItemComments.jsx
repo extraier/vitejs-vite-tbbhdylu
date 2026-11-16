@@ -356,10 +356,10 @@ export function ItemComments({
       // check them uniformly.
       //
       // 2026-08-12 — owner writes still flow through this path.
-      // helpers in the VendorDashboard now go through the CF
-      // path above; helpers in HelperDashboard still use the
-      // SDK path because the helper's auth context hasn't been
-      // hitting the rules-engine quirk.
+      // Vendor and helper roles both use vendorPostComment above.
+      // The callable authorizes a helper from their active
+      // helpers/{uid} doc plus the parent assignment. It does not
+      // require a helper custom claim.
       await addDoc(path, {
         authorUid: currentUser.uid,
         authorName:

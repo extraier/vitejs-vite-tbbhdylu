@@ -4261,6 +4261,8 @@ export default function App() {
       <HelperWaitingScreen
         assignments={helperCtx.assignments}
         loading={helperCtx.loading}
+        error={helperCtx.error}
+        onRetry={helperCtx.refresh}
         accepting={helperAccepting}
         onAccept={async () => {
           setHelperAccepting(true);
@@ -5424,6 +5426,21 @@ export default function App() {
                 <HelperDashboard
                   helperAssignment={helperActiveAssignment}
                   currentUser={user}
+                  pendingInvites={(helperCtx.assignments || []).filter(
+                    (a) => a.status === 'invited' || a.status === 'pending',
+                  )}
+                  acceptingInvites={helperAccepting}
+                  onAcceptInvites={async () => {
+                    setHelperAccepting(true);
+                    try {
+                      await helperCtx.acceptInvite();
+                      showToast('✓ 已接受邀請');
+                    } catch (err) {
+                      showToast(`✗ 接受失敗: ${err.message}`);
+                    } finally {
+                      setHelperAccepting(false);
+                    }
+                  }}
                   eventGuests={eventGuests}
                   recentScans={recentScans || []}
                   onCheckIn={handleSimulateReceptionScan}
